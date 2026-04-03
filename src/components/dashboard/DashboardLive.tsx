@@ -930,11 +930,15 @@ export function DashboardLive() {
       const historicalPeaks = calculatePeakHistory(newNumbers)
       setPeakHistory(historicalPeaks)
       const currentP = getCurrentPeak(newNumbers)
-      setCurrentPeak(currentP)
-      currentPeakRef.current = currentP
-      console.log('[DashboardLive] Import: calculated', historicalPeaks.length, 'peaks from', newNumbers.length, 'numbers')
+      // If peak is 0 (last peak was resolved), start new cycle at 1
+      const displayPeak = Math.max(1, currentP)
+      setCurrentPeak(displayPeak)
+      currentPeakRef.current = displayPeak
+      console.log('[DashboardLive] Import: calculated', historicalPeaks.length, 'peaks from', newNumbers.length, 'numbers, current peak:', currentP, 'display:', displayPeak)
     } else {
       setPeakHistory([])
+      setCurrentPeak(1)
+      currentPeakRef.current = 1
     }
     
     if (newNumbers.length >= 5) {
@@ -955,6 +959,9 @@ export function DashboardLive() {
         conf = 50 + Math.abs(oddPct - evenPct)
       }
       setConfidence(Math.min(85, conf))
+    } else {
+      setCurrentPrediction(null)
+      currentPredictionRef.current = null
     }
     setIsJoined(true)
     setImportDialogOpen(false)
