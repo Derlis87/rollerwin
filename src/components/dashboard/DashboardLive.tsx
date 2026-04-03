@@ -925,16 +925,57 @@ export function DashboardLive() {
     setConfidence(0)
     setBacktestResults(null)
     
-    // Calculate ALL historical peaks from imported numbers
+    // Calculate ALL historical peaks using the SAME engine as manual input (generatePrediction + checkPredictionMatch)
     if (newNumbers.length >= 6) {
-      const historicalPeaks = calculatePeakHistory(newNumbers)
+      const betType = selectedBetTypeRef.current
+      const historicalPeaks: PeakRecord[] = []
+      for (let i = 2; i < newNumbers.length; i++) {
+        const pred = generatePrediction(newNumbers.slice(0, i), betType)
+        let height = 0
+        for (let j = i + 1; j < newNumbers.length; j++) {
+          height++
+          if (checkPredictionMatch(pred, newNumbers[j])) {
+            historicalPeaks.push({
+              id: `peak-${historicalPeaks.length}-${Date.now()}`,
+              height: Math.min(height, 15),
+              prediction: pred,
+              resultNumber: newNumbers[j],
+              resultColor: getNumberColor(newNumbers[j]),
+              timestamp: new Date()
+            })
+            i = j
+            break
+          }
+          if (height >= 15 || j === newNumbers.length - 1) {
+            historicalPeaks.push({
+              id: `peak-${historicalPeaks.length}-${Date.now()}`,
+              height: Math.min(height, 15),
+              prediction: pred,
+              resultNumber: newNumbers[j],
+              resultColor: getNumberColor(newNumbers[j]),
+              timestamp: new Date()
+            })
+            i = j
+            break
+          }
+        }
+      }
       setPeakHistory(historicalPeaks)
-      const currentP = getCurrentPeak(newNumbers)
-      // If peak is 0 (last peak was resolved), start new cycle at 1
+
+      // Calculate current unresolved peak using same engine
+      const lastPred = generatePrediction(newNumbers, betType)
+      let currentP = 0
+      for (let i = newNumbers.length - 1; i >= 0; i--) {
+        if (checkPredictionMatch(lastPred, newNumbers[i])) {
+          break
+        }
+        currentP++
+      }
+      currentP = Math.min(currentP, 15)
       const displayPeak = Math.max(1, currentP)
       setCurrentPeak(displayPeak)
       currentPeakRef.current = displayPeak
-      console.log('[DashboardLive] Import: calculated', historicalPeaks.length, 'peaks from', newNumbers.length, 'numbers, current peak:', currentP, 'display:', displayPeak)
+      console.log('[DashboardLive] Import: calculated', historicalPeaks.length, 'peaks from', newNumbers.length, 'numbers, betType:', betType, 'current peak:', currentP, 'display:', displayPeak)
     } else {
       setPeakHistory([])
       setCurrentPeak(1)
