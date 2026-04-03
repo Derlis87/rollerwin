@@ -1,0 +1,121 @@
+==========================================
+[2026-03-30 13:20:02] Starting: bun install
+==========================================
+[BUN] Installing dependencies...
+[0.09ms] ".env"
+bun install v1.3.10 (30e609e0)
+
+Checked 853 installs across 922 packages (no changes) [46.00ms]
+==========================================
+[2026-03-30 13:20:02] Completed: bun install
+[LOG] Step: bun install | Duration: 0s
+==========================================
+
+==========================================
+[2026-03-30 13:20:02] Starting: bun run db:push
+==========================================
+[BUN] Setting up database...
+$ prisma db push
+Environment variables loaded from .env
+Prisma schema loaded from prisma/schema.prisma
+Datasource "db": SQLite database "custom.db" at "file:/home/z/my-project/db/custom.db"
+
+The database is already in sync with the Prisma schema.
+
+Running generate... (Use --skip-generate to skip the generators)
+[2K[1A[2K[GRunning generate... - Prisma Client
+[2K[1A[2K[G✔ Generated Prisma Client (v6.19.2) to ./node_modules/@prisma/client in 112ms
+
+==========================================
+[2026-03-30 13:20:04] Completed: bun run db:push
+[LOG] Step: bun run db:push | Duration: 2s
+==========================================
+
+==========================================
+[2026-03-30 13:20:04] Starting: Starting Next.js dev server
+==========================================
+[BUN] Starting development server...
+$ next dev -p 3000 2>&1 | tee dev.log
+==========================================
+[2026-03-30 13:20:04] Completed: Starting Next.js dev server
+[LOG] Step: Starting Next.js dev server | Duration: 0s
+==========================================
+
+==========================================
+[2026-03-30 13:20:04] Starting: Waiting for Next.js dev server
+==========================================
+Waiting for Next.js dev server to be ready on localhost:3000...
+Attempt 1/60: Next.js dev server not ready yet, waiting...
+▲ Next.js 16.1.3 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://21.0.2.69:3000
+- Environments: .env
+
+✓ Starting...
+✓ Ready in 1576ms
+○ Compiling / ...
+Attempt 2/60: Next.js dev server not ready yet, waiting...
+Attempt 3/60: Next.js dev server not ready yet, waiting...
+Attempt 4/60: Next.js dev server not ready yet, waiting...
+ GET / 200 in 1287ms (compile: 1125ms, render: 162ms)
+Next.js dev server is ready!
+ GET / 200 in 18.3s (compile: 17.8s, render: 574ms)
+==========================================
+[2026-03-30 13:20:24] Completed: Waiting for Next.js dev server
+[LOG] Step: Waiting for Next.js dev server | Duration: 20s
+==========================================
+
+==========================================
+[2026-03-30 13:20:24] Starting: Health check
+==========================================
+[BUN] Performing health check...
+ GET / 200 in 33ms (compile: 3ms, render: 30ms)
+[BUN] Health check passed
+==========================================
+[2026-03-30 13:20:24] Completed: Health check
+[LOG] Step: Health check | Duration: 0s
+==========================================
+
+==========================================
+[2026-03-30 13:20:24] Starting: Starting mini-services
+==========================================
+Found mini-services directory, scanning for sub-services...
+Checking service: casino-connector
+Starting casino-connector in background...
+[casino-connector] Started in background (PID: 2405)
+[casino-connector] Log: /home/z/my-project/.zscripts/mini-service-casino-connector.log
+Checking service: roulette-capturer
+Starting roulette-capturer in background...
+[roulette-capturer] Started in background (PID: 2410)
+[roulette-capturer] Log: /home/z/my-project/.zscripts/mini-service-roulette-capturer.log
+Mini-services startup completed. Started 2 service(s).
+==========================================
+[2026-03-30 13:20:24] Completed: Starting mini-services
+[LOG] Step: Starting mini-services | Duration: 0s
+==========================================
+
+Next.js dev server is running in background (PID: 2238).
+Use 'kill 2238' to stop it.
+ GET /api/auth/me 401 in 534ms (compile: 521ms, render: 13ms)
+ GET / 200 in 55ms (compile: 3ms, render: 52ms)
+ GET / 200 in 62ms (compile: 3ms, render: 59ms)
+ GET /api/auth/me 401 in 6ms (compile: 1963µs, render: 4ms)
+ GET / 200 in 51ms (compile: 5ms, render: 46ms)
+ GET /api/auth/me 401 in 7ms (compile: 2ms, render: 5ms)
+ GET / 200 in 53ms (compile: 3ms, render: 50ms)
+ GET /api/auth/me 401 in 6ms (compile: 1816µs, render: 4ms)
+ GET / 200 in 43ms (compile: 3ms, render: 41ms)
+prisma:query SELECT `main`.`User`.`id`, `main`.`User`.`email`, `main`.`User`.`name`, `main`.`User`.`password`, `main`.`User`.`registeredIP`, `main`.`User`.`lastLoginIP`, `main`.`User`.`isActive`, `main`.`User`.`createdAt`, `main`.`User`.`updatedAt` FROM `main`.`User` WHERE (`main`.`User`.`email` = ? AND 1=1) LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Subscription`.`id`, `main`.`Subscription`.`userId`, `main`.`Subscription`.`plan`, `main`.`Subscription`.`status`, `main`.`Subscription`.`startDate`, `main`.`Subscription`.`endDate`, `main`.`Subscription`.`createdAt`, `main`.`Subscription`.`updatedAt` FROM `main`.`Subscription` WHERE `main`.`Subscription`.`userId` IN (?) LIMIT ? OFFSET ?
+ POST /api/auth/login 401 in 130ms (compile: 117ms, render: 13ms)
+ GET /api/auth/me 401 in 5ms (compile: 1877µs, render: 3ms)
+prisma:query SELECT `main`.`User`.`id`, `main`.`User`.`email`, `main`.`User`.`name`, `main`.`User`.`password`, `main`.`User`.`registeredIP`, `main`.`User`.`lastLoginIP`, `main`.`User`.`isActive`, `main`.`User`.`createdAt`, `main`.`User`.`updatedAt` FROM `main`.`User` WHERE (`main`.`User`.`email` = ? AND 1=1) LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Subscription`.`id`, `main`.`Subscription`.`userId`, `main`.`Subscription`.`plan`, `main`.`Subscription`.`status`, `main`.`Subscription`.`startDate`, `main`.`Subscription`.`endDate`, `main`.`Subscription`.`createdAt`, `main`.`Subscription`.`updatedAt` FROM `main`.`Subscription` WHERE `main`.`Subscription`.`userId` IN (?) LIMIT ? OFFSET ?
+prisma:query UPDATE `main`.`User` SET `lastLoginIP` = ?, `updatedAt` = ? WHERE (`main`.`User`.`id` = ? AND 1=1) RETURNING `id` AS `id`, `email` AS `email`, `name` AS `name`, `password` AS `password`, `registeredIP` AS `registeredIP`, `lastLoginIP` AS `lastLoginIP`, `isActive` AS `isActive`, `createdAt` AS `createdAt`, `updatedAt` AS `updatedAt`
+ POST /api/auth/login 200 in 12ms (compile: 2ms, render: 10ms)
+✓ Compiled in 7.9s
+ GET / 200 in 93ms (compile: 60ms, render: 33ms)
+ GET / 200 in 28ms (compile: 5ms, render: 23ms)
+ GET / 200 in 36ms (compile: 4ms, render: 33ms)
+error: script "dev" was terminated by signal SIGTERM (Polite quit request)
+[?25h

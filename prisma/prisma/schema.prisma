@@ -1,0 +1,81 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String        @id @default(cuid())
+  email        String        @unique
+  name         String?
+  password     String
+  registeredIP String       @unique  // IP única por cuenta
+  lastLoginIP  String?
+  isActive     Boolean       @default(true)
+  subscription Subscription?
+  predictions  Prediction[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model Subscription {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan            String   @default("monthly")
+  status          String   @default("active")
+  startDate       DateTime @default(now())
+  endDate         DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Roulette {
+  id           String       @id @default(cuid())
+  name         String
+  platform     String       // Azure, Bet365, Evolution
+  isActive     Boolean      @default(true)
+  predictions  Prediction[]
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+}
+
+model Prediction {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rouletteId   String
+  roulette     Roulette  @relation(fields: [rouletteId], references: [id], onDelete: Cascade)
+  numbers      String    // JSON string of numbers
+  prediction   String    // JSON string of prediction result
+  confidence   Float     // 0-100 percentage
+  hit          Boolean?
+  createdAt    DateTime  @default(now())
+}
+
+model Cartilla {
+  id          String   @id @default(cuid())
+  title       String
+  description String
+  content     String   // Markdown content
+  category    String   // beginner, intermediate, advanced
+  order       Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model RouletteNumber {
+  id           String   @id @default(cuid())
+  rouletteId   String
+  number       Int      // 0-36
+  color        String   // red, black, green
+  timestamp    DateTime @default(now())
+  createdAt    DateTime @default(now())
+}
