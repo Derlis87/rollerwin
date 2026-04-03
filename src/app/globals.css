@@ -150,3 +150,33 @@
 .custom-scrollbar-x::-webkit-scrollbar-corner {
   background: #27272a;
 }
+
+/* Vertical scrollbar styles for dark backgrounds */
+.custom-scrollbar-y {
+  scrollbar-width: thin;
+  scrollbar-color: #a1a1aa #27272a;
+}
+
+.custom-scrollbar-y::-webkit-scrollbar {
+  width: 10px;
+}
+
+.custom-scrollbar-y::-webkit-scrollbar-track {
+  background: #27272a;
+  border-radius: 5px;
+  border: 1px solid #3f3f46;
+}
+
+.custom-scrollbar-y::-webkit-scrollbar-thumb {
+  background: #a1a1aa;
+  border-radius: 5px;
+  border: 2px solid #27272a;
+}
+
+.custom-scrollbar-y::-webkit-scrollbar-thumb:hover {
+  background: #d4d4d8;
+}
+
+.custom-scrollbar-y::-webkit-scrollbar-corner {
+  background: #27272a;
+}

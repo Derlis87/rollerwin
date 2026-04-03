@@ -1440,14 +1440,14 @@ export function DashboardLive() {
                             Importar Números (Copiar y Pegar)
                           </Button>
                         </DialogTrigger>
-                        <DialogContent className="bg-zinc-900 border-zinc-700 max-w-lg">
+                        <DialogContent className="bg-zinc-900 border-zinc-700 max-w-lg max-h-[85vh] flex flex-col">
                           <DialogHeader>
                             <DialogTitle className="text-white flex items-center gap-2">
                               <Import className="w-5 h-5 text-cyan-400" />
                               Importar Números de Ruleta
                             </DialogTitle>
                           </DialogHeader>
-                          <div className="space-y-4">
+                          <div className="space-y-4 overflow-y-auto flex-1 min-h-0 custom-scrollbar-y pr-1">
                             <div>
                               <p className="text-sm text-zinc-400 mb-2">
                                 Pega los números que han salido en la ruleta. Puedes usar cualquier formato: separados por coma, espacio, o saltos de línea.
