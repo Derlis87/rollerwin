@@ -55,9 +55,9 @@ const BET_TYPE_OPTIONS = [
   { id: 'column', name: 'Columnas', icon: '📈' }
 ]
 
-const MAX_PEAKS = 15
+const MAX_PEAKS = 30
 
-// Peak colors from green (low) to red (high)
+// Peak colors from green (low) to red (high) - unlimited support
 const PEAK_COLORS = [
   'bg-green-500', // 1
   'bg-green-400', // 2
@@ -73,7 +73,22 @@ const PEAK_COLORS = [
   'bg-red-600',    // 12
   'bg-red-700',    // 13
   'bg-red-800',    // 14
-  'bg-red-900',    // 15+
+  'bg-red-900',    // 15
+  'bg-red-950',    // 16
+  'bg-purple-700', // 17
+  'bg-purple-600', // 18
+  'bg-purple-500', // 19
+  'bg-purple-400', // 20
+  'bg-pink-700',   // 21
+  'bg-pink-600',   // 22
+  'bg-pink-500',   // 23
+  'bg-pink-400',   // 24
+  'bg-fuchsia-700', // 25
+  'bg-fuchsia-600', // 26
+  'bg-fuchsia-500', // 27
+  'bg-fuchsia-400', // 28
+  'bg-rose-700',   // 29
+  'bg-rose-600',   // 30
 ]
 
 // Sound effects
@@ -947,7 +962,7 @@ export function DashboardLive() {
           if (matched) {
             historicalPeaks.push({
               id: `peak-${historicalPeaks.length}-${Date.now()}`,
-              height: Math.min(failCount + 1, 15),
+              height: failCount + 1,
               prediction: currentPred,
               resultNumber: newNumbers[i],
               resultColor: getNumberColor(newNumbers[i]),
@@ -1039,12 +1054,12 @@ export function DashboardLive() {
       for (let j = i + 1; j < nums.length; j++) {
         height++
         if (checkPredictionMatch(pred!, nums[j])) {
-          allPeaks.push({ startIdx: i, endIdx: j, height: Math.min(height, 15), prediction: pred, resultNumber: nums[j] })
+          allPeaks.push({ startIdx: i, endIdx: j, height: height, prediction: pred, resultNumber: nums[j] })
           i = j
           break
         }
-        if (height >= 15 || j === nums.length - 1) {
-          allPeaks.push({ startIdx: i, endIdx: j, height: Math.min(height, 15), prediction: pred, resultNumber: nums[j] })
+        if (j === nums.length - 1) {
+          allPeaks.push({ startIdx: i, endIdx: j, height: height, prediction: pred, resultNumber: nums[j] })
           i = j
           break
         }
@@ -1276,9 +1291,13 @@ export function DashboardLive() {
         {/* Peak History Mini */}
         <div className="px-3 pb-3">
           <div className="flex gap-1 h-8 items-end">
-            {[...peakHistory].reverse().slice(0, 15).map((peak, i) => (
-              <div key={peak.id} className={`w-3 rounded-t ${PEAK_COLORS[Math.min(peak.height - 1, 14)]}`} style={{ height: `${(peak.height / 15) * 100}%` }} title={`Pico ${peak.height}`} />
-            ))}
+            {[...peakHistory].reverse().slice(0, 20).map((peak, i) => {
+              const maxH = peakHistory.length > 0 ? Math.max(...peakHistory.slice(-20).map(p => p.height), 3) : 3
+              const colorIdx = Math.min(peak.height - 1, PEAK_COLORS.length - 1)
+              return (
+                <div key={peak.id} className={`w-3 rounded-t ${PEAK_COLORS[colorIdx]}`} style={{ height: `${Math.max(8, (peak.height / maxH) * 100)}%` }} title={`Pico ${peak.height}`} />
+              )
+            })}
           </div>
         </div>
       </div>
@@ -1649,46 +1668,57 @@ export function DashboardLive() {
                   <CardContent className="px-4 pb-4 space-y-3">
                     {/* Gráfico de barras */}
                     <div className="relative h-40 bg-zinc-800/30 rounded-lg overflow-hidden">
-                      {/* Líneas guía horizontales */}
-                      <div className="absolute inset-0 flex flex-col justify-between py-2 px-2 pointer-events-none">
-                        {[15, 12, 9, 6, 3, 1].map((val) => (
-                          <div key={val} className="relative flex items-center">
-                            <span className="text-[10px] text-zinc-600 w-5 text-right">{val}</span>
-                            <div className="flex-1 border-t border-zinc-700/20" />
+                      {/* Líneas guía horizontales - dinámicas según pico máximo */}
+                      {(() => {
+                        const maxPeak = peakHistory.length > 0 ? Math.max(...peakHistory.slice(-50).map(p => p.height), 3) : 3
+                        const step = maxPeak <= 10 ? 2 : maxPeak <= 20 ? 5 : 10
+                        const lines: number[] = []
+                        for (let v = maxPeak; v >= 1; v -= step) lines.push(v)
+                        if (lines[lines.length - 1] !== 1) lines.push(1)
+                        return (
+                          <div className="absolute inset-0 flex flex-col justify-between py-2 px-2 pointer-events-none">
+                            {lines.map((val) => (
+                              <div key={val} className="relative flex items-center">
+                                <span className="text-[10px] text-zinc-600 w-5 text-right">{val}</span>
+                                <div className="flex-1 border-t border-zinc-700/20" />
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                      </div>
+                        )
+                      })()}
                       {/* Contenedor de barras */}
                       <div className="absolute left-7 right-2 bottom-2 top-2 flex items-end gap-[2px]">
-                        {[...peakHistory].reverse().slice(0, 30).map((peak, i) => (
-                          <motion.div
-                            key={peak.id}
-                            initial={{ height: 0 }}
-                            animate={{ height: `${Math.max(4, ((peak.height - 1) / 14) * 100)}%` }}
-                            transition={{ duration: 0.3, delay: i * 0.02 }}
-                            className={`flex-1 rounded-t relative cursor-pointer min-w-[6px] ${
-                              peak.height <= 3 ? 'bg-green-500/80 hover:bg-green-400' :
-                              peak.height <= 6 ? 'bg-amber-500/80 hover:bg-amber-400' :
-                              'bg-red-500/80 hover:bg-red-400'
-                            }`}
-                            title={`Pico ${peak.height} → #${peak.resultNumber}`}
-                          >
-                            {/* Etiqueta de altura en barras grandes */}
-                            {peak.height >= 4 && (
-                              <span className="absolute -top-4 left-1/2 -translate-x-1/2 text-[8px] font-bold text-zinc-400 whitespace-nowrap">
-                                {peak.height}
-                              </span>
-                            )}
-                          </motion.div>
-                        ))}
+                        {[...peakHistory].reverse().slice(0, 50).map((peak, i) => {
+                          const maxPeak = peakHistory.length > 0 ? Math.max(...peakHistory.slice(-50).map(p => p.height), 3) : 3
+                          const barHeight = Math.max(4, ((peak.height - 1) / (maxPeak - 1)) * 100)
+                          const peakColor = peak.height < PEAK_COLORS.length ? PEAK_COLORS[peak.height - 1].replace('bg-', 'bg-') : 'bg-rose-600'
+                          return (
+                            <motion.div
+                              key={peak.id}
+                              initial={{ height: 0 }}
+                              animate={{ height: `${barHeight}%` }}
+                              transition={{ duration: 0.3, delay: i * 0.02 }}
+                              className={`flex-1 rounded-t relative cursor-pointer min-w-[6px] ${peakColor}/80 hover:${peakColor.replace('/80', '')}`}
+                              title={`Pico ${peak.height} → #${peak.resultNumber}`}
+                            >
+                              {/* Etiqueta de altura en barras */}
+                              {peak.height >= 3 && (
+                                <span className="absolute -top-4 left-1/2 -translate-x-1/2 text-[8px] font-bold text-zinc-400 whitespace-nowrap">
+                                  {peak.height}
+                                </span>
+                              )}
+                            </motion.div>
+                          )
+                        })}
                       </div>
                     </div>
 
                     {/* Leyenda */}
                     <div className="flex items-center justify-between text-[10px] text-zinc-500 px-1">
                       <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-green-500/80" /> Bajo (1-3)</span>
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-amber-500/80" /> Medio (4-6)</span>
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-red-500/80" /> Alto (7+)</span>
+                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-yellow-500/80" /> Medio (4-7)</span>
+                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-red-500/80" /> Alto (8-12)</span>
+                      <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-purple-500/80" /> Muy Alto (13+)</span>
                     </div>
 
                     {/* Estadísticas rápidas */}
