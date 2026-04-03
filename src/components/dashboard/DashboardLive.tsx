@@ -925,57 +925,16 @@ export function DashboardLive() {
     setConfidence(0)
     setBacktestResults(null)
     
-    // Calculate ALL historical peaks by SIMULATING exact manual input behavior
-    // In manual mode: prediction changes after EVERY number (match or not), 
-    // so we must replicate that exact flow number-by-number
+    // Calculate ALL historical peaks from imported numbers
     if (newNumbers.length >= 6) {
-      const betType = selectedBetTypeRef.current
-      const historicalPeaks: PeakRecord[] = []
-      let currentPred: BetPrediction | null = null
-      let failCount = 0  // tracks consecutive failures in current cycle
-
-      for (let i = 0; i < newNumbers.length; i++) {
-        const dataIncludingCurrent = newNumbers.slice(0, i + 1)
-
-        // Generate prediction if needed (same as manual: first time with 5+ numbers)
-        if (!currentPred && dataIncludingCurrent.length >= 5) {
-          currentPred = generatePrediction(dataIncludingCurrent, betType)
-        }
-
-        if (currentPred) {
-          const matched = checkPredictionMatch(currentPred, newNumbers[i])
-
-          if (matched) {
-            // Record peak: height = failCount + 1 (peak 1 = match on first check)
-            historicalPeaks.push({
-              id: `peak-${historicalPeaks.length}-${Date.now()}`,
-              height: Math.min(failCount + 1, 15),
-              prediction: currentPred,
-              resultNumber: newNumbers[i],
-              resultColor: getNumberColor(newNumbers[i]),
-              timestamp: new Date()
-            })
-            failCount = 0  // reset for next cycle
-            // Generate new prediction (same as manual: after match, new prediction)
-            currentPred = generatePrediction(dataIncludingCurrent, betType)
-          } else {
-            // Failed - increment fail count (same as manual: setCurrentPeak(currentPeakValue + 1))
-            failCount++
-            // Generate new prediction (same as manual: after fail, prediction changes with new data)
-            currentPred = generatePrediction(dataIncludingCurrent, betType)
-          }
-        }
-      }
-
+      const historicalPeaks = calculatePeakHistory(newNumbers)
       setPeakHistory(historicalPeaks)
-
-      // Set current unresolved peak (same as manual mode)
-      // failCount = 0 means last number matched → new cycle → display 1
-      // failCount = N means N failures → display N + 1
-      const displayPeak = failCount === 0 ? 1 : failCount + 1
+      const currentP = getCurrentPeak(newNumbers)
+      // If peak is 0 (last peak was resolved), start new cycle at 1
+      const displayPeak = Math.max(1, currentP)
       setCurrentPeak(displayPeak)
       currentPeakRef.current = displayPeak
-      console.log('[DashboardLive] Import: simulated', historicalPeaks.length, 'peaks from', newNumbers.length, 'numbers, betType:', betType, 'failCount:', failCount, 'displayPeak:', displayPeak)
+      console.log('[DashboardLive] Import: calculated', historicalPeaks.length, 'peaks from', newNumbers.length, 'numbers, current peak:', currentP, 'display:', displayPeak)
     } else {
       setPeakHistory([])
       setCurrentPeak(1)
