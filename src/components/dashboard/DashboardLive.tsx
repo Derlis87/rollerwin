@@ -925,57 +925,57 @@ export function DashboardLive() {
     setConfidence(0)
     setBacktestResults(null)
     
-    // Calculate ALL historical peaks using the SAME engine as manual input (generatePrediction + checkPredictionMatch)
+    // Calculate ALL historical peaks by SIMULATING exact manual input behavior
+    // In manual mode: prediction changes after EVERY number (match or not), 
+    // so we must replicate that exact flow number-by-number
     if (newNumbers.length >= 6) {
       const betType = selectedBetTypeRef.current
       const historicalPeaks: PeakRecord[] = []
-      for (let i = 2; i < newNumbers.length; i++) {
-        const pred = generatePrediction(newNumbers.slice(0, i), betType)
-        let height = 0
-        for (let j = i + 1; j < newNumbers.length; j++) {
-          height++
-          if (checkPredictionMatch(pred, newNumbers[j])) {
+      let currentPred: BetPrediction | null = null
+      let failCount = 0  // tracks consecutive failures in current cycle
+
+      for (let i = 0; i < newNumbers.length; i++) {
+        const dataIncludingCurrent = newNumbers.slice(0, i + 1)
+
+        // Generate prediction if needed (same as manual: first time with 5+ numbers)
+        if (!currentPred && dataIncludingCurrent.length >= 5) {
+          currentPred = generatePrediction(dataIncludingCurrent, betType)
+        }
+
+        if (currentPred) {
+          const matched = checkPredictionMatch(currentPred, newNumbers[i])
+
+          if (matched) {
+            // Record peak: height = failCount + 1 (peak 1 = match on first check)
             historicalPeaks.push({
               id: `peak-${historicalPeaks.length}-${Date.now()}`,
-              height: Math.min(height, 15),
-              prediction: pred,
-              resultNumber: newNumbers[j],
-              resultColor: getNumberColor(newNumbers[j]),
+              height: Math.min(failCount + 1, 15),
+              prediction: currentPred,
+              resultNumber: newNumbers[i],
+              resultColor: getNumberColor(newNumbers[i]),
               timestamp: new Date()
             })
-            i = j
-            break
-          }
-          if (height >= 15 || j === newNumbers.length - 1) {
-            historicalPeaks.push({
-              id: `peak-${historicalPeaks.length}-${Date.now()}`,
-              height: Math.min(height, 15),
-              prediction: pred,
-              resultNumber: newNumbers[j],
-              resultColor: getNumberColor(newNumbers[j]),
-              timestamp: new Date()
-            })
-            i = j
-            break
+            failCount = 0  // reset for next cycle
+            // Generate new prediction (same as manual: after match, new prediction)
+            currentPred = generatePrediction(dataIncludingCurrent, betType)
+          } else {
+            // Failed - increment fail count (same as manual: setCurrentPeak(currentPeakValue + 1))
+            failCount++
+            // Generate new prediction (same as manual: after fail, prediction changes with new data)
+            currentPred = generatePrediction(dataIncludingCurrent, betType)
           }
         }
       }
+
       setPeakHistory(historicalPeaks)
 
-      // Calculate current unresolved peak using same engine
-      const lastPred = generatePrediction(newNumbers, betType)
-      let currentP = 0
-      for (let i = newNumbers.length - 1; i >= 0; i--) {
-        if (checkPredictionMatch(lastPred, newNumbers[i])) {
-          break
-        }
-        currentP++
-      }
-      currentP = Math.min(currentP, 15)
-      const displayPeak = Math.max(1, currentP)
+      // Set current unresolved peak (same as manual mode)
+      // failCount = 0 means last number matched → new cycle → display 1
+      // failCount = N means N failures → display N + 1
+      const displayPeak = failCount === 0 ? 1 : failCount + 1
       setCurrentPeak(displayPeak)
       currentPeakRef.current = displayPeak
-      console.log('[DashboardLive] Import: calculated', historicalPeaks.length, 'peaks from', newNumbers.length, 'numbers, betType:', betType, 'current peak:', currentP, 'display:', displayPeak)
+      console.log('[DashboardLive] Import: simulated', historicalPeaks.length, 'peaks from', newNumbers.length, 'numbers, betType:', betType, 'failCount:', failCount, 'displayPeak:', displayPeak)
     } else {
       setPeakHistory([])
       setCurrentPeak(1)
