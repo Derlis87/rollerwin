@@ -925,16 +925,52 @@ export function DashboardLive() {
     setConfidence(0)
     setBacktestResults(null)
     
-    // Calculate ALL historical peaks from imported numbers
+    // Calculate ALL historical peaks using the SAME prediction engine as manual input
+    // (generatePrediction + checkPredictionMatch with selected bet type)
     if (newNumbers.length >= 6) {
-      const historicalPeaks = calculatePeakHistory(newNumbers)
+      const betType = selectedBetTypeRef.current
+      const historicalPeaks: PeakRecord[] = []
+      let currentPred: BetPrediction | null = null
+      let failCount = 0
+
+      for (let i = 0; i < newNumbers.length; i++) {
+        const dataIncludingCurrent = newNumbers.slice(0, i + 1)
+
+        // Generate prediction if needed (same as manual: first time with 5+ numbers)
+        if (!currentPred && dataIncludingCurrent.length >= 5) {
+          currentPred = generatePrediction(dataIncludingCurrent, betType)
+        }
+
+        if (currentPred) {
+          const matched = checkPredictionMatch(currentPred, newNumbers[i])
+
+          if (matched) {
+            historicalPeaks.push({
+              id: `peak-${historicalPeaks.length}-${Date.now()}`,
+              height: Math.min(failCount + 1, 15),
+              prediction: currentPred,
+              resultNumber: newNumbers[i],
+              resultColor: getNumberColor(newNumbers[i]),
+              timestamp: new Date()
+            })
+            failCount = 0
+            // Generate new prediction for next round (same as manual)
+            currentPred = generatePrediction(dataIncludingCurrent, betType)
+          } else {
+            failCount++
+            // Generate new prediction (same as manual: prediction changes after fail)
+            currentPred = generatePrediction(dataIncludingCurrent, betType)
+          }
+        }
+      }
+
       setPeakHistory(historicalPeaks)
-      const currentP = getCurrentPeak(newNumbers)
-      // If peak is 0 (last peak was resolved), start new cycle at 1
-      const displayPeak = Math.max(1, currentP)
+
+      // Set current peak (same as manual mode)
+      const displayPeak = failCount === 0 ? 1 : failCount + 1
       setCurrentPeak(displayPeak)
       currentPeakRef.current = displayPeak
-      console.log('[DashboardLive] Import: calculated', historicalPeaks.length, 'peaks from', newNumbers.length, 'numbers, current peak:', currentP, 'display:', displayPeak)
+      console.log('[DashboardLive] Import: calculated', historicalPeaks.length, 'peaks from', newNumbers.length, 'numbers, betType:', betType, 'displayPeak:', displayPeak)
     } else {
       setPeakHistory([])
       setCurrentPeak(1)
@@ -967,7 +1003,7 @@ export function DashboardLive() {
     setImportDialogOpen(false)
     setImportText('')
     setImportPreview(null)
-  }, [importPreview, generatePrediction, calculateStats])
+  }, [importPreview, generatePrediction, checkPredictionMatch, calculateStats])
 
   // Handle run backtest - Fibonacci peak-level backtesting
   // Enter at specific peak level (low/medium/high), max 3 bets per cycle using Fibonacci progression
