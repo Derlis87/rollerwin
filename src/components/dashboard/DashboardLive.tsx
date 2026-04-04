@@ -233,7 +233,7 @@ export function DashboardLive() {
   const calcBetAmountRef = useRef<string>('1')
   const calcWaitNewCycleRef = useRef(false)
   const calcPeakLevelRef = useRef<PeakLevel>('low')
-  const calcSkipUntilNextCycleRef = useRef(true) // skip bets until a peak in range starts a new cycle
+  const calcCycleActiveRef = useRef(false) // whether a cycle is actively being tracked
   const FIB = [1, 1, 2, 3, 5, 8, 13, 21]
   const MAX_CALC_BETS = 3
   const [calcDisplay, setCalcDisplay] = useState<{ cycles: typeof calcHistoryRef.current; runningBankroll: number; totalProfit: number; wins: number; losses: number; isActive: boolean } | null>(null)
@@ -261,7 +261,7 @@ export function DashboardLive() {
     calcIsActiveRef.current = calcEnabled
     calcBetTypeRef.current = selectedBetTypeRef.current
     calcWaitNewCycleRef.current = false
-    calcSkipUntilNextCycleRef.current = true
+    calcCycleActiveRef.current = false
     setCalcDisplay({
       cycles: [],
       runningBankroll: bankroll,
@@ -290,7 +290,7 @@ export function DashboardLive() {
         calcIsActiveRef.current = true
         calcBetTypeRef.current = selectedBetTypeRef.current
         calcWaitNewCycleRef.current = false
-        calcSkipUntilNextCycleRef.current = true
+        calcCycleActiveRef.current = false
         setCalcDisplay({
           cycles: [],
           runningBankroll: bankroll,
@@ -935,11 +935,13 @@ export function DashboardLive() {
         
         // === CALCULATOR TRACKING ===
         if (calcIsActiveRef.current) {
-          // Peak just resolved — check if it was in range for next cycle entry
           if (isCalcPeakInRange(currentPeakValue)) {
-            // Peak was in selected range: this win is a valid cycle bet
-            calcSkipUntilNextCycleRef.current = false
-            calcCurrentCycleEntryPeakRef.current = currentPeakValue
+            // Peak was in selected range — this win is a valid bet
+            // Start cycle if not already active
+            if (!calcCycleActiveRef.current) {
+              calcCycleActiveRef.current = true
+              calcCurrentCycleEntryPeakRef.current = currentPeakValue
+            }
 
             const betAmount = parseFloat(calcBetAmountRef.current) || 1
             const bt = calcBetTypeRef.current
@@ -952,6 +954,7 @@ export function DashboardLive() {
             calcCurrentCycleProfitRef.current += payout
             calcRunningBankrollRef.current += payout
 
+            // Complete cycle
             calcCyclesRef.current++
             calcHistoryRef.current.push({
               cycle: calcCyclesRef.current,
@@ -963,12 +966,23 @@ export function DashboardLive() {
 
             updateCalcDisplay()
             resetCalcCycle()
+            calcCycleActiveRef.current = false
           } else {
-            // Peak out of range — discard any partial cycle, wait for next in-range peak
-            calcSkipUntilNextCycleRef.current = true
-            calcCurrentBetIndexRef.current = 0
-            calcCurrentCycleBetsRef.current = []
-            calcCurrentCycleProfitRef.current = 0
+            // Peak out of range — close partial cycle if any, wait for next in-range peak
+            if (calcCycleActiveRef.current) {
+              // Had an active cycle that went out of range — save partial as loss
+              calcCyclesRef.current++
+              calcHistoryRef.current.push({
+                cycle: calcCyclesRef.current,
+                bets: [...calcCurrentCycleBetsRef.current],
+                cycleProfit: calcCurrentCycleProfitRef.current,
+                entryPeak: calcCurrentCycleEntryPeakRef.current,
+                runningBankroll: calcRunningBankrollRef.current
+              })
+              updateCalcDisplay()
+            }
+            resetCalcCycle()
+            calcCycleActiveRef.current = false
           }
         }
 
@@ -988,51 +1002,76 @@ export function DashboardLive() {
         setCurrentPeak(newPeak)
 
         // === CALCULATOR TRACKING ===
-        if (calcIsActiveRef.current && !calcSkipUntilNextCycleRef.current) {
-          const betAmount = parseFloat(calcBetAmountRef.current) || 1
-          const bt = calcBetTypeRef.current
-          const isFlatBet = bt === 'color' || bt === 'parity'
-          const betIdx = calcCurrentBetIndexRef.current
-          const placedBet = isFlatBet ? betAmount : betAmount * (FIB[betIdx] || FIB[FIB.length - 1])
+        if (calcIsActiveRef.current) {
+          if (isCalcPeakInRange(currentPeakValue)) {
+            // Peak is in range — we placed a bet here, it lost
+            // Start cycle if not already active
+            if (!calcCycleActiveRef.current) {
+              calcCycleActiveRef.current = true
+              calcCurrentCycleEntryPeakRef.current = currentPeakValue
+            }
 
-          calcCurrentCycleBetsRef.current.push({ amount: placedBet, result: 'loss', payout: 0 })
-          calcCurrentCycleProfitRef.current -= placedBet
-          calcRunningBankrollRef.current -= placedBet
-          calcCurrentBetIndexRef.current++
+            const betAmount = parseFloat(calcBetAmountRef.current) || 1
+            const bt = calcBetTypeRef.current
+            const isFlatBet = bt === 'color' || bt === 'parity'
+            const betIdx = calcCurrentBetIndexRef.current
+            const placedBet = isFlatBet ? betAmount : betAmount * (FIB[betIdx] || FIB[FIB.length - 1])
 
-          // Close cycle if reached max bets (3)
-          if (calcCurrentBetIndexRef.current >= MAX_CALC_BETS) {
-            calcCyclesRef.current++
-            calcHistoryRef.current.push({
-              cycle: calcCyclesRef.current,
-              bets: [...calcCurrentCycleBetsRef.current],
-              cycleProfit: calcCurrentCycleProfitRef.current,
-              entryPeak: calcCurrentCycleEntryPeakRef.current,
-              runningBankroll: calcRunningBankrollRef.current
-            })
+            calcCurrentCycleBetsRef.current.push({ amount: placedBet, result: 'loss', payout: 0 })
+            calcCurrentCycleProfitRef.current -= placedBet
+            calcRunningBankrollRef.current -= placedBet
+            calcCurrentBetIndexRef.current++
 
-            updateCalcDisplay()
-            resetCalcCycle()
-            calcSkipUntilNextCycleRef.current = true // wait for next in-range peak
-          } else {
-            // Still in cycle, update display
-            const allWins = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'win').length, 0)
-            const allLosses = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'loss').length, 0) + calcCurrentCycleBetsRef.current.filter(b => b.result === 'loss').length
-            const totalProfit = calcHistoryRef.current.reduce((s, c) => s + c.cycleProfit, 0) + calcCurrentCycleProfitRef.current
-            setCalcDisplay({
-              cycles: [...calcHistoryRef.current, {
-                cycle: calcCyclesRef.current + 1,
+            // Close cycle if reached max bets (3)
+            if (calcCurrentBetIndexRef.current >= MAX_CALC_BETS) {
+              calcCyclesRef.current++
+              calcHistoryRef.current.push({
+                cycle: calcCyclesRef.current,
                 bets: [...calcCurrentCycleBetsRef.current],
                 cycleProfit: calcCurrentCycleProfitRef.current,
                 entryPeak: calcCurrentCycleEntryPeakRef.current,
                 runningBankroll: calcRunningBankrollRef.current
-              }],
-              runningBankroll: calcRunningBankrollRef.current,
-              totalProfit,
-              wins: allWins,
-              losses: allLosses,
-              isActive: true
-            })
+              })
+
+              updateCalcDisplay()
+              resetCalcCycle()
+              calcCycleActiveRef.current = false
+            } else {
+              // Still in cycle, update display
+              const allWins = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'win').length, 0)
+              const allLosses = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'loss').length, 0) + calcCurrentCycleBetsRef.current.filter(b => b.result === 'loss').length
+              const totalProfit = calcHistoryRef.current.reduce((s, c) => s + c.cycleProfit, 0) + calcCurrentCycleProfitRef.current
+              setCalcDisplay({
+                cycles: [...calcHistoryRef.current, {
+                  cycle: calcCyclesRef.current + 1,
+                  bets: [...calcCurrentCycleBetsRef.current],
+                  cycleProfit: calcCurrentCycleProfitRef.current,
+                  entryPeak: calcCurrentCycleEntryPeakRef.current,
+                  runningBankroll: calcRunningBankrollRef.current
+                }],
+                runningBankroll: calcRunningBankrollRef.current,
+                totalProfit,
+                wins: allWins,
+                losses: allLosses,
+                isActive: true
+              })
+            }
+          } else {
+            // Peak out of range — no bet was placed
+            // If we had an active cycle, close it (peak went out of range)
+            if (calcCycleActiveRef.current) {
+              calcCyclesRef.current++
+              calcHistoryRef.current.push({
+                cycle: calcCyclesRef.current,
+                bets: [...calcCurrentCycleBetsRef.current],
+                cycleProfit: calcCurrentCycleProfitRef.current,
+                entryPeak: calcCurrentCycleEntryPeakRef.current,
+                runningBankroll: calcRunningBankrollRef.current
+              })
+              updateCalcDisplay()
+              resetCalcCycle()
+              calcCycleActiveRef.current = false
+            }
           }
         }
         
