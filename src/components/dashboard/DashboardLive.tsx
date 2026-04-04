@@ -220,6 +220,7 @@ export function DashboardLive() {
   const [calcEnabled, setCalcEnabled] = useState(false)
   const [calcBankroll, setCalcBankroll] = useState<string>('100')
   const [calcBetAmount, setCalcBetAmount] = useState<string>('1')
+  const [calcPeakLevel, setCalcPeakLevel] = useState<PeakLevel>('low')
   const calcHistoryRef = useRef<{ cycle: number; bets: { amount: number; result: 'win' | 'loss'; payout: number }[]; cycleProfit: number; entryPeak: number; runningBankroll: number }[]>([])
   const calcCyclesRef = useRef(0)
   const calcCurrentBetIndexRef = useRef(0)
@@ -231,14 +232,25 @@ export function DashboardLive() {
   const calcBetTypeRef = useRef<BetType>('color')
   const calcBetAmountRef = useRef<string>('1')
   const calcWaitNewCycleRef = useRef(false)
+  const calcPeakLevelRef = useRef<PeakLevel>('low')
+  const calcSkipUntilNextCycleRef = useRef(true) // skip bets until a peak in range starts a new cycle
   const FIB = [1, 1, 2, 3, 5, 8, 13, 21]
   const MAX_CALC_BETS = 3
   const [calcDisplay, setCalcDisplay] = useState<{ cycles: typeof calcHistoryRef.current; runningBankroll: number; totalProfit: number; wins: number; losses: number; isActive: boolean } | null>(null)
+
+  // Helper: check if peak height is in the selected calculator range
+  const isCalcPeakInRange = (h: number): boolean => {
+    const pl = calcPeakLevelRef.current
+    if (pl === 'low') return h >= 1 && h <= 3
+    if (pl === 'medium') return h >= 4 && h <= 6
+    return h >= 7
+  }
 
   // Reset calculator
   const resetCalculator = useCallback(() => {
     const bankroll = parseFloat(calcBankroll) || 100
     calcBetAmountRef.current = calcBetAmount
+    calcPeakLevelRef.current = calcPeakLevel
     calcHistoryRef.current = []
     calcCyclesRef.current = 0
     calcCurrentBetIndexRef.current = 0
@@ -249,6 +261,7 @@ export function DashboardLive() {
     calcIsActiveRef.current = calcEnabled
     calcBetTypeRef.current = selectedBetTypeRef.current
     calcWaitNewCycleRef.current = false
+    calcSkipUntilNextCycleRef.current = true
     setCalcDisplay({
       cycles: [],
       runningBankroll: bankroll,
@@ -257,7 +270,7 @@ export function DashboardLive() {
       losses: 0,
       isActive: calcEnabled
     })
-  }, [calcBankroll, calcEnabled, calcBetAmount])
+  }, [calcBankroll, calcEnabled, calcBetAmount, calcPeakLevel])
 
   // Toggle calculator
   const toggleCalculator = useCallback(() => {
@@ -265,6 +278,7 @@ export function DashboardLive() {
       const next = !prev
       if (next) {
         calcBetAmountRef.current = calcBetAmount
+        calcPeakLevelRef.current = calcPeakLevel
         const bankroll = parseFloat(calcBankroll) || 100
         calcHistoryRef.current = []
         calcCyclesRef.current = 0
@@ -276,6 +290,7 @@ export function DashboardLive() {
         calcIsActiveRef.current = true
         calcBetTypeRef.current = selectedBetTypeRef.current
         calcWaitNewCycleRef.current = false
+        calcSkipUntilNextCycleRef.current = true
         setCalcDisplay({
           cycles: [],
           runningBankroll: bankroll,
@@ -290,7 +305,7 @@ export function DashboardLive() {
       }
       return next
     })
-  }, [calcBankroll, calcBetAmount])
+  }, [calcBankroll, calcBetAmount, calcPeakLevel])
   
   // Refs for callback access
   const numbersRef = useRef<number[]>([])
@@ -840,6 +855,28 @@ export function DashboardLive() {
     }
   }, [])
 
+  // Calculator helpers
+  const updateCalcDisplay = useCallback(() => {
+    const allWins = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'win').length, 0)
+    const allLosses = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'loss').length, 0)
+    const totalProfit = calcHistoryRef.current.reduce((s, c) => s + c.cycleProfit, 0)
+    setCalcDisplay({
+      cycles: [...calcHistoryRef.current],
+      runningBankroll: calcRunningBankrollRef.current,
+      totalProfit,
+      wins: allWins,
+      losses: allLosses,
+      isActive: true
+    })
+  }, [])
+
+  const resetCalcCycle = useCallback(() => {
+    calcCurrentBetIndexRef.current = 0
+    calcCurrentCycleBetsRef.current = []
+    calcCurrentCycleProfitRef.current = 0
+    calcCurrentCycleEntryPeakRef.current = 1
+  }, [])
+
   // Handle number input
   const handleNumberInput = useCallback((num: number, fromDemo = false) => {
     if (soundEnabledRef.current && !fromDemo) playSound('click')
@@ -898,44 +935,41 @@ export function DashboardLive() {
         
         // === CALCULATOR TRACKING ===
         if (calcIsActiveRef.current) {
-          const betAmount = parseFloat(calcBetAmountRef.current) || 1
-          const bt = calcBetTypeRef.current
-          const isFlatBet = bt === 'color' || bt === 'parity'
-          const betIdx = calcCurrentBetIndexRef.current
-          const placedBet = isFlatBet ? betAmount : betAmount * (FIB[betIdx] || FIB[FIB.length - 1])
-          const payout = (bt === 'color' || bt === 'parity' ? 1 : 2) * placedBet
+          // Peak just resolved — check if it was in range for next cycle entry
+          if (isCalcPeakInRange(currentPeakValue)) {
+            // Peak was in selected range: this win is a valid cycle bet
+            calcSkipUntilNextCycleRef.current = false
+            calcCurrentCycleEntryPeakRef.current = currentPeakValue
 
-          calcCurrentCycleBetsRef.current.push({ amount: placedBet, result: 'win', payout })
-          calcCurrentCycleProfitRef.current += payout
-          calcRunningBankrollRef.current += payout
+            const betAmount = parseFloat(calcBetAmountRef.current) || 1
+            const bt = calcBetTypeRef.current
+            const isFlatBet = bt === 'color' || bt === 'parity'
+            const betIdx = calcCurrentBetIndexRef.current
+            const placedBet = isFlatBet ? betAmount : betAmount * (FIB[betIdx] || FIB[FIB.length - 1])
+            const payout = (bt === 'color' || bt === 'parity' ? 1 : 2) * placedBet
 
-          // Close cycle on win
-          calcCyclesRef.current++
-          calcHistoryRef.current.push({
-            cycle: calcCyclesRef.current,
-            bets: [...calcCurrentCycleBetsRef.current],
-            cycleProfit: calcCurrentCycleProfitRef.current,
-            entryPeak: calcCurrentCycleEntryPeakRef.current,
-            runningBankroll: calcRunningBankrollRef.current
-          })
+            calcCurrentCycleBetsRef.current.push({ amount: placedBet, result: 'win', payout })
+            calcCurrentCycleProfitRef.current += payout
+            calcRunningBankrollRef.current += payout
 
-          const allWins = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'win').length, 0)
-          const allLosses = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'loss').length, 0)
-          const totalProfit = calcHistoryRef.current.reduce((s, c) => s + c.cycleProfit, 0)
-          setCalcDisplay({
-            cycles: [...calcHistoryRef.current],
-            runningBankroll: calcRunningBankrollRef.current,
-            totalProfit,
-            wins: allWins,
-            losses: allLosses,
-            isActive: true
-          })
+            calcCyclesRef.current++
+            calcHistoryRef.current.push({
+              cycle: calcCyclesRef.current,
+              bets: [...calcCurrentCycleBetsRef.current],
+              cycleProfit: calcCurrentCycleProfitRef.current,
+              entryPeak: calcCurrentCycleEntryPeakRef.current,
+              runningBankroll: calcRunningBankrollRef.current
+            })
 
-          // Reset for next cycle
-          calcCurrentBetIndexRef.current = 0
-          calcCurrentCycleBetsRef.current = []
-          calcCurrentCycleProfitRef.current = 0
-          calcCurrentCycleEntryPeakRef.current = 1
+            updateCalcDisplay()
+            resetCalcCycle()
+          } else {
+            // Peak out of range — discard any partial cycle, wait for next in-range peak
+            calcSkipUntilNextCycleRef.current = true
+            calcCurrentBetIndexRef.current = 0
+            calcCurrentCycleBetsRef.current = []
+            calcCurrentCycleProfitRef.current = 0
+          }
         }
 
         // Reset peak to 1
@@ -954,7 +988,7 @@ export function DashboardLive() {
         setCurrentPeak(newPeak)
 
         // === CALCULATOR TRACKING ===
-        if (calcIsActiveRef.current) {
+        if (calcIsActiveRef.current && !calcSkipUntilNextCycleRef.current) {
           const betAmount = parseFloat(calcBetAmountRef.current) || 1
           const bt = calcBetTypeRef.current
           const isFlatBet = bt === 'color' || bt === 'parity'
@@ -977,23 +1011,9 @@ export function DashboardLive() {
               runningBankroll: calcRunningBankrollRef.current
             })
 
-            const allWins = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'win').length, 0)
-            const allLosses = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'loss').length, 0)
-            const totalProfit = calcHistoryRef.current.reduce((s, c) => s + c.cycleProfit, 0)
-            setCalcDisplay({
-              cycles: [...calcHistoryRef.current],
-              runningBankroll: calcRunningBankrollRef.current,
-              totalProfit,
-              wins: allWins,
-              losses: allLosses,
-              isActive: true
-            })
-
-            // Reset for next cycle, entry peak = next peak starting level
-            calcCurrentBetIndexRef.current = 0
-            calcCurrentCycleBetsRef.current = []
-            calcCurrentCycleProfitRef.current = 0
-            calcCurrentCycleEntryPeakRef.current = 1
+            updateCalcDisplay()
+            resetCalcCycle()
+            calcSkipUntilNextCycleRef.current = true // wait for next in-range peak
           } else {
             // Still in cycle, update display
             const allWins = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'win').length, 0)
@@ -1812,6 +1832,43 @@ export function DashboardLive() {
                             disabled={calcEnabled}
                           />
                         </div>
+                      </div>
+                    </div>
+
+                    {/* Peak level selector */}
+                    <div>
+                      <label className="text-[10px] text-zinc-500 block mb-1">Jugar en Picos</label>
+                      <div className="grid grid-cols-3 gap-1">
+                        <button
+                          onClick={() => { setCalcPeakLevel('low'); calcPeakLevelRef.current = 'low'; if (calcEnabled) resetCalculator() }}
+                          className={`py-1.5 rounded-lg text-[11px] font-bold transition-all ${
+                            calcPeakLevel === 'low'
+                              ? 'bg-green-500/20 text-green-400 border border-green-500/50 shadow-sm shadow-green-500/10'
+                              : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50 hover:border-zinc-600'
+                          }`}
+                        >
+                          🟢 Bajo (1-3)
+                        </button>
+                        <button
+                          onClick={() => { setCalcPeakLevel('medium'); calcPeakLevelRef.current = 'medium'; if (calcEnabled) resetCalculator() }}
+                          className={`py-1.5 rounded-lg text-[11px] font-bold transition-all ${
+                            calcPeakLevel === 'medium'
+                              ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/50 shadow-sm shadow-yellow-500/10'
+                              : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50 hover:border-zinc-600'
+                          }`}
+                        >
+                          🟡 Medio (4-6)
+                        </button>
+                        <button
+                          onClick={() => { setCalcPeakLevel('high'); calcPeakLevelRef.current = 'high'; if (calcEnabled) resetCalculator() }}
+                          className={`py-1.5 rounded-lg text-[11px] font-bold transition-all ${
+                            calcPeakLevel === 'high'
+                              ? 'bg-red-500/20 text-red-400 border border-red-500/50 shadow-sm shadow-red-500/10'
+                              : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50 hover:border-zinc-600'
+                          }`}
+                        >
+                          🔴 Alto (7+)
+                        </button>
                       </div>
                     </div>
 
