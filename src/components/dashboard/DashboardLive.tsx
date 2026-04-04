@@ -1265,9 +1265,8 @@ export function DashboardLive() {
     setImportPreview(null)
   }, [importPreview, generatePrediction, checkPredictionMatch, calculateStats])
 
-  // Handle run backtest - Same logic as the live calculator
-  // Walk through numbers one by one, track peaks in real-time
-  // Generate prediction BEFORE seeing each number (no lookahead bias)
+  // Handle run backtest - Same logic as handleApplyImport + handleNumberInput
+  // Walk through numbers one by one, same prediction engine as live mode
   // Only bet when current peak height falls in the selected range
   const handleRunBacktest = useCallback(() => {
     const nums = numbersRef.current
@@ -1295,8 +1294,7 @@ export function DashboardLive() {
     const profitCurve: number[] = [0]
     const fibonacciDetail: BacktestResults['fibonacciDetail'] = []
     
-    // Walk through numbers one by one
-    // Key: prediction is generated with data BEFORE the current number (no lookahead bias)
+    // Walk through numbers — exact same logic as handleApplyImport
     let prediction: BetPrediction | null = null
     let currentPeak = 1
     let cycleActive = false
@@ -1305,14 +1303,14 @@ export function DashboardLive() {
     let cycleEntryPeak = 0
     let betIndexInCycle = 0
     
-    // Generate initial prediction with first 5 numbers (same as live)
-    if (nums.length >= 5) {
-      prediction = generatePrediction(nums.slice(0, 5), betType)
-    }
-    
-    for (let i = 5; i < nums.length; i++) {
+    for (let i = 0; i < nums.length; i++) {
       const num = nums[i]
-      const dataBeforeCurrent = nums.slice(0, i) // data WITHOUT current number
+      const dataIncludingCurrent = nums.slice(0, i + 1)
+      
+      // Generate prediction if needed (same as import: first time with 5+ numbers)
+      if (!prediction && dataIncludingCurrent.length >= 5) {
+        prediction = generatePrediction(dataIncludingCurrent, betType)
+      }
       
       if (!prediction) continue
       
@@ -1321,7 +1319,6 @@ export function DashboardLive() {
       if (matched) {
         // === WIN ===
         if (isPeakInRange(currentPeak)) {
-          // Peak was in range — this win is a valid bet
           if (!cycleActive) {
             cycleActive = true
             cycleEntryPeak = currentPeak
@@ -1342,7 +1339,6 @@ export function DashboardLive() {
           currentDrawdown = Math.max(0, currentDrawdown - payout)
           if (currentWinStreak > maxWinStreak) maxWinStreak = currentWinStreak
           
-          // Complete cycle
           fibonacciDetail.push({
             cycle: fibonacciDetail.length + 1,
             bets: [...cycleBets],
@@ -1353,7 +1349,6 @@ export function DashboardLive() {
           profitCurve.push(netProfit)
           cycleActive = false
         } else {
-          // Peak out of range — close any active partial cycle
           if (cycleActive) {
             fibonacciDetail.push({
               cycle: fibonacciDetail.length + 1,
@@ -1367,14 +1362,12 @@ export function DashboardLive() {
           }
         }
         
-        // Reset peak to 1, regenerate prediction with data including current
+        // Reset peak, regenerate prediction (same as import/live)
         currentPeak = 1
-        const dataWithCurrent = nums.slice(0, i + 1)
-        prediction = generatePrediction(dataWithCurrent, betType)
+        prediction = generatePrediction(dataIncludingCurrent, betType)
       } else {
         // === LOSS ===
         if (isPeakInRange(currentPeak)) {
-          // Peak in range — we placed a bet here, it lost
           if (!cycleActive) {
             cycleActive = true
             cycleEntryPeak = currentPeak
@@ -1396,7 +1389,6 @@ export function DashboardLive() {
           if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak
           betIndexInCycle++
           
-          // Close cycle if reached max bets (3)
           if (betIndexInCycle >= MAX_BETS_PER_CYCLE) {
             fibonacciDetail.push({
               cycle: fibonacciDetail.length + 1,
@@ -1409,7 +1401,6 @@ export function DashboardLive() {
             cycleActive = false
           }
         } else {
-          // Peak out of range — close any active partial cycle
           if (cycleActive) {
             fibonacciDetail.push({
               cycle: fibonacciDetail.length + 1,
@@ -1423,10 +1414,9 @@ export function DashboardLive() {
           }
         }
         
-        // Increment peak, regenerate prediction with data including current
+        // Increment peak, regenerate prediction (same as import/live)
         currentPeak++
-        const dataWithCurrent = nums.slice(0, i + 1)
-        prediction = generatePrediction(dataWithCurrent, betType)
+        prediction = generatePrediction(dataIncludingCurrent, betType)
       }
     }
     
