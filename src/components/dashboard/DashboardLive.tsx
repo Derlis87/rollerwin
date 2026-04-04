@@ -1668,37 +1668,45 @@ export function DashboardLive() {
                   <CardContent className="px-4 pb-4 space-y-3">
                     {/* Gráfico de barras */}
                     <div className="relative h-40 bg-zinc-800/30 rounded-lg overflow-hidden">
-                      {/* Líneas guía horizontales - dinámicas según pico máximo */}
+                      {/* Líneas guía horizontales - posicionadas con la misma escala que las barras */}
                       {(() => {
                         const maxPeak = peakHistory.length > 0 ? Math.max(...peakHistory.slice(-50).map(p => p.height), 3) : 3
                         const step = maxPeak <= 10 ? 2 : maxPeak <= 20 ? 5 : 10
                         const lines: number[] = []
                         for (let v = maxPeak; v >= 1; v -= step) lines.push(v)
                         if (lines[lines.length - 1] !== 1) lines.push(1)
-                        return (
-                          <div className="absolute inset-0 flex flex-col justify-between py-2 px-2 pointer-events-none">
-                            {lines.map((val) => (
-                              <div key={val} className="relative flex items-center">
-                                <span className="text-[10px] text-zinc-600 w-5 text-right">{val}</span>
-                                <div className="flex-1 border-t border-zinc-700/20" />
-                              </div>
-                            ))}
-                          </div>
-                        )
+                        return lines.map((val) => {
+                          const pct = ((val - 1) / (maxPeak - 1)) * 100
+                          return (
+                            <div
+                              key={val}
+                              className="absolute left-0 right-0 flex items-center pointer-events-none"
+                              style={{ bottom: `calc(8px + ${pct}% * 0.92)` }}
+                            >
+                              <span className="text-[10px] text-zinc-600 w-5 text-right px-0.5">{val}</span>
+                              <div className="flex-1 border-t border-zinc-700/20" />
+                            </div>
+                          )
+                        })
                       })()}
                       {/* Contenedor de barras */}
                       <div className="absolute left-7 right-2 bottom-2 top-2 flex items-end gap-[2px]">
                         {[...peakHistory].reverse().slice(0, 50).map((peak, i) => {
                           const maxPeak = peakHistory.length > 0 ? Math.max(...peakHistory.slice(-50).map(p => p.height), 3) : 3
                           const barHeight = Math.max(4, ((peak.height - 1) / (maxPeak - 1)) * 100)
-                          const peakColor = peak.height < PEAK_COLORS.length ? PEAK_COLORS[peak.height - 1].replace('bg-', 'bg-') : 'bg-rose-600'
                           return (
                             <motion.div
                               key={peak.id}
                               initial={{ height: 0 }}
                               animate={{ height: `${barHeight}%` }}
                               transition={{ duration: 0.3, delay: i * 0.02 }}
-                              className={`flex-1 rounded-t relative cursor-pointer min-w-[6px] ${peakColor}/80 hover:${peakColor.replace('/80', '')}`}
+                              className={`flex-1 rounded-t relative cursor-pointer min-w-[6px] ${
+                                peak.height <= 3 ? 'bg-green-500/80 hover:bg-green-400' :
+                                peak.height <= 7 ? 'bg-yellow-500/80 hover:bg-yellow-400' :
+                                peak.height <= 12 ? 'bg-red-500/80 hover:bg-red-400' :
+                                peak.height <= 20 ? 'bg-purple-500/80 hover:bg-purple-400' :
+                                'bg-pink-500/80 hover:bg-pink-400'
+                              }`}
                               title={`Pico ${peak.height} → #${peak.resultNumber}`}
                             >
                               {/* Etiqueta de altura en barras */}
