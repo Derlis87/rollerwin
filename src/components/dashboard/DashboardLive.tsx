@@ -1084,7 +1084,10 @@ export function DashboardLive() {
       }
     }
     
-    // Step 3: Simulate Fibonacci betting on each entry cycle
+    // Step 3: Simulate betting on each entry cycle
+    // - Colores/Paridad: Flat betting (same amount every bet) — 1:1 payout
+    // - Docenas/Columnas: Fibonacci progression — 2:1 payout
+    const isFlatBet = betType === 'color' || betType === 'parity'
     let wins = 0, losses = 0, netProfit = 0, maxDrawdown = 0, currentDrawdown = 0
     let maxWinStreak = 0, maxLossStreak = 0, currentWinStreak = 0, currentLossStreak = 0
     const profitCurve: number[] = [0]
@@ -1104,9 +1107,8 @@ export function DashboardLive() {
         // Generate prediction based on data up to this point
         const predForBet = generatePrediction(nums.slice(0, numberIdx), betType)
         
-        // Fibonacci bet amount
-        const fibMultiplier = FIB[bet] || FIB[FIB.length - 1]
-        const betAmount = amount * fibMultiplier
+        // Bet amount: Flat for Colors/Parity, Fibonacci for Dozens/Columns
+        const betAmount = isFlatBet ? amount : amount * (FIB[bet] || FIB[FIB.length - 1])
         cycleBets.push(betAmount)
         
         const matched = checkPredictionMatch(predForBet, num)
