@@ -1267,6 +1267,7 @@ export function DashboardLive() {
 
   // Handle run backtest - Same logic as the live calculator
   // Walk through numbers one by one, track peaks in real-time
+  // Generate prediction BEFORE seeing each number (no lookahead bias)
   // Only bet when current peak height falls in the selected range
   const handleRunBacktest = useCallback(() => {
     const nums = numbersRef.current
@@ -1294,7 +1295,8 @@ export function DashboardLive() {
     const profitCurve: number[] = [0]
     const fibonacciDetail: BacktestResults['fibonacciDetail'] = []
     
-    // Walk through numbers one by one — same as handleNumberInput in live mode
+    // Walk through numbers one by one
+    // Key: prediction is generated with data BEFORE the current number (no lookahead bias)
     let prediction: BetPrediction | null = null
     let currentPeak = 1
     let cycleActive = false
@@ -1303,14 +1305,14 @@ export function DashboardLive() {
     let cycleEntryPeak = 0
     let betIndexInCycle = 0
     
-    for (let i = 0; i < nums.length; i++) {
+    // Generate initial prediction with first 5 numbers (same as live)
+    if (nums.length >= 5) {
+      prediction = generatePrediction(nums.slice(0, 5), betType)
+    }
+    
+    for (let i = 5; i < nums.length; i++) {
       const num = nums[i]
-      const dataUpToCurrent = nums.slice(0, i + 1)
-      
-      // Generate prediction if needed (same as live: first time with 5+ numbers)
-      if (!prediction && dataUpToCurrent.length >= 5) {
-        prediction = generatePrediction(dataUpToCurrent, betType)
-      }
+      const dataBeforeCurrent = nums.slice(0, i) // data WITHOUT current number
       
       if (!prediction) continue
       
@@ -1365,9 +1367,10 @@ export function DashboardLive() {
           }
         }
         
-        // Reset peak to 1, regenerate prediction (same as live)
+        // Reset peak to 1, regenerate prediction with data including current
         currentPeak = 1
-        prediction = generatePrediction(dataUpToCurrent, betType)
+        const dataWithCurrent = nums.slice(0, i + 1)
+        prediction = generatePrediction(dataWithCurrent, betType)
       } else {
         // === LOSS ===
         if (isPeakInRange(currentPeak)) {
@@ -1420,9 +1423,10 @@ export function DashboardLive() {
           }
         }
         
-        // Increment peak, regenerate prediction (same as live)
+        // Increment peak, regenerate prediction with data including current
         currentPeak++
-        prediction = generatePrediction(dataUpToCurrent, betType)
+        const dataWithCurrent = nums.slice(0, i + 1)
+        prediction = generatePrediction(dataWithCurrent, betType)
       }
     }
     
