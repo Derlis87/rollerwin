@@ -30,7 +30,11 @@ import {
   TrendingDown,
   BarChart3,
   X,
-  ClipboardPaste
+  ClipboardPaste,
+  Wallet,
+  Calculator,
+  RotateCcw,
+  CircleDot
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -41,6 +45,7 @@ import { Progress } from '@/components/ui/progress'
 import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
+import { Input } from '@/components/ui/input'
 import { useAppStore, getNumberColor } from '@/store/app-store'
 import { CASINO_CONFIGS, openCasino, getTableUrl } from '@/lib/casino-urls'
 import { ColorParityChart } from './charts/ColorParityChart'
@@ -210,6 +215,82 @@ export function DashboardLive() {
   // Demo mode
   const [isDemoMode, setIsDemoMode] = useState(false)
   const demoIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  
+  // Calculator / Bankroll Tracker state
+  const [calcEnabled, setCalcEnabled] = useState(false)
+  const [calcBankroll, setCalcBankroll] = useState<string>('100')
+  const [calcBetAmount, setCalcBetAmount] = useState<string>('1')
+  const calcHistoryRef = useRef<{ cycle: number; bets: { amount: number; result: 'win' | 'loss'; payout: number }[]; cycleProfit: number; entryPeak: number; runningBankroll: number }[]>([])
+  const calcCyclesRef = useRef(0)
+  const calcCurrentBetIndexRef = useRef(0)
+  const calcCurrentCycleBetsRef = useRef<{ amount: number; result: 'win' | 'loss'; payout: number }[]>([])
+  const calcCurrentCycleProfitRef = useRef(0)
+  const calcCurrentCycleEntryPeakRef = useRef(0)
+  const calcRunningBankrollRef = useRef(0)
+  const calcIsActiveRef = useRef(false)
+  const calcBetTypeRef = useRef<BetType>('color')
+  const calcBetAmountRef = useRef<string>('1')
+  const calcWaitNewCycleRef = useRef(false)
+  const FIB = [1, 1, 2, 3, 5, 8, 13, 21]
+  const MAX_CALC_BETS = 3
+  const [calcDisplay, setCalcDisplay] = useState<{ cycles: typeof calcHistoryRef.current; runningBankroll: number; totalProfit: number; wins: number; losses: number; isActive: boolean } | null>(null)
+
+  // Reset calculator
+  const resetCalculator = useCallback(() => {
+    const bankroll = parseFloat(calcBankroll) || 100
+    calcBetAmountRef.current = calcBetAmount
+    calcHistoryRef.current = []
+    calcCyclesRef.current = 0
+    calcCurrentBetIndexRef.current = 0
+    calcCurrentCycleBetsRef.current = []
+    calcCurrentCycleProfitRef.current = 0
+    calcCurrentCycleEntryPeakRef.current = 0
+    calcRunningBankrollRef.current = bankroll
+    calcIsActiveRef.current = calcEnabled
+    calcBetTypeRef.current = selectedBetTypeRef.current
+    calcWaitNewCycleRef.current = false
+    setCalcDisplay({
+      cycles: [],
+      runningBankroll: bankroll,
+      totalProfit: 0,
+      wins: 0,
+      losses: 0,
+      isActive: calcEnabled
+    })
+  }, [calcBankroll, calcEnabled, calcBetAmount])
+
+  // Toggle calculator
+  const toggleCalculator = useCallback(() => {
+    setCalcEnabled(prev => {
+      const next = !prev
+      if (next) {
+        calcBetAmountRef.current = calcBetAmount
+        const bankroll = parseFloat(calcBankroll) || 100
+        calcHistoryRef.current = []
+        calcCyclesRef.current = 0
+        calcCurrentBetIndexRef.current = 0
+        calcCurrentCycleBetsRef.current = []
+        calcCurrentCycleProfitRef.current = 0
+        calcCurrentCycleEntryPeakRef.current = 0
+        calcRunningBankrollRef.current = bankroll
+        calcIsActiveRef.current = true
+        calcBetTypeRef.current = selectedBetTypeRef.current
+        calcWaitNewCycleRef.current = false
+        setCalcDisplay({
+          cycles: [],
+          runningBankroll: bankroll,
+          totalProfit: 0,
+          wins: 0,
+          losses: 0,
+          isActive: true
+        })
+      } else {
+        calcIsActiveRef.current = false
+        setCalcDisplay(prev => prev ? { ...prev, isActive: false } : null)
+      }
+      return next
+    })
+  }, [calcBankroll, calcBetAmount])
   
   // Refs for callback access
   const numbersRef = useRef<number[]>([])
@@ -815,6 +896,48 @@ export function DashboardLive() {
         // Add to history
         setPeakHistory(prev => [...prev, peakRecord])
         
+        // === CALCULATOR TRACKING ===
+        if (calcIsActiveRef.current) {
+          const betAmount = parseFloat(calcBetAmountRef.current) || 1
+          const bt = calcBetTypeRef.current
+          const isFlatBet = bt === 'color' || bt === 'parity'
+          const betIdx = calcCurrentBetIndexRef.current
+          const placedBet = isFlatBet ? betAmount : betAmount * (FIB[betIdx] || FIB[FIB.length - 1])
+          const payout = (bt === 'color' || bt === 'parity' ? 1 : 2) * placedBet
+
+          calcCurrentCycleBetsRef.current.push({ amount: placedBet, result: 'win', payout })
+          calcCurrentCycleProfitRef.current += payout
+          calcRunningBankrollRef.current += payout
+
+          // Close cycle on win
+          calcCyclesRef.current++
+          calcHistoryRef.current.push({
+            cycle: calcCyclesRef.current,
+            bets: [...calcCurrentCycleBetsRef.current],
+            cycleProfit: calcCurrentCycleProfitRef.current,
+            entryPeak: calcCurrentCycleEntryPeakRef.current,
+            runningBankroll: calcRunningBankrollRef.current
+          })
+
+          const allWins = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'win').length, 0)
+          const allLosses = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'loss').length, 0)
+          const totalProfit = calcHistoryRef.current.reduce((s, c) => s + c.cycleProfit, 0)
+          setCalcDisplay({
+            cycles: [...calcHistoryRef.current],
+            runningBankroll: calcRunningBankrollRef.current,
+            totalProfit,
+            wins: allWins,
+            losses: allLosses,
+            isActive: true
+          })
+
+          // Reset for next cycle
+          calcCurrentBetIndexRef.current = 0
+          calcCurrentCycleBetsRef.current = []
+          calcCurrentCycleProfitRef.current = 0
+          calcCurrentCycleEntryPeakRef.current = 1
+        }
+
         // Reset peak to 1
         setCurrentPeak(1)
         
@@ -829,6 +952,69 @@ export function DashboardLive() {
         
         const newPeak = currentPeakValue + 1
         setCurrentPeak(newPeak)
+
+        // === CALCULATOR TRACKING ===
+        if (calcIsActiveRef.current) {
+          const betAmount = parseFloat(calcBetAmountRef.current) || 1
+          const bt = calcBetTypeRef.current
+          const isFlatBet = bt === 'color' || bt === 'parity'
+          const betIdx = calcCurrentBetIndexRef.current
+          const placedBet = isFlatBet ? betAmount : betAmount * (FIB[betIdx] || FIB[FIB.length - 1])
+
+          calcCurrentCycleBetsRef.current.push({ amount: placedBet, result: 'loss', payout: 0 })
+          calcCurrentCycleProfitRef.current -= placedBet
+          calcRunningBankrollRef.current -= placedBet
+          calcCurrentBetIndexRef.current++
+
+          // Close cycle if reached max bets (3)
+          if (calcCurrentBetIndexRef.current >= MAX_CALC_BETS) {
+            calcCyclesRef.current++
+            calcHistoryRef.current.push({
+              cycle: calcCyclesRef.current,
+              bets: [...calcCurrentCycleBetsRef.current],
+              cycleProfit: calcCurrentCycleProfitRef.current,
+              entryPeak: calcCurrentCycleEntryPeakRef.current,
+              runningBankroll: calcRunningBankrollRef.current
+            })
+
+            const allWins = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'win').length, 0)
+            const allLosses = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'loss').length, 0)
+            const totalProfit = calcHistoryRef.current.reduce((s, c) => s + c.cycleProfit, 0)
+            setCalcDisplay({
+              cycles: [...calcHistoryRef.current],
+              runningBankroll: calcRunningBankrollRef.current,
+              totalProfit,
+              wins: allWins,
+              losses: allLosses,
+              isActive: true
+            })
+
+            // Reset for next cycle, entry peak = next peak starting level
+            calcCurrentBetIndexRef.current = 0
+            calcCurrentCycleBetsRef.current = []
+            calcCurrentCycleProfitRef.current = 0
+            calcCurrentCycleEntryPeakRef.current = 1
+          } else {
+            // Still in cycle, update display
+            const allWins = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'win').length, 0)
+            const allLosses = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'loss').length, 0) + calcCurrentCycleBetsRef.current.filter(b => b.result === 'loss').length
+            const totalProfit = calcHistoryRef.current.reduce((s, c) => s + c.cycleProfit, 0) + calcCurrentCycleProfitRef.current
+            setCalcDisplay({
+              cycles: [...calcHistoryRef.current, {
+                cycle: calcCyclesRef.current + 1,
+                bets: [...calcCurrentCycleBetsRef.current],
+                cycleProfit: calcCurrentCycleProfitRef.current,
+                entryPeak: calcCurrentCycleEntryPeakRef.current,
+                runningBankroll: calcRunningBankrollRef.current
+              }],
+              runningBankroll: calcRunningBankrollRef.current,
+              totalProfit,
+              wins: allWins,
+              losses: allLosses,
+              isActive: true
+            })
+          }
+        }
         
         // Generate new prediction (might change based on new data) - MINIMO 5 NUMEROS
         if (newNumbers.length >= 5) {
@@ -1577,6 +1763,118 @@ export function DashboardLive() {
                         {numbers.length === 0 && <p className="text-zinc-600 text-xs">{isDemoMode ? 'El modo demo generará números automáticamente...' : 'Ingresa números haciendo clic o usando el teclado...'}</p>}
                       </div>
                     </div>
+                  </CardContent>
+                </Card>
+
+                {/* Bankroll Calculator */}
+                <Card className="bg-gradient-to-br from-zinc-900 to-zinc-800 border-emerald-500/30">
+                  <CardHeader className="py-3 px-4">
+                    <CardTitle className="text-white flex items-center justify-between text-sm">
+                      <span className="flex items-center gap-2">
+                        <Calculator className="w-4 h-4 text-emerald-500" />
+                        Calculadora Bankroll
+                      </span>
+                      <div className="flex items-center gap-3">
+                        {calcDisplay && calcDisplay.isActive && (
+                          <Badge variant="outline" className={`text-xs px-2 py-0 ${calcDisplay.totalProfit > 0 ? 'border-green-500 text-green-400' : calcDisplay.totalProfit < 0 ? 'border-red-500 text-red-400' : 'border-zinc-500 text-zinc-400'}`}>
+                            {calcDisplay.totalProfit > 0 ? '+' : ''}{calcDisplay.totalProfit.toFixed(2)}
+                          </Badge>
+                        )}
+                        <Switch checked={calcEnabled} onCheckedChange={toggleCalculator} />
+                      </div>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="px-4 pb-4 space-y-3">
+                    {/* Config inputs */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] text-zinc-500 block mb-1">Bankroll Inicial</label>
+                        <div className="relative">
+                          <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-500" />
+                          <Input
+                            type="number"
+                            value={calcBankroll}
+                            onChange={(e) => { setCalcBankroll(e.target.value); if (!calcEnabled) return; }}
+                            className="h-8 bg-zinc-800 border-zinc-700 text-white text-sm pl-7"
+                            disabled={calcEnabled}
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-zinc-500 block mb-1">Apuesta Base</label>
+                        <div className="relative">
+                          <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-500" />
+                          <Input
+                            type="number"
+                            value={calcBetAmount}
+                            onChange={(e) => { setCalcBetAmount(e.target.value); calcBetAmountRef.current = e.target.value }}
+                            className="h-8 bg-zinc-800 border-zinc-700 text-white text-sm pl-7"
+                            disabled={calcEnabled}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {calcEnabled && (
+                      <>
+                        {/* Stats bar */}
+                        <div className="grid grid-cols-4 gap-2">
+                          <div className="bg-zinc-800/60 rounded-lg p-2 text-center">
+                            <div className={`text-lg font-bold ${calcDisplay ? (calcDisplay.totalProfit >= 0 ? 'text-green-400' : 'text-red-400') : 'text-white'}`}>
+                              {calcDisplay ? calcDisplay.runningBankroll.toFixed(1) : '0'}
+                            </div>
+                            <div className="text-[9px] text-zinc-500">Bankroll</div>
+                          </div>
+                          <div className="bg-zinc-800/60 rounded-lg p-2 text-center">
+                            <div className="text-lg font-bold text-green-400">{calcDisplay?.wins ?? 0}</div>
+                            <div className="text-[9px] text-zinc-500">Wins</div>
+                          </div>
+                          <div className="bg-zinc-800/60 rounded-lg p-2 text-center">
+                            <div className="text-lg font-bold text-red-400">{calcDisplay?.losses ?? 0}</div>
+                            <div className="text-[9px] text-zinc-500">Losses</div>
+                          </div>
+                          <div className="bg-zinc-800/60 rounded-lg p-2 text-center">
+                            <div className="text-lg font-bold text-amber-400">{calcDisplay?.cycles.length ?? 0}</div>
+                            <div className="text-[9px] text-zinc-500">Ciclos</div>
+                          </div>
+                        </div>
+
+                        {/* Cycle history */}
+                        <div className="max-h-48 overflow-y-auto custom-scrollbar-y space-y-1.5">
+                          {calcDisplay && calcDisplay.cycles.map((cycle) => (
+                            <div key={cycle.cycle} className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs ${cycle.cycleProfit > 0 ? 'bg-green-500/10 border border-green-500/20' : cycle.cycleProfit < 0 ? 'bg-red-500/10 border border-red-500/20' : 'bg-zinc-800/50 border border-zinc-700/30'}`}>
+                              <div className="flex items-center gap-2">
+                                <span className="text-zinc-500 font-mono w-6">#{cycle.cycle}</span>
+                                <div className="flex gap-0.5">
+                                  {cycle.bets.map((bet, bi) => (
+                                    <span key={bi} className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${bet.result === 'win' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                                      {bet.result === 'win' ? `+$${bet.payout}` : `-$${bet.amount}`}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-zinc-600">Pico {cycle.entryPeak}</span>
+                                <span className={`font-bold ${cycle.cycleProfit > 0 ? 'text-green-400' : cycle.cycleProfit < 0 ? 'text-red-400' : 'text-zinc-400'}`}>
+                                  {cycle.cycleProfit > 0 ? '+' : ''}{cycle.cycleProfit.toFixed(2)}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                          {(!calcDisplay || calcDisplay.cycles.length === 0) && (
+                            <p className="text-center text-zinc-600 text-xs py-4">
+                              Activado — ingresa números para empezar a registrar
+                            </p>
+                          )}
+                        </div>
+
+                        {/* Reset button */}
+                        <Button onClick={resetCalculator} variant="outline" size="sm" className="w-full border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500">
+                          <RotateCcw className="w-3 h-3 mr-1" />
+                          Reiniciar Calculadora
+                        </Button>
+                      </>
+                    )}
                   </CardContent>
                 </Card>
 
