@@ -1835,6 +1835,15 @@ export function DashboardLive() {
 
                 {/* Charts */}
                 {numbers.length >= 5 && <ColorParityChart numbers={numbers} />}
+
+                {/* Peak Level Charts - inside main panel to avoid gap */}
+                {numbers.length >= 5 && (
+                  <PeakLevelCharts
+                    peakHistory={peakHistory}
+                    currentPeak={currentPeak}
+                    inputNumbers={numbers}
+                  />
+                )}
               </>
             )}
           </div>
@@ -2084,17 +2093,6 @@ export function DashboardLive() {
             </div>
           )}
         </div>
-
-        {/* Peak Level Charts - INDEPENDENT SECTION BELOW */}
-        {isJoined && (
-          <div className="mt-6">
-            <PeakLevelCharts 
-              peakHistory={peakHistory} 
-              currentPeak={currentPeak} 
-              inputNumbers={numbers}
-            />
-          </div>
-        )}
 
         {/* Backtesting Independiente */}
         {isJoined && numbers.length >= 6 && (
