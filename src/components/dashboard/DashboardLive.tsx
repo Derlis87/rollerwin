@@ -1984,6 +1984,103 @@ export function DashboardLive() {
                   </div>
                 </CardContent>
               </Card>
+
+              {/* Professional Roulette Engine - Side Panel */}
+              {numbers.length >= 10 && (
+                <Card className="bg-zinc-900 border-zinc-800 mt-4 overflow-hidden">
+                  <CardContent className="p-4">
+                    <ProfessionalRouletteEngine inputNumbers={numbers} />
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Bankroll Calculator - Side Panel */}
+              <Card className="bg-gradient-to-br from-zinc-900 to-zinc-800 border-emerald-500/30 mt-4">
+                <CardHeader className="py-2 px-4">
+                  <CardTitle className="text-white flex items-center justify-between text-sm">
+                    <span className="flex items-center gap-2">
+                      <Calculator className="w-4 h-4 text-emerald-500" />
+                      Calculadora Bankroll
+                    </span>
+                    <div className="flex items-center gap-3">
+                      {calcDisplay && calcDisplay.isActive && (
+                        <Badge variant="outline" className={`text-xs px-2 py-0 ${calcDisplay.totalProfit > 0 ? 'border-green-500 text-green-400' : calcDisplay.totalProfit < 0 ? 'border-red-500 text-red-400' : 'border-zinc-500 text-zinc-400'}`}>
+                          {calcDisplay.totalProfit > 0 ? '+' : ''}{calcDisplay.totalProfit.toFixed(2)}
+                        </Badge>
+                      )}
+                      <Switch checked={calcEnabled} onCheckedChange={toggleCalculator} />
+                    </div>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="px-4 pb-4 space-y-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] text-zinc-500 block mb-1">Bankroll</label>
+                      <div className="relative">
+                        <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-500" />
+                        <Input type="number" value={calcBankroll} onChange={(e) => { setCalcBankroll(e.target.value); if (!calcEnabled) return; }} className="h-7 bg-zinc-800 border-zinc-700 text-white text-xs pl-6" disabled={calcEnabled} />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-zinc-500 block mb-1">Apuesta Base</label>
+                      <div className="relative">
+                        <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-500" />
+                        <Input type="number" value={calcBetAmount} onChange={(e) => { setCalcBetAmount(e.target.value); calcBetAmountRef.current = e.target.value }} className="h-7 bg-zinc-800 border-zinc-700 text-white text-xs pl-6" disabled={calcEnabled} />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] text-zinc-500 block mb-1">Jugar en Picos</label>
+                    <div className="grid grid-cols-3 gap-1">
+                      <button onClick={() => { setCalcPeakLevel('low'); calcPeakLevelRef.current = 'low'; if (calcEnabled) resetCalculator() }} className={`py-1 rounded-lg text-[10px] font-bold transition-all ${calcPeakLevel === 'low' ? 'bg-green-500/20 text-green-400 border border-green-500/50' : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50'}`}>🟢 Bajo</button>
+                      <button onClick={() => { setCalcPeakLevel('medium'); calcPeakLevelRef.current = 'medium'; if (calcEnabled) resetCalculator() }} className={`py-1 rounded-lg text-[10px] font-bold transition-all ${calcPeakLevel === 'medium' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/50' : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50'}`}>🟡 Medio</button>
+                      <button onClick={() => { setCalcPeakLevel('high'); calcPeakLevelRef.current = 'high'; if (calcEnabled) resetCalculator() }} className={`py-1 rounded-lg text-[10px] font-bold transition-all ${calcPeakLevel === 'high' ? 'bg-red-500/20 text-red-400 border border-red-500/50' : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50'}`}>🔴 Alto</button>
+                    </div>
+                  </div>
+
+                  {calcEnabled && (
+                    <>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="bg-zinc-800/60 rounded-lg p-1.5 text-center">
+                          <div className={`text-sm font-bold ${calcDisplay ? (calcDisplay.totalProfit >= 0 ? 'text-green-400' : 'text-red-400') : 'text-white'}`}>{calcDisplay ? calcDisplay.runningBankroll.toFixed(1) : '0'}</div>
+                          <div className="text-[8px] text-zinc-500">Bankroll</div>
+                        </div>
+                        <div className="bg-zinc-800/60 rounded-lg p-1.5 text-center">
+                          <div className={`text-sm font-bold ${calcDisplay ? (calcDisplay.totalProfit >= 0 ? 'text-green-400' : 'text-red-400') : 'text-white'}`}>{calcDisplay ? (calcDisplay.totalProfit > 0 ? '+' : '') + calcDisplay.totalProfit.toFixed(2) : '0'}</div>
+                          <div className="text-[8px] text-zinc-500">Profit</div>
+                        </div>
+                      </div>
+                      <div className="flex justify-between text-[10px] px-1">
+                        <span className="text-green-400 font-bold">W: {calcDisplay?.wins ?? 0}</span>
+                        <span className="text-red-400 font-bold">L: {calcDisplay?.losses ?? 0}</span>
+                        <span className="text-amber-400 font-bold">C: {calcDisplay?.cycles.length ?? 0}</span>
+                      </div>
+                      <div className="max-h-40 overflow-y-auto custom-scrollbar-y space-y-1">
+                        {calcDisplay && calcDisplay.cycles.map((cycle) => (
+                          <div key={cycle.cycle} className={`flex items-center justify-between px-2 py-1.5 rounded-lg text-[10px] ${cycle.cycleProfit > 0 ? 'bg-green-500/10 border border-green-500/20' : cycle.cycleProfit < 0 ? 'bg-red-500/10 border border-red-500/20' : 'bg-zinc-800/50 border border-zinc-700/30'}`}>
+                            <div className="flex items-center gap-1">
+                              <span className="text-zinc-500 font-mono">#{cycle.cycle}</span>
+                              <div className="flex gap-0.5">
+                                {cycle.bets.map((bet, bi) => (
+                                  <span key={bi} className={`px-1 py-0.5 rounded text-[9px] font-bold ${bet.result === 'win' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>{bet.result === 'win' ? `+$${bet.payout}` : `-$${bet.amount}`}</span>
+                                ))}
+                              </div>
+                            </div>
+                            <span className={`font-bold ${cycle.cycleProfit > 0 ? 'text-green-400' : cycle.cycleProfit < 0 ? 'text-red-400' : 'text-zinc-400'}`}>{cycle.cycleProfit > 0 ? '+' : ''}{cycle.cycleProfit.toFixed(2)}</span>
+                          </div>
+                        ))}
+                        {(!calcDisplay || calcDisplay.cycles.length === 0) && (
+                          <p className="text-center text-zinc-600 text-[10px] py-3">Activado — ingresa números</p>
+                        )}
+                      </div>
+                      <Button onClick={resetCalculator} variant="outline" size="sm" className="w-full border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 h-7 text-xs">
+                        <RotateCcw className="w-3 h-3 mr-1" /> Reiniciar
+                      </Button>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
             </div>
           )}
         </div>
@@ -1998,169 +2095,6 @@ export function DashboardLive() {
             />
           </div>
         )}
-
-        {/* Professional Roulette Engine - Statistical Inference */}
-        {isJoined && numbers.length >= 10 && (
-          <div className="mt-6">
-            <ProfessionalRouletteEngine inputNumbers={numbers} />
-          </div>
-        )}
-
-        {/* Ultimate Signals - Multi-Market Prediction */}
-        {isJoined && (
-          <div className="mt-6">
-            <UltimateSignals inputNumbers={numbers} />
-          </div>
-        )}
-
-        {/* Bankroll Calculator */}
-        <Card className="bg-gradient-to-br from-zinc-900 to-zinc-800 border-emerald-500/30 mt-6">
-          <CardHeader className="py-3 px-4">
-            <CardTitle className="text-white flex items-center justify-between text-sm">
-              <span className="flex items-center gap-2">
-                <Calculator className="w-4 h-4 text-emerald-500" />
-                Calculadora Bankroll
-              </span>
-              <div className="flex items-center gap-3">
-                {calcDisplay && calcDisplay.isActive && (
-                  <Badge variant="outline" className={`text-xs px-2 py-0 ${calcDisplay.totalProfit > 0 ? 'border-green-500 text-green-400' : calcDisplay.totalProfit < 0 ? 'border-red-500 text-red-400' : 'border-zinc-500 text-zinc-400'}`}>
-                    {calcDisplay.totalProfit > 0 ? '+' : ''}{calcDisplay.totalProfit.toFixed(2)}
-                  </Badge>
-                )}
-                <Switch checked={calcEnabled} onCheckedChange={toggleCalculator} />
-              </div>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="px-4 pb-4 space-y-3">
-            {/* Config inputs */}
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="text-[10px] text-zinc-500 block mb-1">Bankroll Inicial</label>
-                <div className="relative">
-                  <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-500" />
-                  <Input
-                    type="number"
-                    value={calcBankroll}
-                    onChange={(e) => { setCalcBankroll(e.target.value); if (!calcEnabled) return; }}
-                    className="h-8 bg-zinc-800 border-zinc-700 text-white text-sm pl-7"
-                    disabled={calcEnabled}
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="text-[10px] text-zinc-500 block mb-1">Apuesta Base</label>
-                <div className="relative">
-                  <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-500" />
-                  <Input
-                    type="number"
-                    value={calcBetAmount}
-                    onChange={(e) => { setCalcBetAmount(e.target.value); calcBetAmountRef.current = e.target.value }}
-                    className="h-8 bg-zinc-800 border-zinc-700 text-white text-sm pl-7"
-                    disabled={calcEnabled}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Peak level selector */}
-            <div>
-              <label className="text-[10px] text-zinc-500 block mb-1">Jugar en Picos</label>
-              <div className="grid grid-cols-3 gap-1">
-                <button
-                  onClick={() => { setCalcPeakLevel('low'); calcPeakLevelRef.current = 'low'; if (calcEnabled) resetCalculator() }}
-                  className={`py-1.5 rounded-lg text-[11px] font-bold transition-all ${
-                    calcPeakLevel === 'low'
-                      ? 'bg-green-500/20 text-green-400 border border-green-500/50 shadow-sm shadow-green-500/10'
-                      : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50 hover:border-zinc-600'
-                  }`}
-                >
-                  🟢 Bajo (1-3)
-                </button>
-                <button
-                  onClick={() => { setCalcPeakLevel('medium'); calcPeakLevelRef.current = 'medium'; if (calcEnabled) resetCalculator() }}
-                  className={`py-1.5 rounded-lg text-[11px] font-bold transition-all ${
-                    calcPeakLevel === 'medium'
-                      ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/50 shadow-sm shadow-yellow-500/10'
-                      : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50 hover:border-zinc-600'
-                  }`}
-                >
-                  🟡 Medio (4-6)
-                </button>
-                <button
-                  onClick={() => { setCalcPeakLevel('high'); calcPeakLevelRef.current = 'high'; if (calcEnabled) resetCalculator() }}
-                  className={`py-1.5 rounded-lg text-[11px] font-bold transition-all ${
-                    calcPeakLevel === 'high'
-                      ? 'bg-red-500/20 text-red-400 border border-red-500/50 shadow-sm shadow-red-500/10'
-                      : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50 hover:border-zinc-600'
-                  }`}
-                >
-                  🔴 Alto (7+)
-                </button>
-              </div>
-            </div>
-
-            {calcEnabled && (
-              <>
-                {/* Stats bar */}
-                <div className="grid grid-cols-4 gap-2">
-                  <div className="bg-zinc-800/60 rounded-lg p-2 text-center">
-                    <div className={`text-lg font-bold ${calcDisplay ? (calcDisplay.totalProfit >= 0 ? 'text-green-400' : 'text-red-400') : 'text-white'}`}>
-                      {calcDisplay ? calcDisplay.runningBankroll.toFixed(1) : '0'}
-                    </div>
-                    <div className="text-[9px] text-zinc-500">Bankroll</div>
-                  </div>
-                  <div className="bg-zinc-800/60 rounded-lg p-2 text-center">
-                    <div className="text-lg font-bold text-green-400">{calcDisplay?.wins ?? 0}</div>
-                    <div className="text-[9px] text-zinc-500">Wins</div>
-                  </div>
-                  <div className="bg-zinc-800/60 rounded-lg p-2 text-center">
-                    <div className="text-lg font-bold text-red-400">{calcDisplay?.losses ?? 0}</div>
-                    <div className="text-[9px] text-zinc-500">Losses</div>
-                  </div>
-                  <div className="bg-zinc-800/60 rounded-lg p-2 text-center">
-                    <div className="text-lg font-bold text-amber-400">{calcDisplay?.cycles.length ?? 0}</div>
-                    <div className="text-[9px] text-zinc-500">Ciclos</div>
-                  </div>
-                </div>
-
-                {/* Cycle history */}
-                <div className="max-h-48 overflow-y-auto custom-scrollbar-y space-y-1.5">
-                  {calcDisplay && calcDisplay.cycles.map((cycle) => (
-                    <div key={cycle.cycle} className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs ${cycle.cycleProfit > 0 ? 'bg-green-500/10 border border-green-500/20' : cycle.cycleProfit < 0 ? 'bg-red-500/10 border border-red-500/20' : 'bg-zinc-800/50 border border-zinc-700/30'}`}>
-                      <div className="flex items-center gap-2">
-                        <span className="text-zinc-500 font-mono w-6">#{cycle.cycle}</span>
-                        <div className="flex gap-0.5">
-                          {cycle.bets.map((bet, bi) => (
-                            <span key={bi} className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${bet.result === 'win' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-                              {bet.result === 'win' ? `+$${bet.payout}` : `-$${bet.amount}`}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-zinc-600">Pico {cycle.entryPeak}</span>
-                        <span className={`font-bold ${cycle.cycleProfit > 0 ? 'text-green-400' : cycle.cycleProfit < 0 ? 'text-red-400' : 'text-zinc-400'}`}>
-                          {cycle.cycleProfit > 0 ? '+' : ''}{cycle.cycleProfit.toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                  {(!calcDisplay || calcDisplay.cycles.length === 0) && (
-                    <p className="text-center text-zinc-600 text-xs py-4">
-                      Activado — ingresa números para empezar a registrar
-                    </p>
-                  )}
-                </div>
-
-                {/* Reset button */}
-                <Button onClick={resetCalculator} variant="outline" size="sm" className="w-full border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500">
-                  <RotateCcw className="w-3 h-3 mr-1" />
-                  Reiniciar Calculadora
-                </Button>
-              </>
-            )}
-          </CardContent>
-        </Card>
 
         {/* Backtesting Independiente */}
         {isJoined && numbers.length >= 6 && (
