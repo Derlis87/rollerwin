@@ -219,6 +219,7 @@ export function DashboardLive() {
   const calcWaitNewCycleRef = useRef(false)
   const calcPeakLevelRef = useRef<PeakLevel>('low')
   const calcCycleActiveRef = useRef(false) // whether a cycle is actively being tracked
+  const calcCyclePredictionRef = useRef<BetPrediction | null>(null) // fixed prediction for the entire cycle
   const FIB = [1, 1, 2, 3, 5, 8, 13, 21]
   const MAX_CALC_BETS = 3
   const [calcDisplay, setCalcDisplay] = useState<{ cycles: typeof calcHistoryRef.current; runningBankroll: number; totalProfit: number; wins: number; losses: number; isActive: boolean } | null>(null)
@@ -247,6 +248,7 @@ export function DashboardLive() {
     calcBetTypeRef.current = selectedBetTypeRef.current
     calcWaitNewCycleRef.current = false
     calcCycleActiveRef.current = false
+    calcCyclePredictionRef.current = null
     setCalcDisplay({
       cycles: [],
       runningBankroll: bankroll,
@@ -276,6 +278,7 @@ export function DashboardLive() {
         calcBetTypeRef.current = selectedBetTypeRef.current
         calcWaitNewCycleRef.current = false
         calcCycleActiveRef.current = false
+        calcCyclePredictionRef.current = null
         setCalcDisplay({
           cycles: [],
           runningBankroll: bankroll,
@@ -922,10 +925,11 @@ export function DashboardLive() {
         if (calcIsActiveRef.current) {
           if (isCalcPeakInRange(currentPeakValue)) {
             // Peak was in selected range — this win is a valid bet
-            // Start cycle if not already active
+            // Start cycle if not already active — lock the current prediction
             if (!calcCycleActiveRef.current) {
               calcCycleActiveRef.current = true
               calcCurrentCycleEntryPeakRef.current = currentPeakValue
+              calcCyclePredictionRef.current = prediction // lock prediction for this cycle
             }
 
             const betAmount = parseFloat(calcBetAmountRef.current) || 1
@@ -952,6 +956,7 @@ export function DashboardLive() {
             updateCalcDisplay()
             resetCalcCycle()
             calcCycleActiveRef.current = false
+            calcCyclePredictionRef.current = null
           } else {
             // Peak out of range — close partial cycle if any, wait for next in-range peak
             if (calcCycleActiveRef.current) {
@@ -968,6 +973,7 @@ export function DashboardLive() {
             }
             resetCalcCycle()
             calcCycleActiveRef.current = false
+            calcCyclePredictionRef.current = null
           }
         }
 
@@ -975,7 +981,8 @@ export function DashboardLive() {
         setCurrentPeak(1)
         
         // Generate new prediction for next round - MINIMO 5 NUMEROS
-        if (newNumbers.length >= 5) {
+        // But if calculator has an active cycle, keep the SAME prediction (Fibonacci needs same bet)
+        if (newNumbers.length >= 5 && !calcCycleActiveRef.current) {
           const newPrediction = generatePrediction(newNumbers, selectedBetTypeRef.current)
           setCurrentPrediction(newPrediction)
         }
@@ -990,10 +997,11 @@ export function DashboardLive() {
         if (calcIsActiveRef.current) {
           if (isCalcPeakInRange(currentPeakValue)) {
             // Peak is in range — we placed a bet here, it lost
-            // Start cycle if not already active
+            // Start cycle if not already active — lock the current prediction
             if (!calcCycleActiveRef.current) {
               calcCycleActiveRef.current = true
               calcCurrentCycleEntryPeakRef.current = currentPeakValue
+              calcCyclePredictionRef.current = prediction // lock prediction for this cycle
             }
 
             const betAmount = parseFloat(calcBetAmountRef.current) || 1
@@ -1021,6 +1029,7 @@ export function DashboardLive() {
               updateCalcDisplay()
               resetCalcCycle()
               calcCycleActiveRef.current = false
+              calcCyclePredictionRef.current = null
             } else {
               // Still in cycle, update display
               const allWins = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'win').length, 0)
@@ -1056,12 +1065,14 @@ export function DashboardLive() {
               updateCalcDisplay()
               resetCalcCycle()
               calcCycleActiveRef.current = false
+              calcCyclePredictionRef.current = null
             }
           }
         }
         
         // Generate new prediction (might change based on new data) - MINIMO 5 NUMEROS
-        if (newNumbers.length >= 5) {
+        // But if calculator has an active cycle, keep the SAME prediction (Fibonacci needs same bet)
+        if (newNumbers.length >= 5 && !calcCycleActiveRef.current) {
           const newPrediction = generatePrediction(newNumbers, selectedBetTypeRef.current)
           setCurrentPrediction(newPrediction)
         }
@@ -1290,20 +1301,22 @@ export function DashboardLive() {
       let cycleWon = false
       let cycleProfit = 0
       
+      // Generate ONE prediction at the start of the cycle — keep it for all 3 bets
+      // This makes Fibonacci meaningful: betting on the SAME outcome with progression
+      const cyclePrediction = generatePrediction(nums.slice(0, cycle.startIdx), betType)
+      
       for (let bet = 0; bet < MAX_BETS_PER_CYCLE; bet++) {
         const numberIdx = cycle.startIdx + bet
         if (numberIdx >= nums.length) break
         
         const num = nums[numberIdx]
-        // Generate prediction based on data up to this point
-        const predForBet = generatePrediction(nums.slice(0, numberIdx), betType)
         
         // Fibonacci bet amount
         const fibMultiplier = FIB[bet] || FIB[FIB.length - 1]
         const betAmount = amount * fibMultiplier
         cycleBets.push(betAmount)
         
-        const matched = checkPredictionMatch(predForBet, num)
+        const matched = checkPredictionMatch(cyclePrediction, num)
         
         if (matched) {
           const payout = getPayout(betType) * betAmount
