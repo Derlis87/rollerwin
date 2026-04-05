@@ -51,6 +51,7 @@ import { CASINO_CONFIGS, openCasino, getTableUrl } from '@/lib/casino-urls'
 import { ColorParityChart } from './charts/ColorParityChart'
 import { PeakLevelCharts } from './charts/PeakLevelCharts'
 import { UltimateSignals } from './charts/UltimateSignals'
+import ProfessionalRouletteEngine from './charts/ProfessionalRouletteEngine'
 import { calculatePeakHistory, getCurrentPeak, parseNumberText } from '@/lib/peak-engine'
 
 const BET_TYPE_OPTIONS = [
@@ -1995,6 +1996,17 @@ export function DashboardLive() {
               currentPeak={currentPeak} 
               inputNumbers={numbers}
             />
+          </div>
+        )}
+
+        {/* Professional Roulette Engine - Statistical Inference */}
+        {isJoined && numbers.length >= 10 && (
+          <div className="mt-6">
+            <Card className="bg-zinc-900 border-zinc-800">
+              <CardContent className="p-5">
+                <ProfessionalRouletteEngine inputNumbers={numbers} />
+              </CardContent>
+            </Card>
           </div>
         )}
 
