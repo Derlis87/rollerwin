@@ -1555,7 +1555,7 @@ export function DashboardLive() {
       </header>
 
       <main className="container mx-auto px-4 py-4">
-        <div className="grid grid-cols-1 xl:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 xl:grid-cols-4 gap-4 items-start">
           <div className="xl:col-span-3 space-y-4">
             
             {/* Casino Setup Card */}
