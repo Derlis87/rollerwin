@@ -2002,11 +2002,7 @@ export function DashboardLive() {
         {/* Professional Roulette Engine - Statistical Inference */}
         {isJoined && numbers.length >= 10 && (
           <div className="mt-6">
-            <Card className="bg-zinc-900 border-zinc-800">
-              <CardContent className="p-5">
-                <ProfessionalRouletteEngine inputNumbers={numbers} />
-              </CardContent>
-            </Card>
+            <ProfessionalRouletteEngine inputNumbers={numbers} />
           </div>
         )}
 
