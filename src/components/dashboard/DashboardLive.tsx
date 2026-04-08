@@ -1237,7 +1237,7 @@ export function DashboardLive() {
     const FIB = [1, 1, 2, 3, 5, 8, 13, 21]
     const MAX_BETS = 3
     const getPayout = (bt: BetType) => bt === 'color' || bt === 'parity' ? 1 : 2
-    const isFlatBet = betType === 'color' || bt === 'parity'
+    const isFlatBet = betType === 'color' || betType === 'parity'
 
     const isPeakInRange = (h: number): boolean => {
       if (peakLevel === 'low') return h >= 1 && h <= 3
