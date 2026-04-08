@@ -1226,139 +1226,151 @@ export function DashboardLive() {
     setImportPreview(null)
   }, [importPreview, generatePrediction, calculateStats])
 
-  // Handle run backtest - Fibonacci peak-level backtesting
-  // Enter at specific peak level (low/medium/high), max 3 bets per cycle using Fibonacci progression
+  // Handle run backtest - simula EXACTAMENTE el sistema en vivo, número por número
   const handleRunBacktest = useCallback(() => {
     const nums = numbersRef.current
     if (nums.length < 6) return
-    
+
     const amount = parseFloat(btAmount) || 1
     const betType = btBetType
     const peakLevel = btPeakLevel
-    
-    // Fibonacci sequence for bet sizing: 1, 1, 2, 3, 5, 8...
     const FIB = [1, 1, 2, 3, 5, 8, 13, 21]
-    const MAX_BETS_PER_CYCLE = 3
+    const MAX_BETS = 3
     const getPayout = (bt: BetType) => bt === 'color' || bt === 'parity' ? 1 : 2
-    
-    // Peak level ranges
+    const isFlatBet = betType === 'color' || betType === 'parity'
+
     const isPeakInRange = (h: number): boolean => {
       if (peakLevel === 'low') return h >= 1 && h <= 3
       if (peakLevel === 'medium') return h >= 4 && h <= 6
       return h >= 7
     }
-    
-    // Step 1: Compute all peaks from the number sequence
-    const allPeaks: { startIdx: number; endIdx: number; height: number; prediction: BetPrediction | null; resultNumber: number }[] = []
-    let pred: BetPrediction | null = null
-    let height = 0
-    
-    for (let i = 2; i < nums.length; i++) {
-      pred = generatePrediction(nums.slice(0, i), betType)
-      height = 0
-      
-      for (let j = i + 1; j < nums.length; j++) {
-        height++
-        if (checkPredictionMatch(pred!, nums[j])) {
-          allPeaks.push({ startIdx: i, endIdx: j, height: Math.min(height, 15), prediction: pred, resultNumber: nums[j] })
-          i = j
-          break
+
+    // === PASO 1: Reconstruir la secuencia de peaks exactamente como el sistema en vivo ===
+    let currentPeak = 1
+    let prediction: BetPrediction | null = null
+    const events: { peak: number; matched: boolean; prediction: BetPrediction }[] = []
+
+    for (let i = 0; i < nums.length; i++) {
+      if (!prediction && i >= 4) {
+        prediction = generatePrediction(nums.slice(0, i), betType)
+      }
+      if (!prediction) continue
+
+      const matched = checkPredictionMatch(prediction, nums[i])
+      events.push({ peak: currentPeak, matched, prediction: { ...prediction } })
+
+      if (matched) {
+        currentPeak = 1
+        if (i + 1 < nums.length) {
+          prediction = generatePrediction(nums.slice(0, i + 1), betType)
         }
-        if (height >= 15 || j === nums.length - 1) {
-          allPeaks.push({ startIdx: i, endIdx: j, height: Math.min(height, 15), prediction: pred, resultNumber: nums[j] })
-          i = j
-          break
-        }
+      } else {
+        currentPeak++
       }
     }
-    
-    // Step 2: Find entry points where peak HEIGHT falls in the selected range
-    // We look at the PREVIOUS peak's height to decide entry for the NEXT cycle
-    const entryCycles: { peakIdx: number; entryPeakHeight: number; startIdx: number }[] = []
-    
-    for (let p = 0; p < allPeaks.length; p++) {
-      const peakHeight = allPeaks[p].height
-      if (isPeakInRange(peakHeight)) {
-        // The NEXT prediction cycle after this peak is our entry point
-        if (p + 1 < allPeaks.length) {
-          entryCycles.push({
-            peakIdx: p + 1,
-            entryPeakHeight: peakHeight,
-            startIdx: allPeaks[p].endIdx
-          })
-        }
-      }
-    }
-    
-    // Step 3: Simulate Fibonacci betting on each entry cycle
-    let wins = 0, losses = 0, netProfit = 0, maxDrawdown = 0, currentDrawdown = 0
-    let maxWinStreak = 0, maxLossStreak = 0, currentWinStreak = 0, currentLossStreak = 0
+
+    // === PASO 2: Simular la Calculadora sobre los eventos ===
+    let wins = 0, losses = 0, netProfit = 0
+    let maxDrawdown = 0, currentDrawdown = 0
+    let maxWinStreak = 0, maxLossStreak = 0
+    let currentWinStreak = 0, currentLossStreak = 0
     const profitCurve: number[] = [0]
     const fibonacciDetail: BacktestResults['fibonacciDetail'] = []
-    
-    for (let c = 0; c < entryCycles.length; c++) {
-      const cycle = entryCycles[c]
-      const cycleBets: number[] = []
-      let cycleWon = false
-      let cycleProfit = 0
-      
-      // Generate ONE prediction at the start of the cycle — keep it for all 3 bets
-      // This makes Fibonacci meaningful: betting on the SAME outcome with progression
-      const cyclePrediction = generatePrediction(nums.slice(0, cycle.startIdx), betType)
-      
-      for (let bet = 0; bet < MAX_BETS_PER_CYCLE; bet++) {
-        const numberIdx = cycle.startIdx + bet
-        if (numberIdx >= nums.length) break
-        
-        const num = nums[numberIdx]
-        
-        // Fibonacci bet amount
-        const fibMultiplier = FIB[bet] || FIB[FIB.length - 1]
-        const betAmount = amount * fibMultiplier
-        cycleBets.push(betAmount)
-        
-        const matched = checkPredictionMatch(cyclePrediction, num)
-        
-        if (matched) {
-          const payout = getPayout(betType) * betAmount
-          cycleProfit += payout
-          netProfit += payout
-          cycleWon = true
-          wins++
-          currentWinStreak++
-          currentLossStreak = 0
-          currentDrawdown = Math.max(0, currentDrawdown - payout)
-          if (currentWinStreak > maxWinStreak) maxWinStreak = currentWinStreak
-          break // Stop betting on this cycle after win
-        } else {
-          cycleProfit -= betAmount
-          netProfit -= betAmount
-          currentDrawdown += betAmount
-          losses++
-          currentLossStreak++
-          currentWinStreak = 0
-          if (currentDrawdown > maxDrawdown) maxDrawdown = currentDrawdown
-          if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak
+
+    let cycleActive = false
+    let cycleBetIndex = 0
+    let cycleBets: number[] = []
+    let cycleProfit = 0
+    let cycleEntryPeak = 0
+
+    const closeCycle = (result: 'win' | 'loss') => {
+      fibonacciDetail.push({
+        cycle: fibonacciDetail.length + 1,
+        bets: [...cycleBets],
+        result,
+        profit: cycleProfit,
+        entryPeak: cycleEntryPeak
+      })
+      cycleActive = false
+      cycleBets = []
+      cycleProfit = 0
+      cycleBetIndex = 0
+    }
+
+    const placeBet = (isWin: boolean) => {
+      const fibMult = isFlatBet ? 1 : (FIB[cycleBetIndex] || FIB[FIB.length - 1])
+      const betAmt = amount * fibMult
+      cycleBets.push(betAmt)
+
+      if (isWin) {
+        const payout = getPayout(betType) * betAmt
+        cycleProfit += payout
+        netProfit += payout
+        wins++
+        currentWinStreak++
+        currentLossStreak = 0
+        currentDrawdown = Math.max(0, currentDrawdown - payout)
+        if (currentWinStreak > maxWinStreak) maxWinStreak = currentWinStreak
+        closeCycle('win')
+      } else {
+        cycleProfit -= betAmt
+        netProfit -= betAmt
+        losses++
+        currentLossStreak++
+        currentWinStreak = 0
+        currentDrawdown += betAmt
+        if (currentDrawdown > maxDrawdown) maxDrawdown = currentDrawdown
+        if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak
+        cycleBetIndex++
+        if (cycleBetIndex >= MAX_BETS) {
+          closeCycle('loss')
         }
       }
-      
+
       profitCurve.push(netProfit)
-      fibonacciDetail.push({
-        cycle: c + 1,
-        bets: cycleBets,
-        result: cycleWon ? 'win' : 'loss',
-        profit: cycleProfit,
-        entryPeak: cycle.entryPeakHeight
-      })
     }
-    
+
+    for (const event of events) {
+      const { peak, matched } = event
+
+      if (matched) {
+        // WIN
+        if (cycleActive && isPeakInRange(peak)) {
+          placeBet(true)
+        } else if (cycleActive && !isPeakInRange(peak)) {
+          // Win pero peak fuera de rango — cerrar ciclo como pérdida
+          closeCycle('loss')
+        }
+        // Win sin ciclo activo o fuera de rango sin ciclo = no afecta calculator
+      } else {
+        // LOSS
+        if (cycleActive && isPeakInRange(peak)) {
+          placeBet(false)
+        } else if (cycleActive && !isPeakInRange(peak)) {
+          // Peak salió del rango — cerrar ciclo
+          closeCycle('loss')
+        } else if (!cycleActive && isPeakInRange(peak)) {
+          // Iniciar nuevo ciclo con esta pérdida
+          cycleActive = true
+          cycleBetIndex = 0
+          cycleBets = []
+          cycleProfit = 0
+          cycleEntryPeak = peak
+          placeBet(false)
+        }
+      }
+    }
+
+    // Cerrar ciclo abierto si quedó pendiente
+    if (cycleActive) closeCycle('loss')
+
     const totalBets = wins + losses
     const winRate = totalBets > 0 ? ((wins / totalBets) * 100) : 0
     const totalInvested = fibonacciDetail.reduce((s, c) => s + c.bets.reduce((a, b) => a + b, 0), 0)
     const roi = totalInvested > 0 ? ((netProfit / totalInvested) * 100) : 0
     const peakCycles = fibonacciDetail.length
     const avgBetsPerCycle = peakCycles > 0 ? (totalBets / peakCycles) : 0
-    
+
     setBacktestResults({
       wins, losses, netProfit, roi, maxDrawdown, totalBets, profitCurve,
       winRate, maxWinStreak, maxLossStreak, totalInvested,
