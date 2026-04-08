@@ -1226,7 +1226,7 @@ export function DashboardLive() {
     setImportPreview(null)
   }, [importPreview, generatePrediction, calculateStats])
 
-  // Handle run backtest - simula EXACTAMENTE el sistema en vivo, número por número
+  // Handle run backtest - simulación número por número, idéntica al handleNumberInput en vivo
   const handleRunBacktest = useCallback(() => {
     const nums = numbersRef.current
     if (nums.length < 6) return
@@ -1237,7 +1237,7 @@ export function DashboardLive() {
     const FIB = [1, 1, 2, 3, 5, 8, 13, 21]
     const MAX_BETS = 3
     const getPayout = (bt: BetType) => bt === 'color' || bt === 'parity' ? 1 : 2
-    const isFlatBet = betType === 'color' || betType === 'parity'
+    const isFlatBet = betType === 'color' || bt === 'parity'
 
     const isPeakInRange = (h: number): boolean => {
       if (peakLevel === 'low') return h >= 1 && h <= 3
@@ -1245,43 +1245,24 @@ export function DashboardLive() {
       return h >= 7
     }
 
-    // === PASO 1: Reconstruir la secuencia de peaks exactamente como el sistema en vivo ===
+    // Estado del sistema de peaks (igual que en vivo)
     let currentPeak = 1
     let prediction: BetPrediction | null = null
-    const events: { peak: number; matched: boolean; prediction: BetPrediction }[] = []
 
-    for (let i = 0; i < nums.length; i++) {
-      if (!prediction && i >= 4) {
-        prediction = generatePrediction(nums.slice(0, i), betType)
-      }
-      if (!prediction) continue
+    // Estado calculadora
+    let cycleActive = false
+    let cycleBetIndex = 0
+    let cycleBets: number[] = []
+    let cycleProfit = 0
+    let cycleEntryPeak = 0
 
-      const matched = checkPredictionMatch(prediction, nums[i])
-      events.push({ peak: currentPeak, matched, prediction: { ...prediction } })
-
-      if (matched) {
-        currentPeak = 1
-        if (i + 1 < nums.length) {
-          prediction = generatePrediction(nums.slice(0, i + 1), betType)
-        }
-      } else {
-        currentPeak++
-      }
-    }
-
-    // === PASO 2: Simular la Calculadora sobre los eventos ===
+    // Contadores
     let wins = 0, losses = 0, netProfit = 0
     let maxDrawdown = 0, currentDrawdown = 0
     let maxWinStreak = 0, maxLossStreak = 0
     let currentWinStreak = 0, currentLossStreak = 0
     const profitCurve: number[] = [0]
     const fibonacciDetail: BacktestResults['fibonacciDetail'] = []
-
-    let cycleActive = false
-    let cycleBetIndex = 0
-    let cycleBets: number[] = []
-    let cycleProfit = 0
-    let cycleEntryPeak = 0
 
     const closeCycle = (result: 'win' | 'loss') => {
       fibonacciDetail.push({
@@ -1292,76 +1273,103 @@ export function DashboardLive() {
         entryPeak: cycleEntryPeak
       })
       cycleActive = false
+      cycleBetIndex = 0
       cycleBets = []
       cycleProfit = 0
-      cycleBetIndex = 0
     }
 
-    const placeBet = (isWin: boolean) => {
-      const fibMult = isFlatBet ? 1 : (FIB[cycleBetIndex] || FIB[FIB.length - 1])
-      const betAmt = amount * fibMult
-      cycleBets.push(betAmt)
+    // Simulación: un solo paso por cada número, exactamente como handleNumberInput
+    for (let i = 0; i < nums.length; i++) {
+      const num = nums[i]
+      const numsSoFar = nums.slice(0, i + 1)
 
-      if (isWin) {
-        const payout = getPayout(betType) * betAmt
-        cycleProfit += payout
-        netProfit += payout
-        wins++
-        currentWinStreak++
-        currentLossStreak = 0
-        currentDrawdown = Math.max(0, currentDrawdown - payout)
-        if (currentWinStreak > maxWinStreak) maxWinStreak = currentWinStreak
-        closeCycle('win')
-      } else {
-        cycleProfit -= betAmt
-        netProfit -= betAmt
-        losses++
-        currentLossStreak++
-        currentWinStreak = 0
-        currentDrawdown += betAmt
-        if (currentDrawdown > maxDrawdown) maxDrawdown = currentDrawdown
-        if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak
-        cycleBetIndex++
-        if (cycleBetIndex >= MAX_BETS) {
-          closeCycle('loss')
-        }
+      // Generar predicción si no existe (igual que vivo: newNumbers incluye el num actual)
+      if (!prediction && numsSoFar.length >= 5) {
+        prediction = generatePrediction(numsSoFar, betType)
       }
+      if (!prediction) continue
 
-      profitCurve.push(netProfit)
-    }
-
-    for (const event of events) {
-      const { peak, matched } = event
+      const matched = checkPredictionMatch(prediction, num)
+      const peakAtCheck = currentPeak
 
       if (matched) {
-        // WIN
-        if (cycleActive && isPeakInRange(peak)) {
-          placeBet(true)
-        } else if (cycleActive && !isPeakInRange(peak)) {
-          // Win pero peak fuera de rango — cerrar ciclo como pérdida
+        // ====== WIN ======
+        if (cycleActive && isPeakInRange(peakAtCheck)) {
+          const fibMult = isFlatBet ? 1 : (FIB[cycleBetIndex] || FIB[FIB.length - 1])
+          const betAmt = amount * fibMult
+          const payout = getPayout(betType) * betAmt
+          cycleBets.push(betAmt)
+          cycleProfit += payout
+          netProfit += payout
+          wins++
+          currentWinStreak++
+          currentLossStreak = 0
+          currentDrawdown = Math.max(0, currentDrawdown - payout)
+          if (currentWinStreak > maxWinStreak) maxWinStreak = currentWinStreak
+          closeCycle('win')
+          profitCurve.push(netProfit)
+        } else if (cycleActive && !isPeakInRange(peakAtCheck)) {
           closeCycle('loss')
         }
-        // Win sin ciclo activo o fuera de rango sin ciclo = no afecta calculator
+
+        currentPeak = 1
+
+        // Regenerar predicción después de win (siempre, porque el ciclo ya cerró)
+        prediction = generatePrediction(numsSoFar, betType)
       } else {
-        // LOSS
-        if (cycleActive && isPeakInRange(peak)) {
-          placeBet(false)
-        } else if (cycleActive && !isPeakInRange(peak)) {
-          // Peak salió del rango — cerrar ciclo
+        // ====== LOSS ======
+        if (cycleActive && isPeakInRange(peakAtCheck)) {
+          const fibMult = isFlatBet ? 1 : (FIB[cycleBetIndex] || FIB[FIB.length - 1])
+          const betAmt = amount * fibMult
+          cycleBets.push(betAmt)
+          cycleProfit -= betAmt
+          netProfit -= betAmt
+          losses++
+          currentLossStreak++
+          currentWinStreak = 0
+          currentDrawdown += betAmt
+          if (currentDrawdown > maxDrawdown) maxDrawdown = currentDrawdown
+          if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak
+          cycleBetIndex++
+          profitCurve.push(netProfit)
+
+          if (cycleBetIndex >= MAX_BETS) {
+            closeCycle('loss')
+          }
+        } else if (cycleActive && !isPeakInRange(peakAtCheck)) {
           closeCycle('loss')
-        } else if (!cycleActive && isPeakInRange(peak)) {
-          // Iniciar nuevo ciclo con esta pérdida
+        } else if (!cycleActive && isPeakInRange(peakAtCheck)) {
+          // Iniciar ciclo con esta loss
           cycleActive = true
           cycleBetIndex = 0
           cycleBets = []
           cycleProfit = 0
-          cycleEntryPeak = peak
-          placeBet(false)
+          cycleEntryPeak = peakAtCheck
+
+          const fibMult = isFlatBet ? 1 : (FIB[0])
+          const betAmt = amount * fibMult
+          cycleBets.push(betAmt)
+          cycleProfit -= betAmt
+          netProfit -= betAmt
+          losses++
+          currentLossStreak++
+          currentWinStreak = 0
+          currentDrawdown += betAmt
+          if (currentDrawdown > maxDrawdown) maxDrawdown = currentDrawdown
+          if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak
+          cycleBetIndex++
+          profitCurve.push(netProfit)
+
+          if (cycleBetIndex >= MAX_BETS) {
+            closeCycle('loss')
+          }
         }
+
+        currentPeak++
+        // NO regenerar predicción después de loss (igual que en vivo)
       }
     }
 
-    // Cerrar ciclo abierto si quedó pendiente
     if (cycleActive) closeCycle('loss')
 
     const totalBets = wins + losses
