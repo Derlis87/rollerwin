@@ -1366,7 +1366,10 @@ export function DashboardLive() {
         }
 
         currentPeak++
-        // NO regenerar predicción después de loss (igual que en vivo)
+        // Regenerar predicción SOLO si no hay ciclo activo (igual que handleNumberInput en vivo)
+        if (!cycleActive && numsSoFar.length >= 5) {
+          prediction = generatePrediction(numsSoFar, betType)
+        }
       }
     }
 
