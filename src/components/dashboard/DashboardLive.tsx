@@ -1230,7 +1230,7 @@ export function DashboardLive() {
     setImportPreview(null)
   }, [importPreview, generatePrediction, calculateStats])
 
-  // Handle run backtest - simulación número por número, idéntica al handleNumberInput en vivo
+  // Handle run backtest - con soporte para apuesta doble en docenas/columnas
   const handleRunBacktest = useCallback(() => {
     const nums = numbersRef.current
     if (nums.length < 6) return
@@ -1238,10 +1238,14 @@ export function DashboardLive() {
     const amount = parseFloat(btAmount) || 1
     const betType = btBetType
     const peakLevel = btPeakLevel
+    const dozenMode = btDozenMode
     const FIB = [1, 1, 2, 3, 5, 8, 13, 21]
     const MAX_BETS = 3
-    const getPayout = (bt: BetType) => bt === 'color' || bt === 'parity' ? 1 : 2
     const isFlatBet = betType === 'color' || betType === 'parity'
+    // Docenas/columnas pagan 2:1, colores/paridad pagan 1:1
+    const getPayout = (bt: BetType) => bt === 'color' || bt === 'parity' ? 1 : 2
+    const isTriple = betType === 'dozen' || betType === 'column'
+    const useDouble = isTriple && dozenMode === 'double'
 
     const isPeakInRange = (h: number): boolean => {
       if (peakLevel === 'low') return h >= 1 && h <= 3
@@ -1249,9 +1253,27 @@ export function DashboardLive() {
       return h >= 7
     }
 
-    // Estado del sistema de peaks (igual que en vivo)
+    // Check match for dozen/column values
+    const checkMatch = (value: string, num: number): boolean => {
+      if (num === 0) return false
+      if (betType === 'dozen') {
+        if (value === '1-12') return num <= 12
+        if (value === '13-24') return num > 12 && num <= 24
+        if (value === '25-36') return num > 24
+      } else if (betType === 'column') {
+        const col = num % 3 === 0 ? 3 : num % 3
+        return value === col.toString()
+      } else if (betType === 'color') {
+        return getNumberColor(num) === value
+      } else if (betType === 'parity') {
+        return (num % 2 === 0 ? 'even' : 'odd') === value
+      }
+      return false
+    }
+
+    // Estado del sistema
     let currentPeak = 1
-    let prediction: BetPrediction | null = null
+    let predValues: string[] = [] // 1 valor (single) o 2 valores (double)
 
     // Estado calculadora
     let cycleActive = false
@@ -1259,6 +1281,7 @@ export function DashboardLive() {
     let cycleBets: number[] = []
     let cycleProfit = 0
     let cycleEntryPeak = 0
+    let cyclePredicted: string[] = []
 
     // Contadores
     let wins = 0, losses = 0, netProfit = 0
@@ -1274,41 +1297,56 @@ export function DashboardLive() {
         bets: [...cycleBets],
         result,
         profit: cycleProfit,
-        entryPeak: cycleEntryPeak
+        entryPeak: cycleEntryPeak,
+        predicted: [...cyclePredicted]
       })
       cycleActive = false
       cycleBetIndex = 0
       cycleBets = []
       cycleProfit = 0
+      cyclePredicted = []
     }
 
-    // Simulación: un solo paso por cada número, exactamente como handleNumberInput
+    const getSmartPred = (n: number[]) => {
+      const smart = generateSmartPrediction(n, betType)
+      if (useDouble && smart.options.length >= 2) {
+        // Top 2 opciones por confianza
+        const sorted = [...smart.options].sort((a, b) => b.confidence - a.confidence)
+        return [sorted[0].value, sorted[1].value]
+      }
+      return [smart.bestValue]
+    }
+
+    // Simulación número por número
     for (let i = 0; i < nums.length; i++) {
       const num = nums[i]
       const numsSoFar = nums.slice(0, i + 1)
 
-      // Generar predicción si no existe (igual que vivo: newNumbers incluye el num actual)
-      if (!prediction && numsSoFar.length >= 5) {
-        prediction = generatePrediction(numsSoFar, betType)
+      // Generar predicción si no existe
+      if (predValues.length === 0 && numsSoFar.length >= 5) {
+        predValues = getSmartPred(numsSoFar)
       }
-      if (!prediction) continue
+      if (predValues.length === 0) continue
 
-      const matched = checkPredictionMatch(prediction, num)
+      // Check si AL MENOS UNA predicción coincide (para doble apuesta)
+      const anyMatch = predValues.some(v => checkMatch(v, num))
       const peakAtCheck = currentPeak
 
-      if (matched) {
+      if (anyMatch) {
         // ====== WIN ======
         if (cycleActive && isPeakInRange(peakAtCheck)) {
           const fibMult = isFlatBet ? 1 : (FIB[cycleBetIndex] || FIB[FIB.length - 1])
-          const betAmt = amount * fibMult
-          const payout = getPayout(betType) * betAmt
+          // En modo doble, se apuesta a cada opción por separado (misma cantidad)
+          const numBets = predValues.length
+          const betAmt = amount * fibMult * numBets
+          const payout = getPayout(betType) * amount * fibMult - betAmt // net payout
           cycleBets.push(betAmt)
           cycleProfit += payout
           netProfit += payout
           wins++
           currentWinStreak++
           currentLossStreak = 0
-          currentDrawdown = Math.max(0, currentDrawdown - payout)
+          currentDrawdown = Math.max(0, currentDrawdown - Math.abs(payout))
           if (currentWinStreak > maxWinStreak) maxWinStreak = currentWinStreak
           closeCycle('win')
           profitCurve.push(netProfit)
@@ -1318,13 +1356,14 @@ export function DashboardLive() {
 
         currentPeak = 1
 
-        // Regenerar predicción después de win (siempre, porque el ciclo ya cerró)
-        prediction = generatePrediction(numsSoFar, betType)
+        // Regenerar predicción después de win
+        predValues = getSmartPred(numsSoFar)
       } else {
         // ====== LOSS ======
         if (cycleActive && isPeakInRange(peakAtCheck)) {
           const fibMult = isFlatBet ? 1 : (FIB[cycleBetIndex] || FIB[FIB.length - 1])
-          const betAmt = amount * fibMult
+          const numBets = predValues.length
+          const betAmt = amount * fibMult * numBets
           cycleBets.push(betAmt)
           cycleProfit -= betAmt
           netProfit -= betAmt
@@ -1349,9 +1388,11 @@ export function DashboardLive() {
           cycleBets = []
           cycleProfit = 0
           cycleEntryPeak = peakAtCheck
+          cyclePredicted = [...predValues]
 
-          const fibMult = isFlatBet ? 1 : (FIB[0])
-          const betAmt = amount * fibMult
+          const fibMult = isFlatBet ? 1 : FIB[0]
+          const numBets = predValues.length
+          const betAmt = amount * fibMult * numBets
           cycleBets.push(betAmt)
           cycleProfit -= betAmt
           netProfit -= betAmt
@@ -1370,9 +1411,9 @@ export function DashboardLive() {
         }
 
         currentPeak++
-        // Regenerar predicción SOLO si no hay ciclo activo (igual que handleNumberInput en vivo)
+        // Regenerar predicción SOLO si no hay ciclo activo
         if (!cycleActive && numsSoFar.length >= 5) {
-          prediction = generatePrediction(numsSoFar, betType)
+          predValues = getSmartPred(numsSoFar)
         }
       }
     }
@@ -1389,9 +1430,9 @@ export function DashboardLive() {
     setBacktestResults({
       wins, losses, netProfit, roi, maxDrawdown, totalBets, profitCurve,
       winRate, maxWinStreak, maxLossStreak, totalInvested,
-      betType, amount, peakLevel, peakCycles, avgBetsPerCycle, fibonacciDetail
+      betType, amount, peakLevel, peakCycles, avgBetsPerCycle, fibonacciDetail, btDozenMode: dozenMode
     })
-  }, [generatePrediction, checkPredictionMatch, btBetType, btAmount, btPeakLevel])
+  }, [generateSmartPrediction, generatePrediction, checkPredictionMatch, btBetType, btAmount, btPeakLevel, btDozenMode])
 
   // Get number button style
   const getNumberButtonStyle = (num: number) => {
@@ -2135,7 +2176,7 @@ export function DashboardLive() {
               </CardHeader>
               <CardContent className="space-y-4">
                 {/* Config Row */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                <div className={`grid gap-3 ${(btBetType === 'dozen' || btBetType === 'column') ? 'md:grid-cols-5' : 'md:grid-cols-4'}`}>
                   <div className="space-y-2">
                     <Label className="text-zinc-400 text-sm">Tipo de Apuesta</Label>
                     <Select value={btBetType} onValueChange={(v) => { setBtBetType(v as BetType); setBacktestResults(null) }}>
@@ -2173,6 +2214,18 @@ export function DashboardLive() {
                       </SelectContent>
                     </Select>
                   </div>
+                  {(btBetType === 'dozen' || btBetType === 'column') && (
+                    <div className="space-y-2">
+                      <Label className="text-zinc-400 text-sm">Modo Apuesta</Label>
+                      <Select value={btDozenMode} onValueChange={(v) => { setBtDozenMode(v as BtDozenMode); setBacktestResults(null) }}>
+                        <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="single">🎯 1 Docena</SelectItem>
+                          <SelectItem value="double">🎯🎯 2 Docenas (Top 2)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                   <div className="space-y-2">
                     <Label className="text-zinc-400 text-sm">Monto Base ($)</Label>
                     <div className="flex items-center gap-2">
@@ -2206,6 +2259,9 @@ export function DashboardLive() {
                       {btPeakLevel === 'low' ? 'Pico Bajo (1-3)' : btPeakLevel === 'medium' ? 'Pico Medio (4-6)' : 'Pico Alto (7+)'}
                     </span> · 
                     Fibonacci 3 jugadas
+                    {(btBetType === 'dozen' || btBetType === 'column') && (
+                      <> · <span className={btDozenMode === 'double' ? 'text-yellow-400 font-bold' : 'text-white'}>{btDozenMode === 'double' ? '🎯🎯 2 Docenas' : '🎯 1 Docena'}</span></>
+                    )}
                   </span>
                 </div>
 
@@ -2316,6 +2372,15 @@ export function DashboardLive() {
                                 }`}>
                                   Pico {detail.entryPeak}
                                 </span>
+                                <div className="flex gap-1">
+                                  {detail.predicted.length > 0 && detail.predicted.map((p, pi) => (
+                                    <span key={pi} className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                      pi === 0 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-yellow-500/10 text-yellow-300'
+                                    }`}>
+                                      {pi === 0 ? '⭐' : '🎯'} {p}
+                                    </span>
+                                  ))}
+                                </div>
                                 <div className="flex gap-1">
                                   {detail.bets.map((bet, bi) => (
                                     <span key={bi} className="bg-zinc-700 px-1.5 py-0.5 rounded text-[10px] text-zinc-300 font-mono">
