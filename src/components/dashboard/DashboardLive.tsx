@@ -600,17 +600,27 @@ export function DashboardLive() {
       return counts.reduce((sum, c) => sum + Math.pow(c - expected, 2) / Math.max(1, expected), 0)
     }
 
-    // --- HELPER: Normalize scores to confidence percentages ---
-    const toConfidence = (scores: Record<string, number>, cats: string[], basePct: number) => {
-      const total = cats.reduce((s, c) => s + Math.max(0, scores[c]), 0) || 1
+    // --- HELPER: Normalize scores to realistic confidence percentages ---
+    const toConfidence = (scores: Record<string, number>, cats: string[], expectedPct: number) => {
+      // Shift all scores to be non-negative
+      const minScore = Math.min(...Object.values(scores))
+      const shifted: Record<string, number> = {}
+      cats.forEach(c => { shifted[c] = Math.max(0.01, scores[c] - minScore + 0.01) })
+      const totalShifted = cats.reduce((s, c) => s + shifted[c], 0) || 1
+
       const confs: Record<string, number> = {}
       cats.forEach(c => {
-        const raw = basePct + (scores[c] / total) * (100 - basePct * cats.length)
-        confs[c] = Math.max(5, Math.min(95, raw))
+        const weight = shifted[c] / totalShifted // 0..1
+        // Spread: best gets expectedPct + spread, worst gets expectedPct - spread
+        // For binary: expected=48.6, spread max ~25 → best ~65, worst ~35
+        // For triple: expected=32.4, spread max ~18 → best ~50, worst ~18
+        const maxSpread = cats.length === 2 ? 22 : 16
+        const conf = expectedPct + (weight * 2 - 1) * maxSpread
+        confs[c] = Math.max(8, Math.min(88, conf))
       })
-      // Normalize to sum ~100
+      // Normalize to sum exactly 100
       const sum = Object.values(confs).reduce((s, v) => s + v, 0) || 1
-      cats.forEach(c => { confs[c] = (confs[c] / sum) * 100 })
+      cats.forEach(c => { confs[c] = Math.round((confs[c] / sum) * 100) })
       return confs
     }
 
@@ -634,8 +644,8 @@ export function DashboardLive() {
         scores[c] = freq[c] * 1.0 + markov[c] * 2.0 + streak[c] * 1.5
       })
 
-      const confs = toConfidence(scores, cats, 30)
-      const sorted = cats.sort((a, b) => confs[b] - confs[a])
+      const confs = toConfidence(scores, cats, 48.6)
+      const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
       return {
         type: 'color',
         options: sorted.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: Math.round(confs[c]) })),
@@ -664,8 +674,8 @@ export function DashboardLive() {
         scores[c] = freq[c] * 1.0 + markov[c] * 2.0 + streak[c] * 1.5
       })
 
-      const confs = toConfidence(scores, cats, 30)
-      const sorted = cats.sort((a, b) => confs[b] - confs[a])
+      const confs = toConfidence(scores, cats, 48.6)
+      const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
       return {
         type: 'parity',
         options: sorted.map(c => ({ value: c, label: c === 'odd' ? 'Impar' : 'Par', confidence: Math.round(confs[c]) })),
@@ -882,17 +892,12 @@ export function DashboardLive() {
     let prediction = currentPredictionRef.current
     
     if (!prediction && newNumbers.length >= 5) {
-      // Generate first prediction
-      prediction = generatePrediction(newNumbers, selectedBetTypeRef.current)
-      setCurrentPrediction(prediction)
-      
-      // Generate smart prediction for confidence display
+      // Generate smart prediction — single source of truth
       const smart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
       setSmartPrediction(smart)
-      
-      // Calculate confidence from smart prediction
-      const conf = smart.bestConfidence
-      setConfidence(Math.min(85, conf))
+      prediction = { type: smart.type, value: smart.bestValue }
+      setCurrentPrediction(prediction)
+      setConfidence(Math.min(85, smart.bestConfidence))
     }
     
     // Check if we have a prediction to verify
@@ -975,13 +980,11 @@ export function DashboardLive() {
         // Reset peak to 1
         setCurrentPeak(1)
         
-        // Generate new prediction for next round - MINIMO 5 NUMEROS
-        // But if calculator has an active cycle, keep the SAME prediction (Fibonacci needs same bet)
+        // Generate new prediction for next round - single source of truth
         if (newNumbers.length >= 5 && !calcCycleActiveRef.current) {
-          const newPrediction = generatePrediction(newNumbers, selectedBetTypeRef.current)
-          setCurrentPrediction(newPrediction)
           const newSmart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
           setSmartPrediction(newSmart)
+          setCurrentPrediction({ type: newSmart.type, value: newSmart.bestValue })
           setConfidence(Math.min(85, newSmart.bestConfidence))
         }
       } else {
@@ -1068,13 +1071,11 @@ export function DashboardLive() {
           }
         }
         
-        // Generate new prediction (might change based on new data) - MINIMO 5 NUMEROS
-        // But if calculator has an active cycle, keep the SAME prediction (Fibonacci needs same bet)
+        // Generate new prediction - single source of truth
         if (newNumbers.length >= 5 && !calcCycleActiveRef.current) {
-          const newPrediction = generatePrediction(newNumbers, selectedBetTypeRef.current)
-          setCurrentPrediction(newPrediction)
           const newSmart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
           setSmartPrediction(newSmart)
+          setCurrentPrediction({ type: newSmart.type, value: newSmart.bestValue })
           setConfidence(Math.min(85, newSmart.bestConfidence))
         }
       }
@@ -1199,23 +1200,12 @@ export function DashboardLive() {
     }
     
     if (newNumbers.length >= 5) {
-      const pred = generatePrediction(newNumbers, selectedBetTypeRef.current)
+      const smart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
+      setSmartPrediction(smart)
+      const pred = { type: smart.type, value: smart.bestValue }
       setCurrentPrediction(pred)
       currentPredictionRef.current = pred
-      const stats = calculateStats(newNumbers)
-      const total = newNumbers.length
-      let conf = 50
-      if (pred.type === 'color') {
-        const redPct = (stats.red / total) * 100
-        const blackPct = (stats.black / total) * 100
-        conf = 50 + Math.abs(redPct - blackPct)
-      } else if (pred.type === 'parity') {
-        const nonZeroTotal = newNumbers.filter(n => n !== 0).length || 1
-        const oddPct = (stats.odd / nonZeroTotal) * 100
-        const evenPct = (stats.even / nonZeroTotal) * 100
-        conf = 50 + Math.abs(oddPct - evenPct)
-      }
-      setConfidence(Math.min(85, conf))
+      setConfidence(Math.min(85, smart.bestConfidence))
     } else {
       setCurrentPrediction(null)
       currentPredictionRef.current = null
@@ -1902,19 +1892,19 @@ export function DashboardLive() {
                         <div className="grid gap-1.5">
                           {smartPrediction.options.map((opt, oi) => (
                             <div key={oi} className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm ${
-                              oi === 0 ? 'bg-yellow-500/10 border border-yellow-500/30' : 'bg-zinc-800/60 border border-zinc-700/30'
+                              oi < 2 ? 'bg-yellow-500/10 border border-yellow-500/30' : 'bg-zinc-800/60 border border-zinc-700/30'
                             }`}>
-                              <span className={`font-bold ${oi === 0 ? 'text-yellow-400' : 'text-zinc-400'}`}>
-                                {oi === 0 ? '⭐' : '  '} {opt.label}
+                              <span className={`font-bold ${oi < 2 ? 'text-yellow-400' : 'text-zinc-400'}`}>
+                                {oi === 0 ? '⭐' : oi === 1 ? '🎯' : '   '} {opt.label}
                               </span>
                               <div className="flex items-center gap-3">
                                 <div className="w-24 h-2 bg-zinc-700 rounded-full overflow-hidden">
                                   <div 
-                                    className={`h-full rounded-full transition-all duration-300 ${oi === 0 ? 'bg-yellow-400' : 'bg-zinc-500'}`}
+                                    className={`h-full rounded-full transition-all duration-300 ${oi < 2 ? 'bg-yellow-400' : 'bg-zinc-500'}`}
                                     style={{ width: `${opt.confidence}%` }}
                                   />
                                 </div>
-                                <span className={`font-mono font-bold w-10 text-right ${oi === 0 ? 'text-yellow-400' : 'text-zinc-500'}`}>
+                                <span className={`font-mono font-bold w-10 text-right ${oi < 2 ? 'text-yellow-400' : 'text-zinc-500'}`}>
                                   {opt.confidence}%
                                 </span>
                               </div>
