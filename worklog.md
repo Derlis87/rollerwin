@@ -571,3 +571,30 @@ Stage Summary:
 - Backtesting: handleRunBacktest reescrito con soporte double dozen
 - UI: dropdown Modo Apuesta visible solo para docenas/columnas
 - Build: ✅ Compiled successfully
+---
+Task ID: 1
+Agent: Main Agent
+Task: Implement double dozen mode for live peak tracking, calculator, and backtesting
+
+Work Log:
+- Fixed side panel prediction display to highlight top 2 options with ⭐ and 🎯 (was only highlighting top 1)
+- Added calcDozenModeRef and smartPredictionRef refs for live double dozen mode
+- Added useEffect to keep smartPredictionRef in sync with smartPrediction state
+- Added "Modo Apuesta" UI selector (🎯 1 Opción / 🎯🎯 2 Opciones) in calculator section for dozens/columns
+- Updated handleNumberInput match check to verify against top 2 predictions in double dozen mode
+- Updated calculator WIN bet calculation: supports double mode with correct payout (winProfit - losingCost)
+- Updated calculator LOSS bet calculation: totalBet = singleBet * 2 in double mode
+- Changed prediction regeneration to ALWAYS regenerate at each new peak (removed !calcCycleActiveRef condition)
+  - This means within a Fibonacci cycle, the prediction recalculates at each new peak level with updated data
+- Fixed backtesting WIN payout formula: was giving 0 for double dozen, now correctly calculates winProfit - losingCost
+  - Single dozen: payout = 2 * singleBet (correct 2:1 profit)
+  - Double dozen: payout = 2 * singleBet - singleBet = singleBet (net after one wins, one loses)
+- Fixed backtesting LOSS bet amounts to use singleBetAmt * numBets pattern
+- Changed backtesting to regenerate prediction at each new peak within cycle (removed !cycleActive condition)
+- Added cyclePredicted tracking at each bet within cycle (using Set to deduplicate)
+
+Stage Summary:
+- Double dozen mode now fully works across: live prediction display, live peak tracking, calculator (bankroll tracker), and backtesting
+- At each peak within a Fibonacci cycle, the prediction is recalculated with latest data
+- Payout formulas are mathematically correct for both single and double betting
+- All changes compile without introducing new TypeScript errors

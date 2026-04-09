@@ -234,6 +234,8 @@ export function DashboardLive() {
   const calcPeakLevelRef = useRef<PeakLevel>('low')
   const calcCycleActiveRef = useRef(false) // whether a cycle is actively being tracked
   const calcCyclePredictionRef = useRef<BetPrediction | null>(null) // fixed prediction for the entire cycle
+  const calcDozenModeRef = useRef<BtDozenMode>('single')
+  const smartPredictionRef = useRef<SmartPrediction | null>(null)
   const FIB = [1, 1, 2, 3, 5, 8, 13, 21]
   const MAX_CALC_BETS = 3
   const [calcDisplay, setCalcDisplay] = useState<{ cycles: typeof calcHistoryRef.current; runningBankroll: number; totalProfit: number; wins: number; losses: number; isActive: boolean } | null>(null)
@@ -336,6 +338,10 @@ export function DashboardLive() {
   useEffect(() => {
     selectedBetTypeRef.current = selectedBetType
   }, [selectedBetType])
+  
+  useEffect(() => {
+    smartPredictionRef.current = smartPrediction
+  }, [smartPrediction])
 
   // Get current casino config
   const currentCasino = CASINO_CONFIGS.find(c => c.id === selectedCasino)
@@ -902,7 +908,15 @@ export function DashboardLive() {
     
     // Check if we have a prediction to verify
     if (prediction) {
-      const matched = checkPredictionMatch(prediction, num)
+      // In double dozen/column mode, check against top 2 predictions
+      const isDoubleBet = (selectedBetTypeRef.current === 'dozen' || selectedBetTypeRef.current === 'column') && calcDozenModeRef.current === 'double'
+      const sp = smartPredictionRef.current
+      let matched: boolean
+      if (isDoubleBet && sp && sp.options.length >= 2) {
+        matched = sp.options.slice(0, 2).some(opt => checkPredictionMatch({ type: selectedBetTypeRef.current, value: opt.value }, num))
+      } else {
+        matched = checkPredictionMatch(prediction, num)
+      }
       const currentPeakValue = currentPeakRef.current
       
       if (matched) {
@@ -935,11 +949,16 @@ export function DashboardLive() {
             const betAmount = parseFloat(calcBetAmountRef.current) || 1
             const bt = calcBetTypeRef.current
             const isFlatBet = bt === 'color' || bt === 'parity'
+            const isDoubleCalc = !isFlatBet && calcDozenModeRef.current === 'double'
             const betIdx = calcCurrentBetIndexRef.current
-            const placedBet = isFlatBet ? betAmount : betAmount * (FIB[betIdx] || FIB[FIB.length - 1])
-            const payout = (bt === 'color' || bt === 'parity' ? 1 : 2) * placedBet
+            const singleBet = isFlatBet ? betAmount : betAmount * (FIB[betIdx] || FIB[FIB.length - 1])
+            const totalBet = isDoubleCalc ? singleBet * 2 : singleBet
+            // Payout: winning bet pays profit, minus losing bets in double mode
+            const payoutPerWin = isFlatBet ? singleBet : singleBet * 2
+            const losingCost = isDoubleCalc ? singleBet : 0
+            const payout = payoutPerWin - losingCost
 
-            calcCurrentCycleBetsRef.current.push({ amount: placedBet, result: 'win', payout })
+            calcCurrentCycleBetsRef.current.push({ amount: totalBet, result: 'win', payout })
             calcCurrentCycleProfitRef.current += payout
             calcRunningBankrollRef.current += payout
 
@@ -981,7 +1000,7 @@ export function DashboardLive() {
         setCurrentPeak(1)
         
         // Generate new prediction for next round - single source of truth
-        if (newNumbers.length >= 5 && !calcCycleActiveRef.current) {
+        if (newNumbers.length >= 5) {
           const newSmart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
           setSmartPrediction(newSmart)
           setCurrentPrediction({ type: newSmart.type, value: newSmart.bestValue })
@@ -1008,12 +1027,14 @@ export function DashboardLive() {
             const betAmount = parseFloat(calcBetAmountRef.current) || 1
             const bt = calcBetTypeRef.current
             const isFlatBet = bt === 'color' || bt === 'parity'
+            const isDoubleCalc = !isFlatBet && calcDozenModeRef.current === 'double'
             const betIdx = calcCurrentBetIndexRef.current
-            const placedBet = isFlatBet ? betAmount : betAmount * (FIB[betIdx] || FIB[FIB.length - 1])
+            const singleBet = isFlatBet ? betAmount : betAmount * (FIB[betIdx] || FIB[FIB.length - 1])
+            const totalBet = isDoubleCalc ? singleBet * 2 : singleBet
 
-            calcCurrentCycleBetsRef.current.push({ amount: placedBet, result: 'loss', payout: 0 })
-            calcCurrentCycleProfitRef.current -= placedBet
-            calcRunningBankrollRef.current -= placedBet
+            calcCurrentCycleBetsRef.current.push({ amount: totalBet, result: 'loss', payout: 0 })
+            calcCurrentCycleProfitRef.current -= totalBet
+            calcRunningBankrollRef.current -= totalBet
             calcCurrentBetIndexRef.current++
 
             // Close cycle if reached max bets (3)
@@ -1071,8 +1092,8 @@ export function DashboardLive() {
           }
         }
         
-        // Generate new prediction - single source of truth
-        if (newNumbers.length >= 5 && !calcCycleActiveRef.current) {
+        // Generate new prediction at each peak - single source of truth
+        if (newNumbers.length >= 5) {
           const newSmart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
           setSmartPrediction(newSmart)
           setCurrentPrediction({ type: newSmart.type, value: newSmart.bestValue })
@@ -1322,10 +1343,13 @@ export function DashboardLive() {
         // ====== WIN ======
         if (cycleActive && isPeakInRange(peakAtCheck)) {
           const fibMult = isFlatBet ? 1 : (FIB[cycleBetIndex] || FIB[FIB.length - 1])
-          // En modo doble, se apuesta a cada opción por separado (misma cantidad)
           const numBets = predValues.length
-          const betAmt = amount * fibMult * numBets
-          const payout = getPayout(betType) * amount * fibMult - betAmt // net payout
+          const singleBetAmt = amount * fibMult
+          const betAmt = singleBetAmt * numBets
+          // Correct payout: winning bet pays (payoutMult * singleBet), minus losing bets cost
+          const winProfit = getPayout(betType) * singleBetAmt
+          const losingCost = (numBets - 1) * singleBetAmt
+          const payout = winProfit - losingCost
           cycleBets.push(betAmt)
           cycleProfit += payout
           netProfit += payout
@@ -1334,6 +1358,8 @@ export function DashboardLive() {
           currentLossStreak = 0
           currentDrawdown = Math.max(0, currentDrawdown - Math.abs(payout))
           if (currentWinStreak > maxWinStreak) maxWinStreak = currentWinStreak
+          // Track predictions used at this bet
+          cyclePredicted = [...new Set([...cyclePredicted, ...predValues])]
           closeCycle('win')
           profitCurve.push(netProfit)
         } else if (cycleActive && !isPeakInRange(peakAtCheck)) {
@@ -1349,7 +1375,8 @@ export function DashboardLive() {
         if (cycleActive && isPeakInRange(peakAtCheck)) {
           const fibMult = isFlatBet ? 1 : (FIB[cycleBetIndex] || FIB[FIB.length - 1])
           const numBets = predValues.length
-          const betAmt = amount * fibMult * numBets
+          const singleBetAmt = amount * fibMult
+          const betAmt = singleBetAmt * numBets
           cycleBets.push(betAmt)
           cycleProfit -= betAmt
           netProfit -= betAmt
@@ -1361,6 +1388,8 @@ export function DashboardLive() {
           if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak
           cycleBetIndex++
           profitCurve.push(netProfit)
+          // Track prediction used at this bet
+          cyclePredicted = [...new Set([...cyclePredicted, ...predValues])]
 
           if (cycleBetIndex >= MAX_BETS) {
             closeCycle('loss')
@@ -1378,7 +1407,8 @@ export function DashboardLive() {
 
           const fibMult = isFlatBet ? 1 : FIB[0]
           const numBets = predValues.length
-          const betAmt = amount * fibMult * numBets
+          const singleBetAmt = amount * fibMult
+          const betAmt = singleBetAmt * numBets
           cycleBets.push(betAmt)
           cycleProfit -= betAmt
           netProfit -= betAmt
@@ -1397,8 +1427,8 @@ export function DashboardLive() {
         }
 
         currentPeak++
-        // Regenerar predicción SOLO si no hay ciclo activo
-        if (!cycleActive && numsSoFar.length >= 5) {
+        // Regenerar predicción en cada nuevo pico (datos actualizados)
+        if (numsSoFar.length >= 5) {
           predValues = getSmartPred(numsSoFar)
         }
       }
@@ -1537,19 +1567,19 @@ export function DashboardLive() {
               <div className="mt-2 space-y-1.5">
                 {smartPrediction.options.map((opt, oi) => (
                   <div key={oi} className={`flex items-center justify-between px-2 py-1 rounded text-xs ${
-                    oi === 0 ? 'bg-yellow-500/10 border border-yellow-500/20' : 'bg-zinc-800/50'
+                    oi < 2 ? 'bg-yellow-500/10 border border-yellow-500/20' : 'bg-zinc-800/50'
                   }`}>
-                    <span className={oi === 0 ? 'text-yellow-400 font-bold' : 'text-zinc-400'}>
-                      {oi === 0 ? '⭐' : '  '} {opt.label}
+                    <span className={oi < 2 ? 'text-yellow-400 font-bold' : 'text-zinc-400'}>
+                      {oi === 0 ? '⭐' : oi === 1 ? '🎯' : '   '} {opt.label}
                     </span>
                     <div className="flex items-center gap-2">
                       <div className="w-16 h-1.5 bg-zinc-700 rounded-full overflow-hidden">
                         <div 
-                          className={`h-full rounded-full ${oi === 0 ? 'bg-yellow-400' : 'bg-zinc-500'}`}
+                          className={`h-full rounded-full ${oi < 2 ? 'bg-yellow-400' : 'bg-zinc-500'}`}
                           style={{ width: `${opt.confidence}%` }}
                         />
                       </div>
-                      <span className={`font-mono font-bold w-8 text-right ${oi === 0 ? 'text-yellow-400' : 'text-zinc-500'}`}>
+                      <span className={`font-mono font-bold w-8 text-right ${oi < 2 ? 'text-yellow-400' : 'text-zinc-500'}`}>
                         {opt.confidence}%
                       </span>
                     </div>
@@ -2024,6 +2054,16 @@ export function DashboardLive() {
                       <button onClick={() => { setCalcPeakLevel('high'); calcPeakLevelRef.current = 'high'; if (calcEnabled) resetCalculator() }} className={`py-1 rounded-lg text-[10px] font-bold transition-all ${calcPeakLevel === 'high' ? 'bg-red-500/20 text-red-400 border border-red-500/50' : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50'}`}>🔴 Alto</button>
                     </div>
                   </div>
+
+                  {(selectedBetType === 'dozen' || selectedBetType === 'column') && (
+                    <div>
+                      <label className="text-[10px] text-zinc-500 block mb-1">Modo Apuesta</label>
+                      <div className="grid grid-cols-2 gap-1">
+                        <button onClick={() => { calcDozenModeRef.current = 'single'; if (calcEnabled) resetCalculator() }} className={`py-1 rounded-lg text-[10px] font-bold transition-all ${calcDozenModeRef.current === 'single' ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50' : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50'}`}>🎯 1 Opción</button>
+                        <button onClick={() => { calcDozenModeRef.current = 'double'; if (calcEnabled) resetCalculator() }} className={`py-1 rounded-lg text-[10px] font-bold transition-all ${calcDozenModeRef.current === 'double' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/50' : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50'}`}>🎯🎯 2 Opciones</button>
+                      </div>
+                    </div>
+                  )}
 
                   {calcEnabled && (
                     <>
