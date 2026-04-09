@@ -1874,10 +1874,10 @@ export function DashboardLive() {
                 {/* Current Prediction */}
                 {currentPrediction && numbers.length >= 5 ? (
                   <Card className="bg-gradient-to-r from-zinc-900 to-zinc-800 border-amber-500/30">
-                    <CardContent className="py-4">
+                    <CardContent className="py-4 space-y-3">
                       <div className="flex items-center justify-between flex-wrap gap-4">
                         <div>
-                          <div className="text-xs text-zinc-400 mb-1 flex items-center gap-2"><Target className="w-3 h-3" />PREDICCIÓN ACTUAL</div>
+                          <div className="text-xs text-zinc-400 mb-1 flex items-center gap-2"><Target className="w-3 h-3" />PREDICCIÓN IA v3.0</div>
                           <div className="text-2xl md:text-3xl font-bold text-amber-500">{getPredictionDisplay()}</div>
                         </div>
                         
@@ -1896,6 +1896,32 @@ export function DashboardLive() {
                           </div>
                         </div>
                       </div>
+
+                      {/* Smart prediction options with confidence bars */}
+                      {smartPrediction && smartPrediction.options.length > 1 && (
+                        <div className="grid gap-1.5">
+                          {smartPrediction.options.map((opt, oi) => (
+                            <div key={oi} className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm ${
+                              oi === 0 ? 'bg-yellow-500/10 border border-yellow-500/30' : 'bg-zinc-800/60 border border-zinc-700/30'
+                            }`}>
+                              <span className={`font-bold ${oi === 0 ? 'text-yellow-400' : 'text-zinc-400'}`}>
+                                {oi === 0 ? '⭐' : '  '} {opt.label}
+                              </span>
+                              <div className="flex items-center gap-3">
+                                <div className="w-24 h-2 bg-zinc-700 rounded-full overflow-hidden">
+                                  <div 
+                                    className={`h-full rounded-full transition-all duration-300 ${oi === 0 ? 'bg-yellow-400' : 'bg-zinc-500'}`}
+                                    style={{ width: `${opt.confidence}%` }}
+                                  />
+                                </div>
+                                <span className={`font-mono font-bold w-10 text-right ${oi === 0 ? 'text-yellow-400' : 'text-zinc-500'}`}>
+                                  {opt.confidence}%
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
                 ) : numbers.length > 0 && numbers.length < 5 ? (
