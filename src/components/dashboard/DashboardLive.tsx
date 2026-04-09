@@ -115,10 +115,18 @@ const playSound = (type: 'success' | 'fail' | 'click') => {
 
 // Types
 type BetType = 'color' | 'parity' | 'dozen' | 'column'
+type BtDozenMode = 'single' | 'double'
 
 interface BetPrediction {
   type: BetType
   value: string
+}
+
+interface SmartPrediction {
+  type: BetType
+  options: { value: string; label: string; confidence: number }[]
+  bestValue: string
+  bestConfidence: number
 }
 
 interface PeakRecord {
@@ -157,7 +165,8 @@ interface BacktestResults {
   peakLevel: PeakLevel
   peakCycles: number
   avgBetsPerCycle: number
-  fibonacciDetail: { cycle: number; bets: number[]; result: 'win' | 'loss'; profit: number; entryPeak: number }[]
+  fibonacciDetail: { cycle: number; bets: number[]; result: 'win' | 'loss'; profit: number; entryPeak: number; predicted: string[] }[]
+  btDozenMode: BtDozenMode
 }
 
 export function DashboardLive() {
@@ -197,6 +206,10 @@ export function DashboardLive() {
   const [btBetType, setBtBetType] = useState<BetType>('color')
   const [btAmount, setBtAmount] = useState<string>('1')
   const [btPeakLevel, setBtPeakLevel] = useState<PeakLevel>('low')
+  const [btDozenMode, setBtDozenMode] = useState<BtDozenMode>('single')
+
+  // Live smart prediction
+  const [smartPrediction, setSmartPrediction] = useState<SmartPrediction | null>(null)
   
   // Demo mode
   const [isDemoMode, setIsDemoMode] = useState(false)
@@ -416,401 +429,392 @@ export function DashboardLive() {
     return stats
   }, [])
 
-  // Enhanced prediction algorithm with EMA, chi-square, and Markov chain
-  const generatePrediction = useCallback((nums: number[], betType: BetType): BetPrediction => {
-    const stats = calculateStats(nums)
-    const total = nums.length || 1
-    const nonZeroTotal = nums.filter(n => n !== 0).length || 1
-    
-    // Helper: exponential weighted analysis for binary categories
-    const getExpWeights = (getCategory: (n: number) => string | null) => {
-      const weights: Record<string, number> = {}
-      let totalWeight = 0
-      const decayFactor = 0.9
-      for (let i = nums.length - 1; i >= 0; i--) {
-        const weight = Math.pow(decayFactor, nums.length - 1 - i)
-        const cat = getCategory(nums[i])
-        if (cat) {
-          weights[cat] = (weights[cat] || 0) + weight
-          totalWeight += weight
-        }
-      }
-      const pcts: Record<string, number> = {}
-      for (const k of Object.keys(weights)) {
-        pcts[k] = totalWeight > 0 ? (weights[k] / totalWeight) * 100 : 50
-      }
-      return pcts
+  // ============================================
+  // NUEVO SISTEMA DE PREDICCIÓN AVANZADO v3.0
+  // Basado en: Análisis de Varianza Múltiple,
+  // Cadenas de Markov de Orden 2, Detección de
+  // Sesgo Estadístico, Reversión a la Media,
+  // Análisis de Ventanas Múltiples, Hot/Cold Clustering
+  // ============================================
+  const generateSmartPrediction = useCallback((nums: number[], betType: BetType): SmartPrediction => {
+    if (nums.length < 5) return { type: betType, options: [], bestValue: '', bestConfidence: 50 }
+    const nonZero = nums.filter(n => n !== 0)
+    const nzTotal = nonZero.length || 1
+
+    // --- HELPER: Multi-window frequency analysis ---
+    const multiWindowFreq = (getCat: (n: number) => string | null, cats: string[]) => {
+      const windows = [5, 10, 20, 37]
+      const scores: Record<string, number> = {}
+      cats.forEach(c => scores[c] = 0)
+
+      windows.forEach((w, wi) => {
+        const slice = nonZero.slice(-w)
+        const sTotal = slice.length || 1
+        const expected = (1 / cats.length) * 100
+        slice.forEach(n => {
+          const c = getCat(n)
+          if (c) scores[c] = scores[c] || 0
+        })
+        // Weight: more recent windows matter more
+        const weight = [1, 1.5, 2, 2.5][wi]
+        slice.forEach(n => {
+          const c = getCat(n)
+          if (c) scores[c] += weight
+        })
+        // Reversion bonus: underrepresented categories get boosted
+        const freqs: Record<string, number> = {}
+        cats.forEach(c => freqs[c] = 0)
+        slice.forEach(n => {
+          const c = getCat(n)
+          if (c) freqs[c]++
+        })
+        cats.forEach(c => {
+          const actual = (freqs[c] / sTotal) * 100
+          const deviation = expected - actual
+          // Strong mean reversion signal for larger deviations
+          scores[c] += deviation * weight * 0.8
+        })
+      })
+      return scores
     }
-    
-    // Helper: Markov transition prediction for binary categories
-    const getMarkovBinary = (getCategory: (n: number) => string | null) => {
-      const transitions: Record<string, Record<string, number>> = {}
-      for (let i = 1; i < nums.length; i++) {
-        const prev = getCategory(nums[i - 1])
-        const curr = getCategory(nums[i])
-        if (prev && curr) {
-          if (!transitions[prev]) transitions[prev] = {}
-          transitions[prev][curr] = (transitions[prev][curr] || 0) + 1
+
+    // --- HELPER: Order-2 Markov Chain ---
+    const markovOrder2 = (getCat: (n: number) => string | null, cats: string[]) => {
+      const trans: Record<string, Record<string, Record<string, number>>> = {}
+      for (let i = 2; i < nonZero.length; i++) {
+        const c0 = getCat(nonZero[i - 2])
+        const c1 = getCat(nonZero[i - 1])
+        const c2 = getCat(nonZero[i])
+        if (c0 && c1 && c2) {
+          if (!trans[c0]) trans[c0] = {}
+          if (!trans[c0][c1]) trans[c0][c1] = {}
+          trans[c0][c1][c2] = (trans[c0][c1][c2] || 0) + 1
         }
       }
-      const lastCat = nums.length > 0 ? getCategory(nums[nums.length - 1]) : null
-      if (lastCat && transitions[lastCat]) {
-        const tr = transitions[lastCat]
-        let bestNext: string | null = null
-        let bestCount = -1
-        for (const [next, count] of Object.entries(tr)) {
-          if (count > bestCount) { bestCount = count; bestNext = next }
-        }
-        return bestNext
-      }
-      return null
-    }
-    
-    // Helper: Markov transition for 3-category systems
-    const getMarkovTriple = (getCategory: (n: number) => string | null) => {
-      const transitions: Record<string, Record<string, number>> = {}
-      for (let i = 1; i < nums.length; i++) {
-        const prev = getCategory(nums[i - 1])
-        const curr = getCategory(nums[i])
-        if (prev && curr) {
-          if (!transitions[prev]) transitions[prev] = {}
-          transitions[prev][curr] = (transitions[prev][curr] || 0) + 1
-        }
-      }
-      const lastCat = nums.length > 0 ? getCategory(nums[nums.length - 1]) : null
-      if (lastCat && transitions[lastCat]) {
-        const tr = transitions[lastCat]
-        let bestNext: string | null = null
-        let bestCount = -1
-        for (const [next, count] of Object.entries(tr)) {
-          if (count > bestCount) { bestCount = count; bestNext = next }
-        }
-        return bestNext
-      }
-      return null
-    }
-    
-    switch (betType) {
-      case 'color': {
-        // 1. EXPONENTIAL WEIGHTED ANALYSIS
-        const expPcts = getExpWeights(n => {
-          const c = getNumberColor(n)
-          return c === 'green' ? null : c
-        })
-        const expRedPct = expPcts.red || 50
-        const expBlackPct = expPcts.black || 50
-        
-        // 2. CHI-SQUARE DEVIATION
-        const expectedPct = 48.65 // (18/37)*100
-        const expectedRed = total * expectedPct / 100
-        const expectedBlack = total * expectedPct / 100
-        const chiRed = expectedRed > 0 ? Math.pow(stats.red - expectedRed, 2) / expectedRed : 0
-        const chiBlack = expectedBlack > 0 ? Math.pow(stats.black - expectedBlack, 2) / expectedBlack : 0
-        const totalChi = chiRed + chiBlack
-        
-        // 3. MARKOV CHAIN TRANSITIONS
-        const markovPred = getMarkovBinary(n => {
-          const c = getNumberColor(n)
-          return c === 'green' ? null : c
-        })
-        
-        // 4. STREAK ANALYSIS (hard override)
-        if (stats.lastRedStreak >= 4) return { type: 'color', value: 'black' }
-        if (stats.lastBlackStreak >= 4) return { type: 'color', value: 'red' }
-        
-        // 5. COMBINED SCORING
-        let redScore = 50, blackScore = 50
-        
-        // Exponential weighted deviation (max ±20 points)
-        const expDev = expRedPct - expBlackPct
-        if (expDev > 3) { blackScore += Math.min(20, expDev * 2); redScore -= Math.min(20, expDev * 2) }
-        else if (expDev < -3) { redScore += Math.min(20, Math.abs(expDev) * 2); blackScore -= Math.min(20, Math.abs(expDev) * 2) }
-        
-        // Chi-square signal (max ±15 points)
-        if (totalChi > 3.84) { // p < 0.05 significance
-          if (chiRed > chiBlack) { blackScore += 15; redScore -= 10 }
-          else { redScore += 15; blackScore -= 10 }
-        }
-        
-        // Markov chain (max ±10 points)
-        if (markovPred === 'black') { blackScore += 10 }
-        else if (markovPred === 'red') { redScore += 10 }
-        
-        // Recent trend (max ±10 points)
-        const recent5Red = nums.slice(-5).filter(n => getNumberColor(n) === 'red').length
-        const recent5Black = nums.slice(-5).filter(n => getNumberColor(n) === 'black').length
-        if (recent5Red >= 4) { blackScore += 10 }
-        else if (recent5Black >= 4) { redScore += 10 }
-        
-        // Short streak bonus (max ±8 points)
-        if (stats.lastRedStreak === 3) { blackScore += 8 }
-        else if (stats.lastBlackStreak === 3) { redScore += 8 }
-        
-        return { type: 'color', value: redScore > blackScore ? 'red' : 'black' }
-      }
-      
-      case 'parity': {
-        // 1. EXPONENTIAL WEIGHTED ANALYSIS
-        const expPcts = getExpWeights(n => n === 0 ? null : (n % 2 === 0 ? 'even' : 'odd'))
-        const expOddPct = expPcts.odd || 50
-        const expEvenPct = expPcts.even || 50
-        
-        // 2. CHI-SQUARE DEVIATION
-        const expectedPct = 48.65
-        const expectedOdd = nonZeroTotal * expectedPct / 100
-        const expectedEven = nonZeroTotal * expectedPct / 100
-        const chiOdd = expectedOdd > 0 ? Math.pow(stats.odd - expectedOdd, 2) / expectedOdd : 0
-        const chiEven = expectedEven > 0 ? Math.pow(stats.even - expectedEven, 2) / expectedEven : 0
-        const totalChi = chiOdd + chiEven
-        
-        // 3. MARKOV CHAIN TRANSITIONS
-        const markovPred = getMarkovBinary(n => n === 0 ? null : (n % 2 === 0 ? 'even' : 'odd'))
-        
-        // 4. STREAK ANALYSIS
-        if (stats.lastOddStreak >= 4) return { type: 'parity', value: 'even' }
-        if (stats.lastEvenStreak >= 4) return { type: 'parity', value: 'odd' }
-        
-        // 5. COMBINED SCORING
-        let oddScore = 50, evenScore = 50
-        
-        // Exponential weighted deviation (max ±20)
-        const expDev = expOddPct - expEvenPct
-        if (expDev > 3) { evenScore += Math.min(20, expDev * 2); oddScore -= Math.min(20, expDev * 2) }
-        else if (expDev < -3) { oddScore += Math.min(20, Math.abs(expDev) * 2); evenScore -= Math.min(20, Math.abs(expDev) * 2) }
-        
-        // Chi-square (max ±15)
-        if (totalChi > 3.84) {
-          if (chiOdd > chiEven) { evenScore += 15; oddScore -= 10 }
-          else { oddScore += 15; evenScore -= 10 }
-        }
-        
-        // Markov chain (max ±10)
-        if (markovPred === 'even') { evenScore += 10 }
-        else if (markovPred === 'odd') { oddScore += 10 }
-        
-        // Recent trend (max ±10)
-        const recent5Odd = nums.slice(-5).filter(n => n !== 0 && n % 2 === 1).length
-        const recent5Even = nums.slice(-5).filter(n => n !== 0 && n % 2 === 0).length
-        if (recent5Odd >= 4) { evenScore += 10 }
-        else if (recent5Even >= 4) { oddScore += 10 }
-        
-        // Short streak (max ±8)
-        if (stats.lastOddStreak === 3) { evenScore += 8 }
-        else if (stats.lastEvenStreak === 3) { oddScore += 8 }
-        
-        return { type: 'parity', value: oddScore > evenScore ? 'odd' : 'even' }
-      }
-      
-      case 'dozen': {
-        // 1. EXPONENTIAL WEIGHTED ANALYSIS
-        const expPcts = getExpWeights(n => {
-          if (n === 0) return null
-          return n <= 12 ? 'd1' : n <= 24 ? 'd2' : 'd3'
-        })
-        const expD1 = expPcts.d1 || 33.3
-        const expD2 = expPcts.d2 || 33.3
-        const expD3 = expPcts.d3 || 33.3
-        
-        // 2. CHI-SQUARE DEVIATION
-        const expectedPct = 32.43 // (12/37)*100
-        const expectedD = nonZeroTotal * expectedPct / 100
-        const chiD1 = expectedD > 0 ? Math.pow(stats.dozen1 - expectedD, 2) / expectedD : 0
-        const chiD2 = expectedD > 0 ? Math.pow(stats.dozen2 - expectedD, 2) / expectedD : 0
-        const chiD3 = expectedD > 0 ? Math.pow(stats.dozen3 - expectedD, 2) / expectedD : 0
-        const totalChi = chiD1 + chiD2 + chiD3
-        
-        // 3. MARKOV CHAIN
-        const markovPred = getMarkovTriple(n => {
-          if (n === 0) return null
-          return n <= 12 ? 'd1' : n <= 24 ? 'd2' : 'd3'
-        })
-        
-        // 4. STREAK ANALYSIS
-        if (stats.lastDozen1Streak >= 3) {
-          // Predict least recent of the others
-          const recentNums = nums.slice(-10).filter(n => n !== 0)
-          const d2Recent = recentNums.filter(n => n > 12 && n <= 24).length
-          const d3Recent = recentNums.filter(n => n > 24).length
-          return { type: 'dozen', value: d2Recent <= d3Recent ? '13-24' : '25-36' }
-        }
-        if (stats.lastDozen2Streak >= 3) {
-          const recentNums = nums.slice(-10).filter(n => n !== 0)
-          const d1Recent = recentNums.filter(n => n <= 12).length
-          const d3Recent = recentNums.filter(n => n > 24).length
-          return { type: 'dozen', value: d1Recent <= d3Recent ? '1-12' : '25-36' }
-        }
-        if (stats.lastDozen3Streak >= 3) {
-          const recentNums = nums.slice(-10).filter(n => n !== 0)
-          const d1Recent = recentNums.filter(n => n <= 12).length
-          const d2Recent = recentNums.filter(n => n > 12 && n <= 24).length
-          return { type: 'dozen', value: d1Recent <= d2Recent ? '1-12' : '13-24' }
-        }
-        
-        // 5. COMBINED SCORING
-        let d1Score = 33.3, d2Score = 33.3, d3Score = 33.3
-        
-        // Exponential weighted deviation (max ±15 each)
-        const expD1Dev = 33.3 - expD1
-        const expD2Dev = 33.3 - expD2
-        const expD3Dev = 33.3 - expD3
-        d1Score += Math.min(15, Math.max(-15, expD1Dev * 1.5))
-        d2Score += Math.min(15, Math.max(-15, expD2Dev * 1.5))
-        d3Score += Math.min(15, Math.max(-15, expD3Dev * 1.5))
-        
-        // Chi-square signal (boost underperforming dozens)
-        if (totalChi > 5.99) { // p < 0.05 for 2df
-          const maxChi = Math.max(chiD1, chiD2, chiD3)
-          const minChi = Math.min(chiD1, chiD2, chiD3)
-          if (maxChi > 0) {
-            // The one with highest chi is overrepresented - penalize
-            if (chiD1 === maxChi) { d1Score -= 12 }
-            else if (chiD2 === maxChi) { d2Score -= 12 }
-            else { d3Score -= 12 }
-          }
-          if (minChi < maxChi * 0.5) {
-            if (chiD1 === minChi) { d1Score += 10 }
-            else if (chiD2 === minChi) { d2Score += 10 }
-            else { d3Score += 10 }
+      const scores: Record<string, number> = {}
+      cats.forEach(c => scores[c] = 0)
+      if (nonZero.length >= 2) {
+        const c0 = getCat(nonZero[nonZero.length - 2])
+        const c1 = getCat(nonZero[nonZero.length - 1])
+        if (c0 && c1 && trans[c0] && trans[c0][c1]) {
+          const tr = trans[c0][c1]
+          const total = Object.values(tr).reduce((s, v) => s + v, 0)
+          if (total > 0) {
+            cats.forEach(c => {
+              scores[c] = ((tr[c] || 0) / total) * 100
+            })
           }
         }
-        
-        // Markov chain (max ±8)
-        if (markovPred === 'd1') { d1Score += 8 }
-        else if (markovPred === 'd2') { d2Score += 8 }
-        else if (markovPred === 'd3') { d3Score += 8 }
-        
-        // Recent trend (max ±10)
-        const recentNums = nums.slice(-8).filter(n => n !== 0)
-        const d1Recent = recentNums.filter(n => n <= 12).length
-        const d2Recent = recentNums.filter(n => n > 12 && n <= 24).length
-        const d3Recent = recentNums.filter(n => n > 24).length
-        const recentPctD1 = (d1Recent / Math.max(1, recentNums.length)) * 100
-        const recentPctD2 = (d2Recent / Math.max(1, recentNums.length)) * 100
-        const recentPctD3 = (d3Recent / Math.max(1, recentNums.length)) * 100
-        d1Score += Math.min(10, Math.max(-10, (33.3 - recentPctD1) * 0.5))
-        d2Score += Math.min(10, Math.max(-10, (33.3 - recentPctD2) * 0.5))
-        d3Score += Math.min(10, Math.max(-10, (33.3 - recentPctD3) * 0.5))
-        
-        // Absence bonus (if dozen absent in last 8+)
-        if (d1Recent === 0 && recentNums.length >= 6) d1Score += 12
-        if (d2Recent === 0 && recentNums.length >= 6) d2Score += 12
-        if (d3Recent === 0 && recentNums.length >= 6) d3Score += 12
-        
-        // Short streak bonus
-        if (stats.lastDozen1Streak === 2) { d1Score -= 6; d2Score += 3; d3Score += 3 }
-        else if (stats.lastDozen2Streak === 2) { d2Score -= 6; d1Score += 3; d3Score += 3 }
-        else if (stats.lastDozen3Streak === 2) { d3Score -= 6; d1Score += 3; d2Score += 3 }
-        
-        const best = d1Score >= d2Score && d1Score >= d3Score ? 1 : d2Score >= d3Score ? 2 : 3
-        return { type: 'dozen', value: best === 1 ? '1-12' : best === 2 ? '13-24' : '25-36' }
       }
-      
-      case 'column': {
-        // 1. EXPONENTIAL WEIGHTED ANALYSIS
-        const expPcts = getExpWeights(n => {
-          if (n === 0) return null
-          const col = n % 3 === 0 ? 3 : n % 3
-          return `c${col}`
-        })
-        const expC1 = expPcts.c1 || 33.3
-        const expC2 = expPcts.c2 || 33.3
-        const expC3 = expPcts.c3 || 33.3
-        
-        // 2. CHI-SQUARE DEVIATION
-        const expectedPct = 32.43
-        const expectedC = nonZeroTotal * expectedPct / 100
-        const chiC1 = expectedC > 0 ? Math.pow(stats.col1 - expectedC, 2) / expectedC : 0
-        const chiC2 = expectedC > 0 ? Math.pow(stats.col2 - expectedC, 2) / expectedC : 0
-        const chiC3 = expectedC > 0 ? Math.pow(stats.col3 - expectedC, 2) / expectedC : 0
-        const totalChi = chiC1 + chiC2 + chiC3
-        
-        // 3. MARKOV CHAIN
-        const markovPred = getMarkovTriple(n => {
-          if (n === 0) return null
-          const col = n % 3 === 0 ? 3 : n % 3
-          return `c${col}`
-        })
-        
-        // 4. STREAK ANALYSIS
-        if (stats.lastCol1Streak >= 3) {
-          const recentNums = nums.slice(-10).filter(n => n !== 0)
-          const c2Recent = recentNums.filter(n => n % 3 === 2).length
-          const c3Recent = recentNums.filter(n => n % 3 === 0).length
-          return { type: 'column', value: c2Recent <= c3Recent ? '2' : '3' }
-        }
-        if (stats.lastCol2Streak >= 3) {
-          const recentNums = nums.slice(-10).filter(n => n !== 0)
-          const c1Recent = recentNums.filter(n => n % 3 === 1).length
-          const c3Recent = recentNums.filter(n => n % 3 === 0).length
-          return { type: 'column', value: c1Recent <= c3Recent ? '1' : '3' }
-        }
-        if (stats.lastCol3Streak >= 3) {
-          const recentNums = nums.slice(-10).filter(n => n !== 0)
-          const c1Recent = recentNums.filter(n => n % 3 === 1).length
-          const c2Recent = recentNums.filter(n => n % 3 === 2).length
-          return { type: 'column', value: c1Recent <= c2Recent ? '1' : '2' }
-        }
-        
-        // 5. COMBINED SCORING
-        let c1Score = 33.3, c2Score = 33.3, c3Score = 33.3
-        
-        // Exponential weighted deviation (max ±15 each)
-        const expC1Dev = 33.3 - expC1
-        const expC2Dev = 33.3 - expC2
-        const expC3Dev = 33.3 - expC3
-        c1Score += Math.min(15, Math.max(-15, expC1Dev * 1.5))
-        c2Score += Math.min(15, Math.max(-15, expC2Dev * 1.5))
-        c3Score += Math.min(15, Math.max(-15, expC3Dev * 1.5))
-        
-        // Chi-square signal
-        if (totalChi > 5.99) {
-          const maxChi = Math.max(chiC1, chiC2, chiC3)
-          const minChi = Math.min(chiC1, chiC2, chiC3)
-          if (chiC1 === maxChi) { c1Score -= 12 }
-          else if (chiC2 === maxChi) { c2Score -= 12 }
-          else { c3Score -= 12 }
-          if (minChi < maxChi * 0.5) {
-            if (chiC1 === minChi) { c1Score += 10 }
-            else if (chiC2 === minChi) { c2Score += 10 }
-            else { c3Score += 10 }
+      // Fallback: Order-1 Markov
+      if (Object.values(scores).every(v => v === 0) && nonZero.length >= 1) {
+        const last = getCat(nonZero[nonZero.length - 1])
+        const trans1: Record<string, Record<string, number>> = {}
+        for (let i = 1; i < nonZero.length; i++) {
+          const prev = getCat(nonZero[i - 1])
+          const curr = getCat(nonZero[i])
+          if (prev && curr) {
+            if (!trans1[prev]) trans1[prev] = {}
+            trans1[prev][curr] = (trans1[prev][curr] || 0) + 1
           }
         }
-        
-        // Markov chain (max ±8)
-        if (markovPred === 'c1') { c1Score += 8 }
-        else if (markovPred === 'c2') { c2Score += 8 }
-        else if (markovPred === 'c3') { c3Score += 8 }
-        
-        // Recent trend (max ±10)
-        const recentNums = nums.slice(-8).filter(n => n !== 0)
-        const c1Recent = recentNums.filter(n => n % 3 === 1).length
-        const c2Recent = recentNums.filter(n => n % 3 === 2).length
-        const c3Recent = recentNums.filter(n => n % 3 === 0).length
-        const recentPctC1 = (c1Recent / Math.max(1, recentNums.length)) * 100
-        const recentPctC2 = (c2Recent / Math.max(1, recentNums.length)) * 100
-        const recentPctC3 = (c3Recent / Math.max(1, recentNums.length)) * 100
-        c1Score += Math.min(10, Math.max(-10, (33.3 - recentPctC1) * 0.5))
-        c2Score += Math.min(10, Math.max(-10, (33.3 - recentPctC2) * 0.5))
-        c3Score += Math.min(10, Math.max(-10, (33.3 - recentPctC3) * 0.5))
-        
-        // Absence bonus
-        if (c1Recent === 0 && recentNums.length >= 6) c1Score += 12
-        if (c2Recent === 0 && recentNums.length >= 6) c2Score += 12
-        if (c3Recent === 0 && recentNums.length >= 6) c3Score += 12
-        
-        // Short streak bonus
-        if (stats.lastCol1Streak === 2) { c1Score -= 6; c2Score += 3; c3Score += 3 }
-        else if (stats.lastCol2Streak === 2) { c2Score -= 6; c1Score += 3; c3Score += 3 }
-        else if (stats.lastCol3Streak === 2) { c3Score -= 6; c1Score += 3; c2Score += 3 }
-        
-        const best = c1Score >= c2Score && c1Score >= c3Score ? 1 : c2Score >= c3Score ? 2 : 3
-        return { type: 'column', value: best.toString() }
+        if (last && trans1[last]) {
+          const tr = trans1[last]
+          const total = Object.values(tr).reduce((s, v) => s + v, 0)
+          if (total > 0) cats.forEach(c => { scores[c] = ((tr[c] || 0) / total) * 100 })
+        }
       }
-      
-      default:
-        return { type: 'color', value: 'red' }
+      return scores
     }
+
+    // --- HELPER: Streak analysis with smart reversion ---
+    const streakAnalysis = (getCat: (n: number) => string | null, cats: string[], streaks: Record<string, number>) => {
+      const scores: Record<string, number> = {}
+      cats.forEach(c => scores[c] = 0)
+      let maxStreak = 0
+      let streakCat: string | null = null
+      cats.forEach(c => {
+        if ((streaks[c] || 0) > maxStreak) {
+          maxStreak = streaks[c]
+          streakCat = c
+        }
+      })
+      if (streakCat && maxStreak >= 3) {
+        const reversionStrength = Math.min(25, maxStreak * 5)
+        cats.forEach(c => {
+          if (c !== streakCat) scores[c] += reversionStrength / (cats.length - 1)
+        })
+        scores[streakCat!] -= reversionStrength
+      }
+      return scores
+    }
+
+    // --- HELPER: Gap/absence detection ---
+    const gapAnalysis = (getCat: (n: number) => string | null, cats: string[]) => {
+      const scores: Record<string, number> = {}
+      cats.forEach(c => scores[c] = 0)
+      const lastSeen: Record<string, number> = {}
+      cats.forEach(c => lastSeen[c] = -1)
+      nonZero.forEach((n, i) => {
+        const c = getCat(n)
+        if (c) lastSeen[c] = i
+      })
+      const lastIdx = nonZero.length - 1
+      cats.forEach(c => {
+        const gap = lastIdx - (lastSeen[c] ?? -1)
+        if (gap >= 4) scores[c] += Math.min(20, gap * 3)
+        else if (gap >= 2) scores[c] += gap * 2
+      })
+      return scores
+    }
+
+    // --- HELPER: Sector/wheel pattern (for dozens/columns) ---
+    const sectorAnalysis = (getCat: (n: number) => string | null, cats: string[]) => {
+      const scores: Record<string, number> = {}
+      cats.forEach(c => scores[c] = 0)
+      // Alternation pattern: if alternating, predict the one not in last position
+      if (nonZero.length >= 4) {
+        const last4 = nonZero.slice(-4).map(n => getCat(n)).filter(Boolean)
+        if (last4.length >= 4) {
+          let alternating = true
+          for (let i = 1; i < last4.length; i++) {
+            if (last4[i] === last4[i - 1]) { alternating = false; break }
+          }
+          if (alternating) {
+            const lastCat = last4[last4.length - 1]
+            cats.forEach(c => {
+              if (c !== lastCat) scores[c] += 8
+            })
+          }
+        }
+        // Pattern: AABB detected
+        if (last4.length >= 4 && last4[0] === last4[1] && last4[2] === last4[3] && last4[0] !== last4[2]) {
+          scores[last4[2]] += 10 // pattern continues
+        }
+      }
+      return scores
+    }
+
+    // --- HELPER: Chi-square significance test ---
+    const chiSquareTest = (counts: number[], expected: number) => {
+      return counts.reduce((sum, c) => sum + Math.pow(c - expected, 2) / Math.max(1, expected), 0)
+    }
+
+    // --- HELPER: Normalize scores to confidence percentages ---
+    const toConfidence = (scores: Record<string, number>, cats: string[], basePct: number) => {
+      const total = cats.reduce((s, c) => s + Math.max(0, scores[c]), 0) || 1
+      const confs: Record<string, number> = {}
+      cats.forEach(c => {
+        const raw = basePct + (scores[c] / total) * (100 - basePct * cats.length)
+        confs[c] = Math.max(5, Math.min(95, raw))
+      })
+      // Normalize to sum ~100
+      const sum = Object.values(confs).reduce((s, v) => s + v, 0) || 1
+      cats.forEach(c => { confs[c] = (confs[c] / sum) * 100 })
+      return confs
+    }
+
+    // === COLOR PREDICTION ===
+    if (betType === 'color') {
+      const cats = ['red', 'black']
+      const getCat = (n: number) => { const c = getNumberColor(n); return c === 'green' ? null : c }
+      const freq = multiWindowFreq(getCat, cats)
+      const markov = markovOrder2(getCat, cats)
+      const streaks: Record<string, number> = {}
+      let maxR = 0, maxB = 0
+      nonZero.forEach(n => {
+        const c = getNumberColor(n)
+        if (c === 'red') { maxR++; maxB = 0 } else if (c === 'black') { maxB++; maxR = 0 } else { maxR = 0; maxB = 0 }
+      })
+      streaks.red = maxR; streaks.black = maxB
+      const streak = streakAnalysis(getCat, cats, streaks)
+
+      const scores: Record<string, number> = {}
+      cats.forEach(c => {
+        scores[c] = freq[c] * 1.0 + markov[c] * 2.0 + streak[c] * 1.5
+      })
+
+      const confs = toConfidence(scores, cats, 30)
+      const sorted = cats.sort((a, b) => confs[b] - confs[a])
+      return {
+        type: 'color',
+        options: sorted.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: Math.round(confs[c]) })),
+        bestValue: sorted[0],
+        bestConfidence: Math.round(confs[sorted[0]])
+      }
+    }
+
+    // === PARITY PREDICTION ===
+    if (betType === 'parity') {
+      const cats = ['odd', 'even']
+      const getCat = (n: number) => n === 0 ? null : (n % 2 === 0 ? 'even' : 'odd')
+      const freq = multiWindowFreq(getCat, cats)
+      const markov = markovOrder2(getCat, cats)
+      const streaks: Record<string, number> = {}
+      let maxO = 0, maxE = 0
+      nonZero.forEach(n => {
+        if (n === 0) { maxO = 0; maxE = 0; return }
+        if (n % 2 === 1) { maxO++; maxE = 0 } else { maxE++; maxO = 0 }
+      })
+      streaks.odd = maxO; streaks.even = maxE
+      const streak = streakAnalysis(getCat, cats, streaks)
+
+      const scores: Record<string, number> = {}
+      cats.forEach(c => {
+        scores[c] = freq[c] * 1.0 + markov[c] * 2.0 + streak[c] * 1.5
+      })
+
+      const confs = toConfidence(scores, cats, 30)
+      const sorted = cats.sort((a, b) => confs[b] - confs[a])
+      return {
+        type: 'parity',
+        options: sorted.map(c => ({ value: c, label: c === 'odd' ? 'Impar' : 'Par', confidence: Math.round(confs[c]) })),
+        bestValue: sorted[0],
+        bestConfidence: Math.round(confs[sorted[0]])
+      }
+    }
+
+    // === DOZEN PREDICTION ===
+    if (betType === 'dozen') {
+      const cats = ['d1', 'd2', 'd3']
+      const getCat = (n: number) => n === 0 ? null : (n <= 12 ? 'd1' : n <= 24 ? 'd2' : 'd3')
+      const freq = multiWindowFreq(getCat, cats)
+      const markov = markovOrder2(getCat, cats)
+      const gap = gapAnalysis(getCat, cats)
+      const sector = sectorAnalysis(getCat, cats)
+
+      const streaks: Record<string, number> = {}
+      let maxD1 = 0, maxD2 = 0, maxD3 = 0
+      nonZero.forEach(n => {
+        if (n === 0) { maxD1 = 0; maxD2 = 0; maxD3 = 0; return }
+        if (n <= 12) { maxD1++; maxD2 = 0; maxD3 = 0 }
+        else if (n <= 24) { maxD2++; maxD1 = 0; maxD3 = 0 }
+        else { maxD3++; maxD1 = 0; maxD2 = 0 }
+      })
+      streaks.d1 = maxD1; streaks.d2 = maxD2; streaks.d3 = maxD3
+      const streak = streakAnalysis(getCat, cats, streaks)
+
+      // Chi-square test on full history
+      const d1Count = nonZero.filter(n => n <= 12).length
+      const d2Count = nonZero.filter(n => n > 12 && n <= 24).length
+      const d3Count = nonZero.filter(n => n > 24).length
+      const expected = nzTotal / 3
+      const chi = chiSquareTest([d1Count, d2Count, d3Count], expected)
+      const chiScores: Record<string, number> = {}
+      if (chi > 5.99) {
+        const counts = [d1Count, d2Count, d3Count]
+        const avg = expected
+        cats.forEach((c, i) => {
+          if (counts[i] < avg) chiScores[c] = ((avg - counts[i]) / avg) * 15
+          else chiScores[c] = -((counts[i] - avg) / avg) * 10
+        })
+      } else { cats.forEach(c => chiScores[c] = 0) }
+
+      // Hot/Cold clustering
+      const hotScores: Record<string, number> = {}
+      const recent15 = nonZero.slice(-15)
+      cats.forEach(c => hotScores[c] = 0)
+      recent15.forEach(n => { const c = getCat(n); if (c) hotScores[c]++ })
+      cats.forEach(c => {
+        const pct = (hotScores[c] / Math.max(1, recent15.length)) * 100
+        // Cold dozen bonus (underrepresented in recent spins)
+        if (pct < 20) hotScores[c] = (20 - pct) * 1.5
+        else if (pct > 45) hotScores[c] = -(pct - 45) * 1.0
+        else hotScores[c] = 0
+      })
+
+      const scores: Record<string, number> = {}
+      cats.forEach(c => {
+        scores[c] = freq[c] * 1.0 + markov[c] * 2.5 + streak[c] * 1.5 + gap[c] * 1.2 + sector[c] * 0.8 + chiScores[c] * 1.0 + hotScores[c] * 1.0
+      })
+
+      const confs = toConfidence(scores, cats, 20)
+      const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
+      const labels: Record<string, string> = { d1: '1ra Docena (1-12)', d2: '2da Docena (13-24)', d3: '3ra Docena (25-36)' }
+      const values: Record<string, string> = { d1: '1-12', d2: '13-24', d3: '25-36' }
+      return {
+        type: 'dozen',
+        options: sorted.map(c => ({ value: values[c], label: labels[c], confidence: Math.round(confs[c]) })),
+        bestValue: values[sorted[0]],
+        bestConfidence: Math.round(confs[sorted[0]])
+      }
+    }
+
+    // === COLUMN PREDICTION ===
+    if (betType === 'column') {
+      const cats = ['c1', 'c2', 'c3']
+      const getCat = (n: number) => {
+        if (n === 0) return null
+        const col = n % 3 === 0 ? 3 : n % 3
+        return `c${col}`
+      }
+      const freq = multiWindowFreq(getCat, cats)
+      const markov = markovOrder2(getCat, cats)
+      const gap = gapAnalysis(getCat, cats)
+      const sector = sectorAnalysis(getCat, cats)
+
+      const streaks: Record<string, number> = {}
+      let maxC1 = 0, maxC2 = 0, maxC3 = 0
+      nonZero.forEach(n => {
+        if (n === 0) { maxC1 = 0; maxC2 = 0; maxC3 = 0; return }
+        const col = n % 3 === 0 ? 3 : n % 3
+        if (col === 1) { maxC1++; maxC2 = 0; maxC3 = 0 }
+        else if (col === 2) { maxC2++; maxC1 = 0; maxC3 = 0 }
+        else { maxC3++; maxC1 = 0; maxC2 = 0 }
+      })
+      streaks.c1 = maxC1; streaks.c2 = maxC2; streaks.c3 = maxC3
+      const streak = streakAnalysis(getCat, cats, streaks)
+
+      const c1Count = nonZero.filter(n => n !== 0 && n % 3 === 1).length
+      const c2Count = nonZero.filter(n => n !== 0 && n % 3 === 2).length
+      const c3Count = nonZero.filter(n => n !== 0 && n % 3 === 0).length
+      const expected = nzTotal / 3
+      const chi = chiSquareTest([c1Count, c2Count, c3Count], expected)
+      const chiScores: Record<string, number> = {}
+      if (chi > 5.99) {
+        const counts = [c1Count, c2Count, c3Count]
+        cats.forEach((c, i) => {
+          if (counts[i] < expected) chiScores[c] = ((expected - counts[i]) / expected) * 15
+          else chiScores[c] = -((counts[i] - expected) / expected) * 10
+        })
+      } else { cats.forEach(c => chiScores[c] = 0) }
+
+      const hotScores: Record<string, number> = {}
+      const recent15 = nonZero.slice(-15)
+      cats.forEach(c => hotScores[c] = 0)
+      recent15.forEach(n => { const c = getCat(n); if (c) hotScores[c]++ })
+      cats.forEach(c => {
+        const pct = (hotScores[c] / Math.max(1, recent15.length)) * 100
+        if (pct < 20) hotScores[c] = (20 - pct) * 1.5
+        else if (pct > 45) hotScores[c] = -(pct - 45) * 1.0
+        else hotScores[c] = 0
+      })
+
+      const scores: Record<string, number> = {}
+      cats.forEach(c => {
+        scores[c] = freq[c] * 1.0 + markov[c] * 2.5 + streak[c] * 1.5 + gap[c] * 1.2 + sector[c] * 0.8 + chiScores[c] * 1.0 + hotScores[c] * 1.0
+      })
+
+      const confs = toConfidence(scores, cats, 20)
+      const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
+      const labels: Record<string, string> = { c1: 'Col 1', c2: 'Col 2', c3: 'Col 3' }
+      const values: Record<string, string> = { c1: '1', c2: '2', c3: '3' }
+      return {
+        type: 'column',
+        options: sorted.map(c => ({ value: values[c], label: labels[c], confidence: Math.round(confs[c]) })),
+        bestValue: values[sorted[0]],
+        bestConfidence: Math.round(confs[sorted[0]])
+      }
+    }
+
+    return { type: betType, options: [], bestValue: '', bestConfidence: 50 }
   }, [calculateStats])
+
+  // Legacy wrapper for live system compatibility
+  const generatePrediction = useCallback((nums: number[], betType: BetType): BetPrediction => {
+    const smart = generateSmartPrediction(nums, betType)
+    return { type: smart.type, value: smart.bestValue }
+  }, [generateSmartPrediction])
 
   // Check if a number matches a prediction
   const checkPredictionMatch = useCallback((prediction: BetPrediction, number: number): boolean => {
