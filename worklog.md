@@ -548,3 +548,26 @@ Stage Summary:
 - PeakLevelCharts uses parent data (DashboardLive) for perfect synchronization
 - Peak numbers displayed on top of each bar in dark white color
 - UltimateSignals error fixed with proper null checks
+---
+Task ID: 1
+Agent: Main Agent
+Task: Nuevo sistema de predicción avanzado v3.0 + Backtesting con doble docena
+
+Work Log:
+- Analicé el sistema de predicción existente (EMA, Chi-Square, Markov Orden 1)
+- Diseñé nuevo sistema con 7 capas de análisis: Multi-Window Frequency, Markov Orden 2, Streak Reversion, Gap Detection, Sector Patterns, Chi-Square, Hot/Cold Clustering
+- Implementé `generateSmartPrediction` que retorna opciones con porcentajes de confianza
+- Implementé wrapper `generatePrediction` para compatibilidad con sistema en vivo
+- Actualicé backtesting para soportar modo doble docena (top 2 por confianza)
+- Agregué dropdown "Modo Apuesta" en UI: 1 Docena vs 2 Docenas (Top 2)
+- Actualicé detalle de ciclos para mostrar predicciones con labels (⭐ y 🎯) en amarillo
+- Actualicé predicción en vivo para mostrar opciones con barras de confianza
+- Build exitoso sin errores
+
+Stage Summary:
+- Archivo modificado: src/components/dashboard/DashboardLive.tsx
+- Nuevos tipos: BtDozenMode, SmartPrediction
+- Nuevas funciones: generateSmartPrediction con 7 helpers (multiWindowFreq, markovOrder2, streakAnalysis, gapAnalysis, sectorAnalysis, chiSquareTest, toConfidence)
+- Backtesting: handleRunBacktest reescrito con soporte double dozen
+- UI: dropdown Modo Apuesta visible solo para docenas/columnas
+- Build: ✅ Compiled successfully

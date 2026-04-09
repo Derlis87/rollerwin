@@ -886,22 +886,12 @@ export function DashboardLive() {
       prediction = generatePrediction(newNumbers, selectedBetTypeRef.current)
       setCurrentPrediction(prediction)
       
-      // Calculate confidence
-      const stats = calculateStats(newNumbers)
-      const total = newNumbers.length
-      let conf = 50
+      // Generate smart prediction for confidence display
+      const smart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
+      setSmartPrediction(smart)
       
-      if (prediction.type === 'color') {
-        const redPct = (stats.red / total) * 100
-        const blackPct = (stats.black / total) * 100
-        conf = 50 + Math.abs(redPct - blackPct)
-      } else if (prediction.type === 'parity') {
-        const nonZeroTotal = newNumbers.filter(n => n !== 0).length || 1
-        const oddPct = (stats.odd / nonZeroTotal) * 100
-        const evenPct = (stats.even / nonZeroTotal) * 100
-        conf = 50 + Math.abs(oddPct - evenPct)
-      }
-      
+      // Calculate confidence from smart prediction
+      const conf = smart.bestConfidence
       setConfidence(Math.min(85, conf))
     }
     
@@ -990,6 +980,9 @@ export function DashboardLive() {
         if (newNumbers.length >= 5 && !calcCycleActiveRef.current) {
           const newPrediction = generatePrediction(newNumbers, selectedBetTypeRef.current)
           setCurrentPrediction(newPrediction)
+          const newSmart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
+          setSmartPrediction(newSmart)
+          setConfidence(Math.min(85, newSmart.bestConfidence))
         }
       } else {
         // FAILED - increment peak
@@ -1080,10 +1073,13 @@ export function DashboardLive() {
         if (newNumbers.length >= 5 && !calcCycleActiveRef.current) {
           const newPrediction = generatePrediction(newNumbers, selectedBetTypeRef.current)
           setCurrentPrediction(newPrediction)
+          const newSmart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
+          setSmartPrediction(newSmart)
+          setConfidence(Math.min(85, newSmart.bestConfidence))
         }
       }
     }
-  }, [generatePrediction, checkPredictionMatch, calculateStats])
+  }, [generatePrediction, generateSmartPrediction, checkPredictionMatch, calculateStats])
 
   // Start demo mode
   const startDemoMode = useCallback(() => {
@@ -1541,12 +1537,37 @@ export function DashboardLive() {
           </div>
         </div>
 
-        {/* Prediction */}
-        {currentPrediction && (
+        {/* Prediction with confidence */}
+        {currentPrediction && numbers.length >= 5 && (
           <div className="p-3 border-b border-zinc-700">
-            <div className="text-xs text-zinc-400 mb-1">Predicción:</div>
+            <div className="text-xs text-zinc-400 mb-2">🎯 Predicción IA v3.0:</div>
             <div className="text-lg font-bold text-amber-500">{getPredictionDisplay()}</div>
-            <div className="flex items-center gap-2 mt-1">
+            {/* Smart prediction options with confidence */}
+            {smartPrediction && smartPrediction.options.length > 1 && (
+              <div className="mt-2 space-y-1.5">
+                {smartPrediction.options.map((opt, oi) => (
+                  <div key={oi} className={`flex items-center justify-between px-2 py-1 rounded text-xs ${
+                    oi === 0 ? 'bg-yellow-500/10 border border-yellow-500/20' : 'bg-zinc-800/50'
+                  }`}>
+                    <span className={oi === 0 ? 'text-yellow-400 font-bold' : 'text-zinc-400'}>
+                      {oi === 0 ? '⭐' : '  '} {opt.label}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <div className="w-16 h-1.5 bg-zinc-700 rounded-full overflow-hidden">
+                        <div 
+                          className={`h-full rounded-full ${oi === 0 ? 'bg-yellow-400' : 'bg-zinc-500'}`}
+                          style={{ width: `${opt.confidence}%` }}
+                        />
+                      </div>
+                      <span className={`font-mono font-bold w-8 text-right ${oi === 0 ? 'text-yellow-400' : 'text-zinc-500'}`}>
+                        {opt.confidence}%
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center gap-2 mt-2">
               <Progress value={confidence} className="h-1.5 flex-1" />
               <span className="text-xs text-zinc-400">{confidence}%</span>
             </div>
