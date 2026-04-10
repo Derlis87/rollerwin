@@ -457,28 +457,25 @@ export function DashboardLive() {
         const slice = nonZero.slice(-w)
         const sTotal = slice.length || 1
         const expected = (1 / cats.length) * 100
-        slice.forEach(n => {
-          const c = getCat(n)
-          if (c) scores[c] = scores[c] || 0
-        })
         // Weight: more recent windows matter more
-        const weight = [1, 1.5, 2, 2.5][wi]
-        slice.forEach(n => {
-          const c = getCat(n)
-          if (c) scores[c] += weight
-        })
-        // Reversion bonus: underrepresented categories get boosted
+        const weight = [1, 1.5, 2.5, 3][wi]
+        // Count actual frequency in this window
         const freqs: Record<string, number> = {}
         cats.forEach(c => freqs[c] = 0)
         slice.forEach(n => {
           const c = getCat(n)
           if (c) freqs[c]++
         })
+        // Base frequency score (weighted)
+        cats.forEach(c => {
+          scores[c] += freqs[c] * weight
+        })
+        // Mean reversion: underrepresented categories get boosted
         cats.forEach(c => {
           const actual = (freqs[c] / sTotal) * 100
           const deviation = expected - actual
           // Strong mean reversion signal for larger deviations
-          scores[c] += deviation * weight * 0.8
+          scores[c] += deviation * weight * 0.6
         })
       })
       return scores
@@ -533,7 +530,7 @@ export function DashboardLive() {
       return scores
     }
 
-    // --- HELPER: Streak analysis with smart reversion ---
+    // --- HELPER: Streak analysis with smart reversion and continuation detection ---
     const streakAnalysis = (getCat: (n: number) => string | null, cats: string[], streaks: Record<string, number>) => {
       const scores: Record<string, number> = {}
       cats.forEach(c => scores[c] = 0)
@@ -546,13 +543,40 @@ export function DashboardLive() {
         }
       })
       if (streakCat && maxStreak >= 3) {
-        const reversionStrength = Math.min(25, maxStreak * 5)
+        const reversionStrength = Math.min(30, maxStreak * 6)
         cats.forEach(c => {
           if (c !== streakCat) scores[c] += reversionStrength / (cats.length - 1)
         })
         scores[streakCat!] -= reversionStrength
+      } else if (streakCat && maxStreak === 2) {
+        // Mild reversion signal for streak of 2
+        cats.forEach(c => {
+          if (c !== streakCat) scores[c] += 5
+        })
+        scores[streakCat!] -= 5
       }
       return scores
+    }
+
+    // --- HELPER: Momentum / continuation detection ---
+    const momentumAnalysis = (getCat: (n: number) => string | null, cats: string[]): string | null => {
+      if (nonZero.length < 8) return null
+      const last8 = nonZero.slice(-8).map(n => getCat(n)).filter(Boolean)
+      if (last8.length < 6) return null
+      // Count last 6 occurrences
+      const last6 = last8.slice(-6)
+      const counts: Record<string, number> = {}
+      last6.forEach(c => { if (c) counts[c] = (counts[c] || 0) + 1 })
+      // If one category dominates (>60%), detect momentum
+      let dominant: string | null = null
+      cats.forEach(c => {
+        if ((counts[c] || 0) >= 4) dominant = c
+      })
+      // Only signal momentum if it's the most recent trend (not reversed yet)
+      if (dominant && last8[last8.length - 1] === dominant && last8[last8.length - 2] === dominant) {
+        return dominant
+      }
+      return null
     }
 
     // --- HELPER: Gap/absence detection ---
@@ -580,7 +604,8 @@ export function DashboardLive() {
       cats.forEach(c => scores[c] = 0)
       // Alternation pattern: if alternating, predict the one not in last position
       if (nonZero.length >= 4) {
-        const last4 = nonZero.slice(-4).map(n => getCat(n)).filter(Boolean)
+        const last4raw = nonZero.slice(-4).map(n => getCat(n))
+        const last4 = last4raw.filter((c): c is string => c !== null)
         if (last4.length >= 4) {
           let alternating = true
           for (let i = 1; i < last4.length; i++) {
@@ -617,12 +642,10 @@ export function DashboardLive() {
       const confs: Record<string, number> = {}
       cats.forEach(c => {
         const weight = shifted[c] / totalShifted // 0..1
-        // Spread: best gets expectedPct + spread, worst gets expectedPct - spread
-        // For binary: expected=48.6, spread max ~25 → best ~65, worst ~35
-        // For triple: expected=32.4, spread max ~18 → best ~50, worst ~18
-        const maxSpread = cats.length === 2 ? 22 : 16
+        // Dynamic spread based on how dominant the best option is
+        const maxSpread = cats.length === 2 ? 28 : 20
         const conf = expectedPct + (weight * 2 - 1) * maxSpread
-        confs[c] = Math.max(8, Math.min(88, conf))
+        confs[c] = Math.max(5, Math.min(92, conf))
       })
       // Normalize to sum exactly 100
       const sum = Object.values(confs).reduce((s, v) => s + v, 0) || 1
@@ -644,10 +667,13 @@ export function DashboardLive() {
       })
       streaks.red = maxR; streaks.black = maxB
       const streak = streakAnalysis(getCat, cats, streaks)
+      const momentum = momentumAnalysis(getCat, cats)
 
       const scores: Record<string, number> = {}
       cats.forEach(c => {
-        scores[c] = freq[c] * 1.0 + markov[c] * 2.0 + streak[c] * 1.5
+        scores[c] = freq[c] * 1.0 + markov[c] * 2.5 + streak[c] * 2.0
+        // Momentum override: if strong trend detected, favor continuation
+        if (momentum === c) scores[c] += 12
       })
 
       const confs = toConfidence(scores, cats, 48.6)
@@ -674,10 +700,12 @@ export function DashboardLive() {
       })
       streaks.odd = maxO; streaks.even = maxE
       const streak = streakAnalysis(getCat, cats, streaks)
+      const momentum = momentumAnalysis(getCat, cats)
 
       const scores: Record<string, number> = {}
       cats.forEach(c => {
-        scores[c] = freq[c] * 1.0 + markov[c] * 2.0 + streak[c] * 1.5
+        scores[c] = freq[c] * 1.0 + markov[c] * 2.5 + streak[c] * 2.0
+        if (momentum === c) scores[c] += 12
       })
 
       const confs = toConfidence(scores, cats, 48.6)
@@ -740,8 +768,10 @@ export function DashboardLive() {
       })
 
       const scores: Record<string, number> = {}
+      const momentum = momentumAnalysis(getCat, cats)
       cats.forEach(c => {
-        scores[c] = freq[c] * 1.0 + markov[c] * 2.5 + streak[c] * 1.5 + gap[c] * 1.2 + sector[c] * 0.8 + chiScores[c] * 1.0 + hotScores[c] * 1.0
+        scores[c] = freq[c] * 1.0 + markov[c] * 2.5 + streak[c] * 2.0 + gap[c] * 1.5 + sector[c] * 1.0 + chiScores[c] * 1.2 + hotScores[c] * 1.2
+        if (momentum === c) scores[c] += 8
       })
 
       const confs = toConfidence(scores, cats, 20)
@@ -807,8 +837,10 @@ export function DashboardLive() {
       })
 
       const scores: Record<string, number> = {}
+      const momentum = momentumAnalysis(getCat, cats)
       cats.forEach(c => {
-        scores[c] = freq[c] * 1.0 + markov[c] * 2.5 + streak[c] * 1.5 + gap[c] * 1.2 + sector[c] * 0.8 + chiScores[c] * 1.0 + hotScores[c] * 1.0
+        scores[c] = freq[c] * 1.0 + markov[c] * 2.5 + streak[c] * 2.0 + gap[c] * 1.5 + sector[c] * 1.0 + chiScores[c] * 1.2 + hotScores[c] * 1.2
+        if (momentum === c) scores[c] += 8
       })
 
       const confs = toConfidence(scores, cats, 20)
