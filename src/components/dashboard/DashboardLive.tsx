@@ -165,7 +165,7 @@ interface BacktestResults {
   peakLevel: PeakLevel
   peakCycles: number
   avgBetsPerCycle: number
-  fibonacciDetail: { cycle: number; bets: number[]; result: 'win' | 'loss'; profit: number; entryPeak: number; predicted: string[] }[]
+  fibonacciDetail: { cycle: number; bets: number[]; result: 'win' | 'loss'; profit: number; entryPeak: number; predicted: string[]; strategyStep?: number[] }[]
   btDozenMode: BtDozenMode
 }
 
@@ -207,6 +207,7 @@ export function DashboardLive() {
   const [btAmount, setBtAmount] = useState<string>('1')
   const [btPeakLevel, setBtPeakLevel] = useState<PeakLevel>('low')
   const [btDozenMode, setBtDozenMode] = useState<BtDozenMode>('single')
+  const [btStrategy, setBtStrategy] = useState<'martingala' | 'paroli'>('paroli')
 
   // Live smart prediction
   const [smartPrediction, setSmartPrediction] = useState<SmartPrediction | null>(null)
@@ -235,8 +236,11 @@ export function DashboardLive() {
   const calcCycleActiveRef = useRef(false) // whether a cycle is actively being tracked
   const calcCyclePredictionRef = useRef<BetPrediction | null>(null) // fixed prediction for the entire cycle
   const calcDozenModeRef = useRef<BtDozenMode>('single')
+  const calcStrategyRef = useRef<'martingala' | 'paroli'>('paroli')
   const smartPredictionRef = useRef<SmartPrediction | null>(null)
-  const FIB = [1, 1, 2, 3, 5, 8, 13, 21]
+  // Progression arrays: Martingala increases on loss, Paroli increases on win
+  const MARTINGALA = [1, 2, 4]
+  const PAROLI = [1, 2, 4]
   const MAX_CALC_BETS = 3
   const [calcDisplay, setCalcDisplay] = useState<{ cycles: typeof calcHistoryRef.current; runningBankroll: number; totalProfit: number; wins: number; losses: number; isActive: boolean } | null>(null)
 
@@ -982,8 +986,10 @@ export function DashboardLive() {
             const bt = calcBetTypeRef.current
             const isFlatBet = bt === 'color' || bt === 'parity'
             const isDoubleCalc = !isFlatBet && calcDozenModeRef.current === 'double'
+            const strategy = calcStrategyRef.current
             const betIdx = calcCurrentBetIndexRef.current
-            const singleBet = isFlatBet ? betAmount : betAmount * (FIB[betIdx] || FIB[FIB.length - 1])
+            const progression = strategy === 'paroli' ? PAROLI : MARTINGALA
+            const singleBet = isFlatBet ? betAmount : betAmount * (progression[betIdx] || progression[progression.length - 1])
             const totalBet = isDoubleCalc ? singleBet * 2 : singleBet
             // Payout: winning bet pays profit, minus losing bets in double mode
             const payoutPerWin = isFlatBet ? singleBet : singleBet * 2
@@ -994,20 +1000,35 @@ export function DashboardLive() {
             calcCurrentCycleProfitRef.current += payout
             calcRunningBankrollRef.current += payout
 
-            // Complete cycle
-            calcCyclesRef.current++
-            calcHistoryRef.current.push({
-              cycle: calcCyclesRef.current,
-              bets: [...calcCurrentCycleBetsRef.current],
-              cycleProfit: calcCurrentCycleProfitRef.current,
-              entryPeak: calcCurrentCycleEntryPeakRef.current,
-              runningBankroll: calcRunningBankrollRef.current
-            })
-
-            updateCalcDisplay()
-            resetCalcCycle()
-            calcCycleActiveRef.current = false
-            calcCyclePredictionRef.current = null
+            if (strategy === 'paroli') {
+              // Paroli: WIN completes the cycle (collect winnings, reset bet index)
+              calcCyclesRef.current++
+              calcHistoryRef.current.push({
+                cycle: calcCyclesRef.current,
+                bets: [...calcCurrentCycleBetsRef.current],
+                cycleProfit: calcCurrentCycleProfitRef.current,
+                entryPeak: calcCurrentCycleEntryPeakRef.current,
+                runningBankroll: calcRunningBankrollRef.current
+              })
+              updateCalcDisplay()
+              resetCalcCycle()
+              calcCycleActiveRef.current = false
+              calcCyclePredictionRef.current = null
+            } else {
+              // Martingala: WIN completes the cycle (reset bet index)
+              calcCyclesRef.current++
+              calcHistoryRef.current.push({
+                cycle: calcCyclesRef.current,
+                bets: [...calcCurrentCycleBetsRef.current],
+                cycleProfit: calcCurrentCycleProfitRef.current,
+                entryPeak: calcCurrentCycleEntryPeakRef.current,
+                runningBankroll: calcRunningBankrollRef.current
+              })
+              updateCalcDisplay()
+              resetCalcCycle()
+              calcCycleActiveRef.current = false
+              calcCyclePredictionRef.current = null
+            }
           } else {
             // Peak out of range — close partial cycle if any, wait for next in-range peak
             if (calcCycleActiveRef.current) {
@@ -1060,17 +1081,18 @@ export function DashboardLive() {
             const bt = calcBetTypeRef.current
             const isFlatBet = bt === 'color' || bt === 'parity'
             const isDoubleCalc = !isFlatBet && calcDozenModeRef.current === 'double'
+            const strategy = calcStrategyRef.current
             const betIdx = calcCurrentBetIndexRef.current
-            const singleBet = isFlatBet ? betAmount : betAmount * (FIB[betIdx] || FIB[FIB.length - 1])
+            const progression = strategy === 'paroli' ? PAROLI : MARTINGALA
+            const singleBet = isFlatBet ? betAmount : betAmount * (progression[betIdx] || progression[progression.length - 1])
             const totalBet = isDoubleCalc ? singleBet * 2 : singleBet
 
             calcCurrentCycleBetsRef.current.push({ amount: totalBet, result: 'loss', payout: 0 })
             calcCurrentCycleProfitRef.current -= totalBet
             calcRunningBankrollRef.current -= totalBet
-            calcCurrentBetIndexRef.current++
 
-            // Close cycle if reached max bets (3)
-            if (calcCurrentBetIndexRef.current >= MAX_CALC_BETS) {
+            if (strategy === 'paroli') {
+              // Paroli: LOSS resets bet to base, closes cycle
               calcCyclesRef.current++
               calcHistoryRef.current.push({
                 cycle: calcCyclesRef.current,
@@ -1079,30 +1101,49 @@ export function DashboardLive() {
                 entryPeak: calcCurrentCycleEntryPeakRef.current,
                 runningBankroll: calcRunningBankrollRef.current
               })
-
               updateCalcDisplay()
               resetCalcCycle()
               calcCycleActiveRef.current = false
               calcCyclePredictionRef.current = null
             } else {
-              // Still in cycle, update display
-              const allWins = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'win').length, 0)
-              const allLosses = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'loss').length, 0) + calcCurrentCycleBetsRef.current.filter(b => b.result === 'loss').length
-              const totalProfit = calcHistoryRef.current.reduce((s, c) => s + c.cycleProfit, 0) + calcCurrentCycleProfitRef.current
-              setCalcDisplay({
-                cycles: [...calcHistoryRef.current, {
-                  cycle: calcCyclesRef.current + 1,
+              // Martingala: LOSS increases bet index
+              calcCurrentBetIndexRef.current++
+
+              // Close cycle if reached max bets (3)
+              if (calcCurrentBetIndexRef.current >= MAX_CALC_BETS) {
+                calcCyclesRef.current++
+                calcHistoryRef.current.push({
+                  cycle: calcCyclesRef.current,
                   bets: [...calcCurrentCycleBetsRef.current],
                   cycleProfit: calcCurrentCycleProfitRef.current,
                   entryPeak: calcCurrentCycleEntryPeakRef.current,
                   runningBankroll: calcRunningBankrollRef.current
-                }],
-                runningBankroll: calcRunningBankrollRef.current,
-                totalProfit,
-                wins: allWins,
-                losses: allLosses,
-                isActive: true
-              })
+                })
+
+                updateCalcDisplay()
+                resetCalcCycle()
+                calcCycleActiveRef.current = false
+                calcCyclePredictionRef.current = null
+              } else {
+                // Still in cycle, update display
+                const allWins = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'win').length, 0)
+                const allLosses = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'loss').length, 0) + calcCurrentCycleBetsRef.current.filter(b => b.result === 'loss').length
+                const totalProfit = calcHistoryRef.current.reduce((s, c) => s + c.cycleProfit, 0) + calcCurrentCycleProfitRef.current
+                setCalcDisplay({
+                  cycles: [...calcHistoryRef.current, {
+                    cycle: calcCyclesRef.current + 1,
+                    bets: [...calcCurrentCycleBetsRef.current],
+                    cycleProfit: calcCurrentCycleProfitRef.current,
+                    entryPeak: calcCurrentCycleEntryPeakRef.current,
+                    runningBankroll: calcRunningBankrollRef.current
+                  }],
+                  runningBankroll: calcRunningBankrollRef.current,
+                  totalProfit,
+                  wins: allWins,
+                  losses: allLosses,
+                  isActive: true
+                })
+              }
             }
           } else {
             // Peak out of range — no bet was placed
@@ -1269,7 +1310,7 @@ export function DashboardLive() {
     setImportPreview(null)
   }, [importPreview, generatePrediction, calculateStats])
 
-  // Handle run backtest - con soporte para apuesta doble en docenas/columnas
+  // Handle run backtest - Martingala (sube en loss) o Paroli (sube en win)
   const handleRunBacktest = useCallback(() => {
     const nums = numbersRef.current
     if (nums.length < 6) return
@@ -1278,7 +1319,8 @@ export function DashboardLive() {
     const betType = btBetType
     const peakLevel = btPeakLevel
     const dozenMode = btDozenMode
-    const FIB = [1, 1, 2, 3, 5, 8, 13, 21]
+    const strategy = btStrategy
+    const PROGRESSION = [1, 2, 4]
     const MAX_BETS = 3
     const isFlatBet = betType === 'color' || betType === 'parity'
     // Docenas/columnas pagan 2:1, colores/paridad pagan 1:1
@@ -1312,7 +1354,9 @@ export function DashboardLive() {
 
     // Estado del sistema
     let currentPeak = 1
-    let predValues: string[] = [] // 1 valor (single) o 2 valores (double)
+    let predValues: string[] = []
+    // Paroli state: track consecutive wins across cycles
+    let paroliWinStreak = 0 // 0, 1, 2 — resets on loss, cycles back to 0 after 3 wins
 
     // Estado calculadora
     let cycleActive = false
@@ -1321,6 +1365,7 @@ export function DashboardLive() {
     let cycleProfit = 0
     let cycleEntryPeak = 0
     let cyclePredicted: string[] = []
+    let cycleStrategySteps: number[] = []
 
     // Contadores
     let wins = 0, losses = 0, netProfit = 0
@@ -1328,32 +1373,42 @@ export function DashboardLive() {
     let maxWinStreak = 0, maxLossStreak = 0
     let currentWinStreak = 0, currentLossStreak = 0
     const profitCurve: number[] = [0]
-    const fibonacciDetail: BacktestResults['fibonacciDetail'] = []
+    const detailList: BacktestResults['fibonacciDetail'] = []
 
     const closeCycle = (result: 'win' | 'loss') => {
-      fibonacciDetail.push({
-        cycle: fibonacciDetail.length + 1,
+      detailList.push({
+        cycle: detailList.length + 1,
         bets: [...cycleBets],
         result,
         profit: cycleProfit,
         entryPeak: cycleEntryPeak,
-        predicted: [...cyclePredicted]
+        predicted: [...cyclePredicted],
+        strategyStep: [...cycleStrategySteps]
       })
       cycleActive = false
       cycleBetIndex = 0
       cycleBets = []
       cycleProfit = 0
       cyclePredicted = []
+      cycleStrategySteps = []
     }
 
     const getSmartPred = (n: number[]) => {
       const smart = generateSmartPrediction(n, betType)
       if (useDouble && smart.options.length >= 2) {
-        // Top 2 opciones por confianza
         const sorted = [...smart.options].sort((a, b) => b.confidence - a.confidence)
         return [sorted[0].value, sorted[1].value]
       }
       return [smart.bestValue]
+    }
+
+    // Get the current progression multiplier based on strategy
+    const getCurrentMultiplier = () => {
+      if (strategy === 'paroli') {
+        return PROGRESSION[Math.min(paroliWinStreak, PROGRESSION.length - 1)]
+      } else {
+        return PROGRESSION[cycleBetIndex] || PROGRESSION[PROGRESSION.length - 1]
+      }
     }
 
     // Simulación número por número
@@ -1374,9 +1429,9 @@ export function DashboardLive() {
       if (anyMatch) {
         // ====== WIN ======
         if (cycleActive && isPeakInRange(peakAtCheck)) {
-          const fibMult = isFlatBet ? 1 : (FIB[cycleBetIndex] || FIB[FIB.length - 1])
+          const mult = getCurrentMultiplier()
           const numBets = predValues.length
-          const singleBetAmt = amount * fibMult
+          const singleBetAmt = amount * mult
           const betAmt = singleBetAmt * numBets
           // Correct payout: winning bet pays (payoutMult * singleBet), minus losing bets cost
           const winProfit = getPayout(betType) * singleBetAmt
@@ -1390,8 +1445,19 @@ export function DashboardLive() {
           currentLossStreak = 0
           currentDrawdown = Math.max(0, currentDrawdown - Math.abs(payout))
           if (currentWinStreak > maxWinStreak) maxWinStreak = currentWinStreak
-          // Track predictions used at this bet
+          // Track predictions and strategy step
           cyclePredicted = [...new Set([...cyclePredicted, ...predValues])]
+          cycleStrategySteps.push(mult)
+
+          if (strategy === 'paroli') {
+            // Paroli: WIN → increment streak, close cycle, next cycle uses higher bet
+            paroliWinStreak++
+            if (paroliWinStreak >= MAX_BETS) {
+              // Completed 3-win Paroli cycle → collect and reset
+              paroliWinStreak = 0
+            }
+          }
+
           closeCycle('win')
           profitCurve.push(netProfit)
         } else if (cycleActive && !isPeakInRange(peakAtCheck)) {
@@ -1405,9 +1471,9 @@ export function DashboardLive() {
       } else {
         // ====== LOSS ======
         if (cycleActive && isPeakInRange(peakAtCheck)) {
-          const fibMult = isFlatBet ? 1 : (FIB[cycleBetIndex] || FIB[FIB.length - 1])
+          const mult = getCurrentMultiplier()
           const numBets = predValues.length
-          const singleBetAmt = amount * fibMult
+          const singleBetAmt = amount * mult
           const betAmt = singleBetAmt * numBets
           cycleBets.push(betAmt)
           cycleProfit -= betAmt
@@ -1418,14 +1484,22 @@ export function DashboardLive() {
           currentDrawdown += betAmt
           if (currentDrawdown > maxDrawdown) maxDrawdown = currentDrawdown
           if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak
-          cycleBetIndex++
+          cycleStrategySteps.push(mult)
+
+          if (strategy === 'paroli') {
+            // Paroli: LOSS → reset streak to 0, close cycle
+            paroliWinStreak = 0
+            closeCycle('loss')
+          } else {
+            // Martingala: LOSS → increase bet index for next phase
+            cycleBetIndex++
+            if (cycleBetIndex >= MAX_BETS) {
+              closeCycle('loss')
+            }
+          }
           profitCurve.push(netProfit)
           // Track prediction used at this bet
           cyclePredicted = [...new Set([...cyclePredicted, ...predValues])]
-
-          if (cycleBetIndex >= MAX_BETS) {
-            closeCycle('loss')
-          }
         } else if (cycleActive && !isPeakInRange(peakAtCheck)) {
           closeCycle('loss')
         } else if (!cycleActive && isPeakInRange(peakAtCheck)) {
@@ -1436,10 +1510,11 @@ export function DashboardLive() {
           cycleProfit = 0
           cycleEntryPeak = peakAtCheck
           cyclePredicted = [...predValues]
+          cycleStrategySteps = []
 
-          const fibMult = isFlatBet ? 1 : FIB[0]
+          const mult = getCurrentMultiplier()
           const numBets = predValues.length
-          const singleBetAmt = amount * fibMult
+          const singleBetAmt = amount * mult
           const betAmt = singleBetAmt * numBets
           cycleBets.push(betAmt)
           cycleProfit -= betAmt
@@ -1450,12 +1525,20 @@ export function DashboardLive() {
           currentDrawdown += betAmt
           if (currentDrawdown > maxDrawdown) maxDrawdown = currentDrawdown
           if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak
-          cycleBetIndex++
-          profitCurve.push(netProfit)
+          cycleStrategySteps.push(mult)
 
-          if (cycleBetIndex >= MAX_BETS) {
+          if (strategy === 'paroli') {
+            // Paroli: LOSS → reset streak
+            paroliWinStreak = 0
             closeCycle('loss')
+          } else {
+            // Martingala: increment bet index
+            cycleBetIndex++
+            if (cycleBetIndex >= MAX_BETS) {
+              closeCycle('loss')
+            }
           }
+          profitCurve.push(netProfit)
         }
 
         currentPeak++
@@ -1470,17 +1553,17 @@ export function DashboardLive() {
 
     const totalBets = wins + losses
     const winRate = totalBets > 0 ? ((wins / totalBets) * 100) : 0
-    const totalInvested = fibonacciDetail.reduce((s, c) => s + c.bets.reduce((a, b) => a + b, 0), 0)
+    const totalInvested = detailList.reduce((s, c) => s + c.bets.reduce((a, b) => a + b, 0), 0)
     const roi = totalInvested > 0 ? ((netProfit / totalInvested) * 100) : 0
-    const peakCycles = fibonacciDetail.length
+    const peakCycles = detailList.length
     const avgBetsPerCycle = peakCycles > 0 ? (totalBets / peakCycles) : 0
 
     setBacktestResults({
       wins, losses, netProfit, roi, maxDrawdown, totalBets, profitCurve,
       winRate, maxWinStreak, maxLossStreak, totalInvested,
-      betType, amount, peakLevel, peakCycles, avgBetsPerCycle, fibonacciDetail, btDozenMode: dozenMode
+      betType, amount, peakLevel, peakCycles, avgBetsPerCycle, fibonacciDetail: detailList, btDozenMode: dozenMode
     })
-  }, [generateSmartPrediction, generatePrediction, checkPredictionMatch, btBetType, btAmount, btPeakLevel, btDozenMode])
+  }, [generateSmartPrediction, generatePrediction, checkPredictionMatch, btBetType, btAmount, btPeakLevel, btDozenMode, btStrategy])
 
   // Get number button style
   const getNumberButtonStyle = (num: number) => {
@@ -2091,11 +2174,33 @@ export function DashboardLive() {
                     <div>
                       <label className="text-[10px] text-zinc-500 block mb-1">Modo Apuesta</label>
                       <div className="grid grid-cols-2 gap-1">
-                        <button onClick={() => { calcDozenModeRef.current = 'single'; if (calcEnabled) resetCalculator() }} className={`py-1 rounded-lg text-[10px] font-bold transition-all ${calcDozenModeRef.current === 'single' ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50' : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50'}`}>🎯 1 Opción</button>
-                        <button onClick={() => { calcDozenModeRef.current = 'double'; if (calcEnabled) resetCalculator() }} className={`py-1 rounded-lg text-[10px] font-bold transition-all ${calcDozenModeRef.current === 'double' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/50' : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50'}`}>🎯🎯 2 Opciones</button>
+                        <button onClick={() => { calcDozenModeRef.current = 'single'; if (calcEnabled) resetCalculator() }} className={`py-1 rounded-lg text-[10px] font-bold transition-all ${calcDozenModeRef.current === 'single' ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50' : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50'}`}>1 Opcion</button>
+                        <button onClick={() => { calcDozenModeRef.current = 'double'; if (calcEnabled) resetCalculator() }} className={`py-1 rounded-lg text-[10px] font-bold transition-all ${calcDozenModeRef.current === 'double' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/50' : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50'}`}>2 Opciones</button>
                       </div>
                     </div>
                   )}
+
+                  {/* Strategy selector */}
+                  <div>
+                    <label className="text-[10px] text-zinc-500 block mb-1">Estrategia</label>
+                    <div className="grid grid-cols-2 gap-1">
+                      <button onClick={() => { calcStrategyRef.current = 'paroli'; if (calcEnabled) resetCalculator() }} className={`py-1 rounded-lg text-[10px] font-bold transition-all ${calcStrategyRef.current === 'paroli' ? 'bg-green-500/20 text-green-400 border border-green-500/50' : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50'}`}>Paroli (Win+)</button>
+                      <button onClick={() => { calcStrategyRef.current = 'martingala'; if (calcEnabled) resetCalculator() }} className={`py-1 rounded-lg text-[10px] font-bold transition-all ${calcStrategyRef.current === 'martingala' ? 'bg-orange-500/20 text-orange-400 border border-orange-500/50' : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50'}`}>Martingala</button>
+                    </div>
+                  </div>
+
+                  {/* Strategy visual indicator */}
+                  <div className="flex items-center gap-1.5 p-1.5 bg-zinc-800/40 rounded-lg">
+                    <span className="text-[9px] text-zinc-500">{calcStrategyRef.current === 'paroli' ? 'Paroli:' : 'Martingala:'}</span>
+                    <div className="flex gap-0.5">
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-cyan-600/40 text-cyan-300">x1</span>
+                      <span className="text-zinc-600">{'->'}</span>
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-orange-600/40 text-orange-300">x2</span>
+                      <span className="text-zinc-600">{'->'}</span>
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-red-600/40 text-red-300">x4</span>
+                    </div>
+                    <span className="text-[9px] text-zinc-600">({calcStrategyRef.current === 'paroli' ? 'sube al ganar' : 'sube al perder'})</span>
+                  </div>
 
                   {calcEnabled && (
                     <>
@@ -2356,18 +2461,39 @@ export function DashboardLive() {
                       Ejecutar
                     </Button>
                   </div>
+
+                  {/* Strategy selector */}
+                  <div className="flex items-center gap-2 p-2 bg-zinc-800/40 rounded-lg">
+                    <span className="text-[9px] text-zinc-500">Estrategia:</span>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => { setBtStrategy('paroli'); setBacktestResults(null) }}
+                        className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${btStrategy === 'paroli' ? 'bg-green-500/30 text-green-300 border border-green-500/50' : 'bg-zinc-800 text-zinc-500 border border-zinc-700/50'}`}
+                      >
+                        Paroli (Win+)
+                      </button>
+                      <button
+                        onClick={() => { setBtStrategy('martingala'); setBacktestResults(null) }}
+                        className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${btStrategy === 'martingala' ? 'bg-orange-500/30 text-orange-300 border border-orange-500/50' : 'bg-zinc-800 text-zinc-500 border border-zinc-700/50'}`}
+                      >
+                        Martingala (Loss+)
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Info bar */}
                 <div className="flex items-center gap-2 p-2 bg-zinc-800/60 rounded-lg text-xs text-zinc-500">
                   <Activity className="w-3.5 h-3.5 text-cyan-400" />
                   <span>
-                    <strong className="text-white">{numbers.length}</strong> números · 
+                    <strong className="text-white">{numbers.length}</strong> numeros · 
                     {BET_TYPE_OPTIONS.find(b => b.id === btBetType)?.icon} {BET_TYPE_OPTIONS.find(b => b.id === btBetType)?.name} · 
                     <span className={btPeakLevel === 'low' ? 'text-teal-400' : btPeakLevel === 'medium' ? 'text-amber-400' : 'text-red-400'}>
                       {btPeakLevel === 'low' ? 'Pico Bajo (1-3)' : btPeakLevel === 'medium' ? 'Pico Medio (4-6)' : 'Pico Alto (7+)'}
                     </span> · 
-                    Fibonacci 3 jugadas
+                    <span className={btStrategy === 'paroli' ? 'text-green-400 font-bold' : 'text-orange-400 font-bold'}>
+                      {btStrategy === 'paroli' ? 'Paroli' : 'Martingala'} {'x1->x2->x4'}
+                    </span>
                     {(btBetType === 'dozen' || btBetType === 'column') && (
                       <> · <span className={btDozenMode === 'double' ? 'text-yellow-400 font-bold' : 'text-white'}>{btDozenMode === 'double' ? '🎯🎯 2 Docenas' : '🎯 1 Docena'}</span></>
                     )}
@@ -2377,7 +2503,7 @@ export function DashboardLive() {
                 {/* Results */}
                 {!backtestResults ? (
                   <p className="text-zinc-500 text-sm text-center py-6">
-                    Selecciona el nivel de pico y haz clic en "Ejecutar" para simular entrada con proyección Fibonacci.
+                    Selecciona estrategia y nivel de pico, haz clic en "Ejecutar" para simular.
                   </p>
                 ) : (
                   <div className="space-y-4">
@@ -2430,19 +2556,24 @@ export function DashboardLive() {
                       </div>
                     </div>
 
-                    {/* Fibonacci Sequence Info */}
+                    {/* Strategy Info */}
                     <div className="p-3 bg-zinc-800/60 rounded-lg border border-zinc-700/50">
-                      <div className="text-xs text-zinc-400 mb-2 font-bold">📊 Proyección Fibonacci por Ciclo</div>
+                      <div className="text-xs text-zinc-400 mb-2 font-bold">
+                        {btStrategy === 'paroli' ? '🟢 Paroli — Sube al ganar, baja al perder' : '🟠 Martingala — Sube al perder, baja al ganar'}
+                      </div>
                       <div className="flex items-center gap-3 mb-2">
                         <div className="flex gap-1.5">
-                          {[1, 1, 2].map((f, i) => (
-                            <div key={i} className="bg-zinc-700 px-2.5 py-1 rounded text-xs text-white font-mono font-bold">
-                              ×{f}
+                          {[1, 2, 4].map((f, i) => (
+                            <div key={i} className={`px-2.5 py-1 rounded text-xs text-white font-mono font-bold ${i === 0 ? 'bg-cyan-600/60' : i === 1 ? 'bg-orange-600/60' : 'bg-red-600/60'}`}>
+                              x{f}
                             </div>
                           ))}
                         </div>
                         <span className="text-[10px] text-zinc-500">
-                          Secuencia: $1 → $1 → $2 (3 jugadas máx. por ciclo)
+                          {btStrategy === 'paroli'
+                            ? 'Win: x1 -> x2 -> x4 (3 wins max = cobrar). Loss: reset a x1'
+                            : 'Loss: x1 -> x2 -> x4 (3 fases max). Win: reset a x1'
+                          }
                         </span>
                       </div>
                       <div className="grid grid-cols-3 gap-3 text-center">
@@ -2492,8 +2623,8 @@ export function DashboardLive() {
                                 </div>
                                 <div className="flex gap-1">
                                   {detail.bets.map((bet, bi) => (
-                                    <span key={bi} className="bg-zinc-700 px-1.5 py-0.5 rounded text-[10px] text-zinc-300 font-mono">
-                                      ${bet.toFixed(2)}
+                                    <span key={bi} className={`px-1.5 py-0.5 rounded text-[10px] text-zinc-300 font-mono ${(detail.strategyStep?.[bi] || 1) === 4 ? 'bg-red-500/20 text-red-400' : (detail.strategyStep?.[bi] || 1) === 2 ? 'bg-orange-500/20 text-orange-400' : 'bg-zinc-700'}`}>
+                                      x{detail.strategyStep?.[bi] || 1} ${bet.toFixed(2)}
                                     </span>
                                   ))}
                                 </div>
