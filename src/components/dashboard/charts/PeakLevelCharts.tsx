@@ -21,23 +21,13 @@ import {
 } from 'recharts'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-
-interface PeakRecord {
-  id: string
-  height: number
-  prediction: {
-    type: string
-    value: string
-  }
-  resultNumber: number
-  resultColor: 'red' | 'black' | 'green'
-  timestamp: Date
-}
+import type { PeakRecord } from '@/lib/peak-engine'
 
 interface PeakLevelChartsProps {
   inputNumbers?: number[]
   peakHistory?: PeakRecord[]
   currentPeak?: number
+  betTypeLabel?: string
 }
 
 const MAX_DISPLAY_PEAKS = 30
@@ -129,7 +119,7 @@ function computeCurrentPeak(numbers: number[]): number {
   return Math.min(peak, 15)
 }
 
-export function PeakLevelCharts({ inputNumbers, peakHistory: peakHistoryFromParent, currentPeak: currentPeakFromParent }: PeakLevelChartsProps) {
+export function PeakLevelCharts({ inputNumbers, peakHistory: peakHistoryFromParent, currentPeak: currentPeakFromParent, betTypeLabel }: PeakLevelChartsProps) {
   const [expandedLevel, setExpandedLevel] = useState<string | null>(null)
   const [calcCount, setCalcCount] = useState(0)
 
@@ -244,6 +234,11 @@ export function PeakLevelCharts({ inputNumbers, peakHistory: peakHistoryFromPare
             </span>
             {/* Status Labels - Yellow Style */}
             <div className="flex items-center gap-2">
+              {betTypeLabel && (
+                <div className="bg-zinc-700 text-zinc-200 px-2 py-1 rounded text-xs font-bold">
+                  {betTypeLabel}
+                </div>
+              )}
               <div className="bg-amber-500 text-black px-2 py-1 rounded text-xs font-bold">
                 ACTUAL: {currentPeak}
               </div>

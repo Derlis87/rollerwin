@@ -52,7 +52,7 @@ import { ColorParityChart } from './charts/ColorParityChart'
 import { PeakLevelCharts } from './charts/PeakLevelCharts'
 import { UltimateSignals } from './charts/UltimateSignals'
 import ProfessionalRouletteEngine from './charts/ProfessionalRouletteEngine'
-import { calculatePeakHistory, getCurrentPeak, parseNumberText } from '@/lib/peak-engine'
+import { calculatePeakHistory, getCurrentPeak, parseNumberText, type PeakRecord as EnginePeakRecord } from '@/lib/peak-engine'
 
 const BET_TYPE_OPTIONS = [
   { id: 'color', name: 'Colores (Rojo/Negro)', icon: '🎨' },
@@ -129,15 +129,6 @@ interface SmartPrediction {
   bestConfidence: number
 }
 
-interface PeakRecord {
-  id: string
-  height: number
-  prediction: BetPrediction
-  resultNumber: number
-  resultColor: 'red' | 'black' | 'green'
-  timestamp: Date
-}
-
 interface ImportPreview {
   numbers: number[]
   total: number
@@ -187,7 +178,7 @@ export function DashboardLive() {
   // Peak system state
   const [currentPeak, setCurrentPeak] = useState(1)
   const [currentPrediction, setCurrentPrediction] = useState<BetPrediction | null>(null)
-  const [peakHistory, setPeakHistory] = useState<PeakRecord[]>([])
+  const [peakHistory, setPeakHistory] = useState<EnginePeakRecord[]>([])
   const [confidence, setConfidence] = useState(0)
   
   // UI state
@@ -251,6 +242,17 @@ export function DashboardLive() {
     if (pl === 'medium') return h >= 4 && h <= 6
     return h >= 7
   }
+
+  // Helper: get a human-readable label for the current peak bet type
+  const getPeakBetTypeLabel = useCallback((bt: BetType, dm: BtDozenMode): string => {
+    const labels: Record<string, string> = {
+      color: 'Color (R/N)',
+      parity: 'Par/Impar',
+      dozen: dm === 'double' ? '2 Docenas' : '1 Docena',
+      column: dm === 'double' ? '2 Columnas' : '1 Columna'
+    }
+    return labels[bt] || bt
+  }, [])
 
   // Reset calculator
   const resetCalculator = useCallback(() => {
@@ -900,6 +902,25 @@ export function DashboardLive() {
     }
   }, [])
 
+  // Helper: build peak calculation options based on current bet type and dozen mode
+  // (placed after generateSmartPrediction and checkPredictionMatch to avoid "used before declaration")
+  const getPeakCalcOptions = useCallback((bt: BetType, dm: BtDozenMode) => {
+    const predict = (nums: number[]): { type: string; value: string; extraValues?: string[] } | null => {
+      if (nums.length < 5) return null
+      const smart = generateSmartPrediction(nums, bt)
+      const isDouble = (bt === 'dozen' || bt === 'column') && dm === 'double'
+      const extraValues = isDouble && smart.options.length >= 2
+        ? [smart.options[1].value]
+        : undefined
+      return { type: smart.type, value: smart.bestValue, extraValues }
+    }
+    const match = (pred: { type: string; value: string; extraValues?: string[] }, num: number): boolean => {
+      const values = [pred.value, ...(pred.extraValues || [])]
+      return values.some(v => checkPredictionMatch({ type: pred.type as BetType, value: v }, num))
+    }
+    return { getPrediction: predict, matchFn: match }
+  }, [generateSmartPrediction, checkPredictionMatch])
+
   // Calculator helpers
   const updateCalcDisplay = useCallback(() => {
     const allWins = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'win').length, 0)
@@ -959,10 +980,10 @@ export function DashboardLive() {
         // SUCCESS! Record the peak and reset
         if (soundEnabledRef.current) playSound('success')
         
-        const peakRecord: PeakRecord = {
+        const peakRecord: EnginePeakRecord = {
           id: Date.now().toString(),
           height: currentPeakValue,
-          prediction: prediction,
+          prediction: { type: prediction.type, value: prediction.value },
           resultNumber: num,
           resultColor: getNumberColor(num),
           timestamp: new Date()
@@ -1277,11 +1298,12 @@ export function DashboardLive() {
     setConfidence(0)
     setBacktestResults(null)
     
-    // Calculate ALL historical peaks from imported numbers
+    // Calculate ALL historical peaks from imported numbers — based on current bet type
     if (newNumbers.length >= 6) {
-      const historicalPeaks = calculatePeakHistory(newNumbers)
+      const peakOpts = getPeakCalcOptions(selectedBetTypeRef.current, calcDozenModeRef.current)
+      const historicalPeaks = calculatePeakHistory(newNumbers, peakOpts)
       setPeakHistory(historicalPeaks)
-      const currentP = getCurrentPeak(newNumbers)
+      const currentP = getCurrentPeak(newNumbers, peakOpts)
       // If peak is 0 (last peak was resolved), start new cycle at 1
       const displayPeak = Math.max(1, currentP)
       setCurrentPeak(displayPeak)
@@ -1308,7 +1330,32 @@ export function DashboardLive() {
     setImportDialogOpen(false)
     setImportText('')
     setImportPreview(null)
-  }, [importPreview, generatePrediction, calculateStats])
+  }, [importPreview, generatePrediction, calculateStats, getPeakCalcOptions])
+
+  // Recalculate peaks when bet type or dozen mode changes (keeps peak history consistent)
+  useEffect(() => {
+    const nums = numbersRef.current
+    if (nums.length >= 6) {
+      const peakOpts = getPeakCalcOptions(selectedBetTypeRef.current, calcDozenModeRef.current)
+      const historicalPeaks = calculatePeakHistory(nums, peakOpts)
+      setPeakHistory(historicalPeaks)
+      // Reset current peak and prediction when bet type changes
+      setCurrentPeak(1)
+      currentPeakRef.current = 1
+      setCurrentPrediction(null)
+      currentPredictionRef.current = null
+      setConfidence(0)
+      // Generate new prediction for the current bet type
+      if (nums.length >= 5) {
+        const smart = generateSmartPrediction(nums, selectedBetTypeRef.current)
+        setSmartPrediction(smart)
+        const pred = { type: smart.type, value: smart.bestValue }
+        setCurrentPrediction(pred)
+        currentPredictionRef.current = pred
+        setConfidence(Math.min(85, smart.bestConfidence))
+      }
+    }
+  }, [selectedBetType, getPeakCalcOptions, generateSmartPrediction])
 
   // Handle run backtest - Martingala (sube en loss) o Paroli (sube en win)
   const handleRunBacktest = useCallback(() => {
@@ -2092,6 +2139,7 @@ export function DashboardLive() {
                     peakHistory={peakHistory}
                     currentPeak={currentPeak}
                     inputNumbers={numbers}
+                    betTypeLabel={getPeakBetTypeLabel(selectedBetType, calcDozenModeRef.current)}
                   />
                 )}
               </>

@@ -598,3 +598,26 @@ Stage Summary:
 - At each peak within a Fibonacci cycle, the prediction is recalculated with latest data
 - Payout formulas are mathematically correct for both single and double betting
 - All changes compile without introducing new TypeScript errors
+---
+Task ID: 1
+Agent: main
+Task: Analizar y corregir historial de picos para soportar cualquier tipo de apuesta (1 docena, 2 docenas, color, etc.)
+
+Work Log:
+- Analicé peak-engine.ts: calculatePeakHistory y getCurrentPeak solo usaban predicciones de COLOR (rojo/negro)
+- Analicé PeakLevelCharts.tsx: computePeaks también solo usaba predicciones de color
+- Esto significaba que al importar números, los picos se calculaban con color independientemente del bet type seleccionado
+- Actualicé peak-engine.ts: agregué PeakCalcOptions con getPrediction y matchFn opcionales, manteniendo backward compatibility
+- Actualicé DashboardLive.tsx: importé EnginePeakRecord, agregué getPeakCalcOptions (usa smart prediction según bet type), getPeakBetTypeLabel
+- Al importar números ahora calcula picos según el bet type seleccionado (1 docena, 2 docenas, color, etc.)
+- Agregué useEffect que recalcula todos los picos cuando cambia selectedBetType
+- PeakLevelCharts ahora muestra un badge con el tipo de apuesta (ej: "1 Docena", "2 Docenas", "Color (R/N)")
+- PeakLevelCharts ahora usa PeakRecord importado de peak-engine para consistencia de tipos
+- TypeScript y lint limpios (sin errores nuevos)
+
+Stage Summary:
+- El historial de picos ahora es consistente con el tipo de apuesta seleccionado
+- Al cambiar de Color a Docenas (o viceversa), los picos se recalculan automáticamente
+- Soporta: Color, Par/Impar, 1 Docena, 2 Docenas, 1 Columna, 2 Columnas
+- Para double mode (2 docenas/2 columnas), el pico cuenta spins hasta que cualquiera de las 2 opciones predichas acierta
+
