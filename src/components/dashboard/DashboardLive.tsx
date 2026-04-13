@@ -180,6 +180,7 @@ export function DashboardLive() {
   const [currentPrediction, setCurrentPrediction] = useState<BetPrediction | null>(null)
   const [peakHistory, setPeakHistory] = useState<EnginePeakRecord[]>([])
   const [confidence, setConfidence] = useState(0)
+  const [peakDozenMode, setPeakDozenMode] = useState<BtDozenMode>('single') // tracks single/double for peak recalc
   
   // UI state
   const [copiedUrl, setCopiedUrl] = useState(false)
@@ -1355,7 +1356,7 @@ export function DashboardLive() {
         setConfidence(Math.min(85, smart.bestConfidence))
       }
     }
-  }, [selectedBetType, getPeakCalcOptions, generateSmartPrediction])
+  }, [selectedBetType, peakDozenMode, getPeakCalcOptions, generateSmartPrediction])
 
   // Handle run backtest - Martingala (sube en loss) o Paroli (sube en win)
   const handleRunBacktest = useCallback(() => {
@@ -2222,8 +2223,8 @@ export function DashboardLive() {
                     <div>
                       <label className="text-[10px] text-zinc-500 block mb-1">Modo Apuesta</label>
                       <div className="grid grid-cols-2 gap-1">
-                        <button onClick={() => { calcDozenModeRef.current = 'single'; if (calcEnabled) resetCalculator() }} className={`py-1 rounded-lg text-[10px] font-bold transition-all ${calcDozenModeRef.current === 'single' ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50' : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50'}`}>1 Opcion</button>
-                        <button onClick={() => { calcDozenModeRef.current = 'double'; if (calcEnabled) resetCalculator() }} className={`py-1 rounded-lg text-[10px] font-bold transition-all ${calcDozenModeRef.current === 'double' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/50' : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50'}`}>2 Opciones</button>
+                        <button onClick={() => { calcDozenModeRef.current = 'single'; setPeakDozenMode('single'); if (calcEnabled) resetCalculator() }} className={`py-1 rounded-lg text-[10px] font-bold transition-all ${calcDozenModeRef.current === 'single' ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50' : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50'}`}>1 Opcion</button>
+                        <button onClick={() => { calcDozenModeRef.current = 'double'; setPeakDozenMode('double'); if (calcEnabled) resetCalculator() }} className={`py-1 rounded-lg text-[10px] font-bold transition-all ${calcDozenModeRef.current === 'double' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/50' : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/50'}`}>2 Opciones</button>
                       </div>
                     </div>
                   )}
