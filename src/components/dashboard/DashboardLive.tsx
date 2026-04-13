@@ -1025,9 +1025,10 @@ export function DashboardLive() {
             const strategy = calcStrategyRef.current
             const betIdx = calcCurrentBetIndexRef.current
             const progression = strategy === 'paroli' ? PAROLI : MARTINGALA
-            const singleBet = isFlatBet ? betAmount : betAmount * (progression[betIdx] || progression[progression.length - 1])
+            const mult = progression[betIdx] || progression[progression.length - 1]
+            const singleBet = betAmount * mult
             const totalBet = isDoubleCalc ? singleBet * 2 : singleBet
-            // Payout: winning bet pays profit, minus losing bets in double mode
+            // Payout: color/parity pay 1:1, dozen/column pay 2:1
             const payoutPerWin = isFlatBet ? singleBet : singleBet * 2
             const losingCost = isDoubleCalc ? singleBet : 0
             const payout = payoutPerWin - losingCost
@@ -1130,7 +1131,8 @@ export function DashboardLive() {
             const strategy = calcStrategyRef.current
             const betIdx = calcCurrentBetIndexRef.current
             const progression = strategy === 'paroli' ? PAROLI : MARTINGALA
-            const singleBet = isFlatBet ? betAmount : betAmount * (progression[betIdx] || progression[progression.length - 1])
+            const mult = progression[betIdx] || progression[progression.length - 1]
+            const singleBet = betAmount * mult
             const totalBet = isDoubleCalc ? singleBet * 2 : singleBet
 
             calcCurrentCycleBetsRef.current.push({ amount: totalBet, result: 'loss', payout: 0 })
