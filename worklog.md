@@ -621,3 +621,24 @@ Stage Summary:
 - Soporta: Color, Par/Impar, 1 Docena, 2 Docenas, 1 Columna, 2 Columnas
 - Para double mode (2 docenas/2 columnas), el pico cuenta spins hasta que cualquiera de las 2 opciones predichas acierta
 
+---
+Task ID: 2
+Agent: main
+Task: Corregir estrategia Paroli — apostar el doble después de un WIN, no mantener el mismo monto
+
+Work Log:
+- Analicé el flujo de Paroli: en WIN y LOSS siempre llamaba resetCalcCycle() que resetea betIndex a 0
+- Esto causaba que el próximo ciclo SIEMPRE empezara con apuesta base (×1)
+- Agregué calcParoliStreakRef para rastrear wins consecutivos entre ciclos
+- WIN handler Paroli: incrementa streak, si streak < 3 mantiene el multiplicador para el prox ciclo (calcCurrentBetIndexRef = streak), si streak >= 3 resetea todo
+- LOSS handler Paroli: resetea streak a 0, vuelta a apuesta base
+- Agregué paroliStreak y nextBetMultiplier al calcDisplay
+- Agregué indicador visual Paroli: 3 círculos (1x, 2x, 4x) que se van iluminando verde con cada win, el actual se muestra en amarillo
+- Muestra "Racha 1 — Prox: 2x", "Racha 2 — Prox: 4x", o "Ciclo completo! Reset"
+
+Stage Summary:
+- Paroli ahora funciona correctamente: WIN → próxima apuesta al doble
+- El streak se mantiene entre ciclos de picos
+- Indicador visual muestra la racha actual y próxima apuesta
+- TypeScript y lint limpios
+

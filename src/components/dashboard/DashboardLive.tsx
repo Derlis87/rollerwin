@@ -229,12 +229,13 @@ export function DashboardLive() {
   const calcCyclePredictionRef = useRef<BetPrediction | null>(null) // fixed prediction for the entire cycle
   const calcDozenModeRef = useRef<BtDozenMode>('single')
   const calcStrategyRef = useRef<'martingala' | 'paroli'>('paroli')
+  const calcParoliStreakRef = useRef(0) // tracks consecutive Paroli wins across cycles (0, 1, 2)
   const smartPredictionRef = useRef<SmartPrediction | null>(null)
   // Progression arrays: Martingala increases on loss, Paroli increases on win
   const MARTINGALA = [1, 2, 4]
   const PAROLI = [1, 2, 4]
   const MAX_CALC_BETS = 3
-  const [calcDisplay, setCalcDisplay] = useState<{ cycles: typeof calcHistoryRef.current; runningBankroll: number; totalProfit: number; wins: number; losses: number; isActive: boolean } | null>(null)
+  const [calcDisplay, setCalcDisplay] = useState<{ cycles: typeof calcHistoryRef.current; runningBankroll: number; totalProfit: number; wins: number; losses: number; isActive: boolean; paroliStreak: number; nextBetMultiplier: number } | null>(null)
 
   // Helper: check if peak height is in the selected calculator range
   const isCalcPeakInRange = (h: number): boolean => {
@@ -272,13 +273,16 @@ export function DashboardLive() {
     calcWaitNewCycleRef.current = false
     calcCycleActiveRef.current = false
     calcCyclePredictionRef.current = null
+    calcParoliStreakRef.current = 0
     setCalcDisplay({
       cycles: [],
       runningBankroll: bankroll,
       totalProfit: 0,
       wins: 0,
       losses: 0,
-      isActive: calcEnabled
+      isActive: calcEnabled,
+      paroliStreak: 0,
+      nextBetMultiplier: 1
     })
   }, [calcBankroll, calcEnabled, calcBetAmount, calcPeakLevel])
 
@@ -302,13 +306,16 @@ export function DashboardLive() {
         calcWaitNewCycleRef.current = false
         calcCycleActiveRef.current = false
         calcCyclePredictionRef.current = null
+        calcParoliStreakRef.current = 0
         setCalcDisplay({
           cycles: [],
           runningBankroll: bankroll,
           totalProfit: 0,
           wins: 0,
           losses: 0,
-          isActive: true
+          isActive: true,
+          paroliStreak: 0,
+          nextBetMultiplier: 1
         })
       } else {
         calcIsActiveRef.current = false
@@ -927,13 +934,20 @@ export function DashboardLive() {
     const allWins = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'win').length, 0)
     const allLosses = calcHistoryRef.current.reduce((s, c) => s + c.bets.filter(b => b.result === 'loss').length, 0)
     const totalProfit = calcHistoryRef.current.reduce((s, c) => s + c.cycleProfit, 0)
+    const strategy = calcStrategyRef.current
+    const paroliStreak = calcParoliStreakRef.current
+    const nextBetMultiplier = strategy === 'paroli'
+      ? PAROLI[Math.min(paroliStreak, PAROLI.length - 1)]
+      : MARTINGALA[calcCurrentBetIndexRef.current] || MARTINGALA[MARTINGALA.length - 1]
     setCalcDisplay({
       cycles: [...calcHistoryRef.current],
       runningBankroll: calcRunningBankrollRef.current,
       totalProfit,
       wins: allWins,
       losses: allLosses,
-      isActive: true
+      isActive: true,
+      paroliStreak,
+      nextBetMultiplier
     })
   }, [])
 
@@ -1023,7 +1037,13 @@ export function DashboardLive() {
             calcRunningBankrollRef.current += payout
 
             if (strategy === 'paroli') {
-              // Paroli: WIN completes the cycle (collect winnings, reset bet index)
+              // Paroli: WIN — increment streak, carry multiplier to next cycle
+              calcParoliStreakRef.current++
+              const completedParoli = calcParoliStreakRef.current >= MAX_CALC_BETS
+              if (completedParoli) {
+                // Completed 3-win cycle — collect full Paroli, reset to base
+                calcParoliStreakRef.current = 0
+              }
               calcCyclesRef.current++
               calcHistoryRef.current.push({
                 cycle: calcCyclesRef.current,
@@ -1034,6 +1054,10 @@ export function DashboardLive() {
               })
               updateCalcDisplay()
               resetCalcCycle()
+              // Carry streak forward — set bet index for next cycle
+              if (!completedParoli && calcParoliStreakRef.current > 0) {
+                calcCurrentBetIndexRef.current = calcParoliStreakRef.current
+              }
               calcCycleActiveRef.current = false
               calcCyclePredictionRef.current = null
             } else {
@@ -1114,7 +1138,8 @@ export function DashboardLive() {
             calcRunningBankrollRef.current -= totalBet
 
             if (strategy === 'paroli') {
-              // Paroli: LOSS resets bet to base, closes cycle
+              // Paroli: LOSS — reset streak to 0, back to base bet
+              calcParoliStreakRef.current = 0
               calcCyclesRef.current++
               calcHistoryRef.current.push({
                 cycle: calcCyclesRef.current,
@@ -1163,7 +1188,9 @@ export function DashboardLive() {
                   totalProfit,
                   wins: allWins,
                   losses: allLosses,
-                  isActive: true
+                  isActive: true,
+                  paroliStreak: calcParoliStreakRef.current,
+                  nextBetMultiplier: MARTINGALA[calcCurrentBetIndexRef.current] || MARTINGALA[MARTINGALA.length - 1]
                 })
               }
             }
@@ -2268,6 +2295,36 @@ export function DashboardLive() {
                         <span className="text-red-400 font-bold">L: {calcDisplay?.losses ?? 0}</span>
                         <span className="text-amber-400 font-bold">C: {calcDisplay?.cycles.length ?? 0}</span>
                       </div>
+                      {/* Paroli streak indicator */}
+                      {calcDisplay && calcStrategyRef.current === 'paroli' && (
+                        <div className="mt-1.5 px-1">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[9px] text-zinc-500">Paroli</span>
+                            <div className="flex gap-1">
+                              {[1, 2, 4].map((mult, i) => (
+                                <div key={i} className={`w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold transition-all ${
+                                  calcDisplay.paroliStreak > i
+                                    ? 'bg-green-500 text-white shadow-sm shadow-green-500/50'
+                                    : i === calcDisplay.paroliStreak && calcDisplay.isActive
+                                    ? 'bg-yellow-500/30 text-yellow-400 border border-yellow-500/50'
+                                    : 'bg-zinc-800 text-zinc-600 border border-zinc-700/50'
+                                }`}>
+                                  {mult}x
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="text-[9px] text-center">
+                            {calcDisplay.paroliStreak === 0 ? (
+                              <span className="text-zinc-500">Prox: <span className="text-white font-bold">{calcDisplay.nextBetMultiplier}x</span> base</span>
+                            ) : calcDisplay.paroliStreak >= 3 ? (
+                              <span className="text-green-400 font-bold">Ciclo completo! Reset</span>
+                            ) : (
+                              <span className="text-green-400">Racha {calcDisplay.paroliStreak} — Prox: <span className="text-white font-bold">{calcDisplay.nextBetMultiplier}x</span></span>
+                            )}
+                          </div>
+                        </div>
+                      )}
                       <div className="max-h-40 overflow-y-auto custom-scrollbar-y space-y-1">
                         {calcDisplay && calcDisplay.cycles.map((cycle) => (
                           <div key={cycle.cycle} className={`flex items-center justify-between px-2 py-1.5 rounded-lg text-[10px] ${cycle.cycleProfit > 0 ? 'bg-green-500/10 border border-green-500/20' : cycle.cycleProfit < 0 ? 'bg-red-500/10 border border-red-500/20' : 'bg-zinc-800/50 border border-zinc-700/30'}`}>
