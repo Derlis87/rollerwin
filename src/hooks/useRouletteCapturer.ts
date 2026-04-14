@@ -27,10 +27,12 @@ const POLL_INTERVAL_MS = 2000
 
 /**
  * useRouletteCapturer — polls /api/capture/latest for new numbers.
- * 
+ *
  * No external Socket.IO service needed. The Tampermonkey userscript
  * posts detected numbers to /api/capture/receive, and this hook
  * picks them up by polling.
+ *
+ * On connect: resets the capture bus to avoid stale numbers.
  */
 export function useRouletteCapturer(options: UseRouletteCapturerOptions = {}) {
   const { onNumberDetected, onCaptureError } = options
@@ -50,9 +52,18 @@ export function useRouletteCapturer(options: UseRouletteCapturerOptions = {}) {
   useEffect(() => { onCaptureErrorRef.current = onCaptureError }, [onCaptureError])
 
   // Poll for new numbers
-  const startPolling = useCallback(() => {
+  const startPolling = useCallback(async () => {
     if (pollRef.current) return
 
+    // Reset the bus so we start fresh (no stale numbers)
+    try {
+      await fetch('/api/capture/reset', { method: 'POST' })
+    } catch {
+      // Non-critical
+    }
+
+    lastIdRef.current = ''
+    setTotalCaptured(0)
     setIsConnected(true)
     setIsCapturing(true)
     setError(null)
@@ -80,10 +91,8 @@ export function useRouletteCapturer(options: UseRouletteCapturerOptions = {}) {
           }
         }
       } catch (err) {
-        // Only report real errors, not network blips during dev
         const msg = err instanceof Error ? err.message : 'Poll error'
         console.warn('[AutoCapture] Poll error:', msg)
-        // Don't set error state for transient failures
       }
     }
 
@@ -101,9 +110,9 @@ export function useRouletteCapturer(options: UseRouletteCapturerOptions = {}) {
     setIsCapturing(false)
   }, [])
 
-  // ── Public API (kept compatible with old interface) ──
+  // ── Public API ──
 
-  /** Connect + start polling */
+  /** Connect + reset bus + start polling */
   const connect = useCallback(() => {
     startPolling()
   }, [startPolling])
@@ -116,12 +125,12 @@ export function useRouletteCapturer(options: UseRouletteCapturerOptions = {}) {
     setError(null)
   }, [stopPolling])
 
-  /** Start capture (alias for connect in new architecture) */
+  /** Start capture (alias for connect) */
   const startCapture = useCallback((_casino?: string, _table?: string, _url?: string) => {
     startPolling()
   }, [startPolling])
 
-  /** Stop capture (alias for disconnect) */
+  /** Stop capture */
   const stopCapture = useCallback(() => {
     stopPolling()
   }, [stopPolling])
@@ -134,7 +143,6 @@ export function useRouletteCapturer(options: UseRouletteCapturerOptions = {}) {
   }, [])
 
   return {
-    // State
     isConnected,
     isCapturing,
     currentSession: null as CaptureSession | null,
@@ -142,7 +150,6 @@ export function useRouletteCapturer(options: UseRouletteCapturerOptions = {}) {
     error,
     totalCaptured,
 
-    // Actions
     connect,
     disconnect,
     startCapture,

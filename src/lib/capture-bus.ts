@@ -62,18 +62,21 @@ class CaptureBus {
 
   /**
    * Get entries newer than `afterId`.
-   * If afterId is empty/undefined, returns the last entry only.
+   * If afterId is empty/undefined, returns empty array (no stale data).
+   * If afterId is not found (old session), returns empty array.
    */
   getNew(afterId?: string): CaptureEntry[] {
     if (!afterId) {
-      // First poll — just return the most recent entry (if any)
-      return this.entries.length > 0 ? [this.entries[this.entries.length - 1]] : []
+      // First poll — return nothing (don't send stale history numbers)
+      // The caller will get the afterId from the first empty response
+      return []
     }
 
     const idx = this.entries.findIndex(e => e.id === afterId)
     if (idx === -1) {
-      // ID not found (old session) — return only the very latest
-      return this.entries.length > 0 ? [this.entries[this.entries.length - 1]] : []
+      // ID not found (old session or after reset) — return nothing,
+      // caller will pick up the next fresh number
+      return []
     }
 
     return this.entries.slice(idx + 1)
