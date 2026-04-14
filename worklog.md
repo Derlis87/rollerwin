@@ -661,3 +661,33 @@ Stage Summary:
 - Numeros detectados se envian via WebSocket y se ingresan automaticamente al handleNumberInput
 - Flujo: Importar numeros -> Abrir Casino -> Activar Auto Captura -> numeros entran solos
 
+
+---
+## Task ID: 12 - Auto Captura: Integrated API Polling + Tampermonkey Userscript
+### Agent: Main Agent
+### Work Task
+Fix WebSocket connection error ("Capturer connection error: websocket error" at port 3004) by replacing the Socket.IO + Puppeteer architecture with an integrated API polling approach + Tampermonkey userscript.
+
+### Work Log:
+- Analyzed root cause: old useRouletteCapturer tried to connect to a Socket.IO server on port 3004 (roulette-capturer mini-service) which was not running
+- The old puppeteer-based approach had fundamental issues: requires display, no login session, anti-bot detection
+- Created `/src/lib/capture-bus.ts` — in-memory event bus (singleton via globalThis) for relaying captured numbers between API routes
+- Created `/src/app/api/capture/receive/route.ts` — POST endpoint with CORS headers, receives numbers from userscript via `GM_xmlhttpRequest`
+- Created `/src/app/api/capture/latest/route.ts` — GET endpoint for dashboard polling, supports `afterId` param for incremental updates
+- Rewrote `/src/hooks/useRouletteCapturer.ts` — removed Socket.IO dependency entirely, now polls `/api/capture/latest` every 2s
+- Updated `DashboardLive.tsx` — simplified toggleAutoCapture (just on/off, no connect/start ceremony), updated UI to show total captured count and Tampermonkey instructions
+- Created `/public/rollerwin-capture.user.js` — Tampermonkey userscript for Betfury with:
+  - 25+ CSS selectors for Betfury/Evolution roulette numbers
+  - MutationObserver for real-time DOM change detection
+  - iframe scanning support
+  - Floating toggle widget (green/red circle)
+  - GM_xmlhttpRequest for cross-origin POST to localhost API
+  - Duplicate prevention (5s dedup window)
+- Tested all API endpoints: receive, latest, incremental polling with afterId — all working correctly
+- Committed as `aa4f4fa`, tagged as `v-auto-capture-1.0`
+
+### Stage Summary:
+- **Key decision**: Replaced Socket.IO + Puppeteer with API polling + Tampermonkey userscript
+- **Why**: No separate service needed, works with user's logged-in casino session, no CORS issues (GM_xmlhttpRequest), no anti-bot detection
+- **Files changed**: 6 (4 new, 2 modified)
+- **User setup needed**: Install Tampermonkey extension → install userscript from `/rollerwin-capture.user.js` → activate Auto Captura in dashboard
