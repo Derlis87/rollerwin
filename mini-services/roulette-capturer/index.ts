@@ -22,6 +22,17 @@ const CASINO_SELECTORS: Record<string, {
   iframeSelector?: string
   waitForSelector: string
 }> = {
+  betfury: {
+    numberSelector: '.roulette-history-number, .game-history-item, [class*="history"] [class*="number"], .board-number, [data-number]',
+    historySelector: '.roulette-history, .game-history, [class*="history-list"], [class*="recent-results"]',
+    iframeSelector: 'iframe[src*="evolution"], iframe[src*="game"], iframe[src*="provider"]',
+    waitForSelector: 'iframe, .game-container'
+  },
+  evolution: {
+    numberSelector: '.last-results-number, .game-result, [class*="resultNumber"], [class*="winning-number"]',
+    historySelector: '.last-results-container, [class*="history"], [class*="results"]',
+    waitForSelector: '.game-wrapper'
+  },
   pinnacle: {
     numberSelector: '.game-result-number, .roulette-result, .last-results-number, [class*="result"]',
     historySelector: '.history-numbers, .last-results, [class*="history"]',
@@ -33,11 +44,6 @@ const CASINO_SELECTORS: Record<string, {
     historySelector: '.history-panel, [class*="history"]',
     iframeSelector: 'iframe',
     waitForSelector: '.game-frame, iframe'
-  },
-  evolution: {
-    numberSelector: '.last-results-number, .game-result, [class*="resultNumber"]',
-    historySelector: '.last-results-container, [class*="history"]',
-    waitForSelector: '.game-wrapper'
   },
   betway: {
     numberSelector: '.roulette-result, [class*="result"]',
@@ -80,18 +86,18 @@ const io = new Server(PORT, {
   }
 })
 
-console.log(`🎥 Roulette Capturer Service running on port ${PORT}`)
+console.log(`Roulette Capturer Service running on port ${PORT}`)
 
 io.on('connection', (socket) => {
-  console.log(`📡 Client connected: ${socket.id}`)
+  console.log(`Client connected: ${socket.id}`)
 
   // Start capturing from a casino
   socket.on('start-capture', async (data: { casino: string; table: string; url: string }) => {
     const { casino, table, url } = data
     const sessionId = `${casino}-${table}-${Date.now()}`
-    
-    console.log(`🎯 Starting capture for ${casino} - ${table}`)
-    
+
+    console.log(`Starting capture for ${casino} - ${table} at ${url}`)
+
     // Create session
     const session: CaptureSession = {
       id: sessionId,
@@ -104,10 +110,10 @@ io.on('connection', (socket) => {
       numbers: [],
       lastDetectedNumber: null
     }
-    
+
     sessions.set(sessionId, session)
     socket.join(sessionId)
-    
+
     try {
       // Launch browser
       const browser = await puppeteer.launch({
@@ -122,32 +128,32 @@ io.on('connection', (socket) => {
         ],
         defaultViewport: null
       })
-      
+
       session.browser = browser
-      
+
       // Create new page
       const page = await browser.newPage()
       session.page = page
-      
+
       // Set user agent to avoid detection
       await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-      
+
       // Navigate to casino
-      console.log(`🌐 Navigating to: ${url}`)
+      console.log(`Navigating to: ${url}`)
       await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 })
-      
+
       // Emit ready state
       socket.emit('capture-ready', {
         sessionId,
         casino,
         table,
         url,
-        message: 'Browser opened. Please login and navigate to the roulette table.'
+        message: 'Browser opened. Navigate to the roulette table if not already there.'
       })
-      
+
       // Start monitoring for numbers
       startNumberDetection(session, socket)
-      
+
     } catch (error) {
       console.error('Capture error:', error)
       socket.emit('capture-error', {
@@ -161,18 +167,18 @@ io.on('connection', (socket) => {
   socket.on('stop-capture', async (data: { sessionId: string }) => {
     const { sessionId } = data
     const session = sessions.get(sessionId)
-    
+
     if (session) {
       session.isActive = false
-      
+
       if (session.browser) {
         await session.browser.close()
       }
-      
+
       sessions.delete(sessionId)
-      console.log(`⏹️ Stopped capture: ${sessionId}`)
+      console.log(`Stopped capture: ${sessionId}`)
     }
-    
+
     socket.emit('capture-stopped', { sessionId })
   })
 
@@ -180,16 +186,16 @@ io.on('connection', (socket) => {
   socket.on('input-number', (data: { sessionId: string; number: number }) => {
     const { sessionId, number } = data
     const session = sessions.get(sessionId)
-    
+
     if (session && number >= 0 && number <= 36) {
       const newNumber = {
         number,
         color: getNumberColor(number),
         timestamp: new Date()
       }
-      
+
       session.numbers.push(newNumber)
-      
+
       io.to(sessionId).emit('number-detected', {
         sessionId,
         number: newNumber,
@@ -199,8 +205,8 @@ io.on('connection', (socket) => {
   })
 
   socket.on('disconnect', async () => {
-    console.log(`📡 Client disconnected: ${socket.id}`)
-    
+    console.log(`Client disconnected: ${socket.id}`)
+
     // Clean up sessions for this socket
     for (const [sessionId, session] of sessions) {
       if (session.isActive && session.browser) {
@@ -214,102 +220,130 @@ io.on('connection', (socket) => {
 
 // Number detection loop
 async function startNumberDetection(session: CaptureSession, socket: any) {
-  const selectors = CASINO_SELECTORS[session.casino] || CASINO_SELECTORS.pinnacle
-  
-  console.log(`🔍 Starting number detection for ${session.id}`)
-  
+  const selectors = CASINO_SELECTORS[session.casino] || CASINO_SELECTORS.betfury
+
+  console.log(`Starting number detection for ${session.id}`)
+
   const detectNumber = async () => {
     if (!session.isActive || !session.page) return
-    
+
     try {
-      // Check if we need to work within an iframe
-      let targetFrame = session.page.mainFrame()
-      
-      if (selectors.iframeSelector) {
-        const frame = session.page.frames().find(f => 
-          f.url().includes('evolution') || 
-          f.url().includes('game') ||
-          f.name().includes('game')
-        )
-        if (frame) {
-          targetFrame = frame
+      // Get all frames (main page + iframes)
+      const frames = session.page.frames()
+
+      let detectedNumber: number | null = null
+
+      for (const frame of frames) {
+        if (detectedNumber !== null) break
+
+        try {
+          const number = await frame.evaluate(() => {
+            // Comprehensive list of selectors to try
+            const selectorList = [
+              // Betfury / Evolution
+              '.roulette-history-number',
+              '.game-history-item',
+              '.history-item',
+              '.last-results-number',
+              '.game-result-number',
+              '.winning-number',
+              '.result-number-display',
+              '[data-number]',
+              '[class*="history"] [class*="number"]',
+              '[class*="result"] [class*="number"]',
+              // Generic
+              '.last-result',
+              '.roulette-result',
+              '.result-number',
+              '[class*="lastNumber"]',
+              '[class*="resultNumber"]',
+              '.history-item:first-child',
+              '[class*="recent"] [class*="number"]:first-child',
+            ]
+
+            for (const sel of selectorList) {
+              try {
+                const elements = document.querySelectorAll(sel)
+                if (elements.length > 0) {
+                  const text = (elements[0].textContent || '').trim()
+                  const num = parseInt(text)
+                  if (!isNaN(num) && num >= 0 && num <= 36) {
+                    return num
+                  }
+                }
+              } catch (e) {
+                // Selector might not be valid in this context, skip
+              }
+            }
+
+            return null
+          })
+
+          if (number !== null && number >= 0 && number <= 36) {
+            detectedNumber = number
+          }
+        } catch (e) {
+          // Frame might not be accessible
         }
       }
-      
-      // Try to detect the last number
-      const numberText = await targetFrame.evaluate((sel) => {
-        // Try multiple selectors
-        const selectors = [
-          '.last-results-number',
-          '.game-result-number',
-          '.roulette-result',
-          '[class*="lastNumber"]',
-          '[class*="resultNumber"]',
-          '.history-item:first-child',
-          '.last-result',
-          '[class*="result"]:first-child'
-        ]
-        
-        for (const selector of selectors) {
-          const elements = document.querySelectorAll(selector)
-          if (elements.length > 0) {
-            const text = elements[0].textContent?.trim() || ''
-            const num = parseInt(text)
-            if (!isNaN(num) && num >= 0 && num <= 36) {
-              return num
+
+      // If no number found with selectors, try a broader scan on main frame
+      if (detectedNumber === null) {
+        try {
+          detectedNumber = await session.page.mainFrame().evaluate(() => {
+            // Look for elements that contain ONLY a number 0-36
+            const candidates = document.querySelectorAll('*')
+            for (const el of candidates) {
+              // Only check leaf-ish elements (small text content)
+              const text = (el.textContent || '').trim()
+              if (text.length > 0 && text.length <= 3) {
+                const num = parseInt(text)
+                if (!isNaN(num) && num >= 0 && num <= 36 && String(num) === text) {
+                  const style = window.getComputedStyle(el)
+                  if (style.display !== 'none' && style.visibility !== 'hidden' && parseFloat(style.fontSize) >= 10) {
+                    return num
+                  }
+                }
+              }
             }
-          }
+            return null
+          })
+        } catch (e) {
+          // Silently ignore
         }
-        
-        // Try to find any element with a roulette number
-        const allElements = document.querySelectorAll('*')
-        for (const el of allElements) {
-          const text = el.textContent?.trim() || ''
-          const num = parseInt(text)
-          if (!isNaN(num) && num >= 0 && num <= 36 && text.length <= 2) {
-            // Check if it's likely a result number (has appropriate styling)
-            const style = window.getComputedStyle(el)
-            if (style.display !== 'none' && style.visibility !== 'hidden') {
-              return num
-            }
-          }
-        }
-        
-        return null
-      }, selectors.numberSelector)
-      
-      if (numberText !== null && numberText !== session.lastDetectedNumber) {
+      }
+
+      if (detectedNumber !== null && detectedNumber !== session.lastDetectedNumber) {
         // New number detected!
         const newNumber = {
-          number: numberText,
-          color: getNumberColor(numberText),
+          number: detectedNumber,
+          color: getNumberColor(detectedNumber),
           timestamp: new Date()
         }
-        
-        session.lastDetectedNumber = numberText
+
+        session.lastDetectedNumber = detectedNumber
         session.numbers.push(newNumber)
-        
-        console.log(`🎯 Number detected: ${numberText} (${newNumber.color})`)
-        
+
+        console.log(`Number detected: ${detectedNumber} (${newNumber.color})`)
+
         io.to(session.id).emit('number-detected', {
           sessionId: session.id,
           number: newNumber,
           totalNumbers: session.numbers.length
         })
       }
-      
+
     } catch (error) {
-      // Page might be navigating or not ready
-      // console.error('Detection error:', error)
+      // Page might be navigating or not ready — continue silently
     }
-    
+
     // Continue detection loop
     if (session.isActive) {
-      setTimeout(detectNumber, 1000) // Check every second
+      setTimeout(detectNumber, 1500) // Check every 1.5 seconds
     }
   }
-  
-  // Wait for page to be ready
+
+  // Wait for page to be ready before starting detection
   await new Promise(resolve => setTimeout(resolve, 5000))
   detectNumber()
 }
@@ -332,11 +366,11 @@ app.get('/api/sessions', (req, res) => {
 
 app.get('/api/session/:sessionId', (req, res) => {
   const session = sessions.get(req.params.sessionId)
-  
+
   if (!session) {
     return res.json({ error: 'Session not found' })
   }
-  
+
   res.json({
     id: session.id,
     casino: session.casino,
@@ -348,18 +382,14 @@ app.get('/api/session/:sessionId', (req, res) => {
 
 const httpServer = createServer(app)
 httpServer.listen(REST_PORT, () => {
-  console.log(`🌐 Roulette Capturer REST API running on port ${REST_PORT}`)
+  console.log(`Roulette Capturer REST API running on port ${REST_PORT}`)
 })
 
 console.log(`
-🎰 Roulette Capturer Service Started
+Roulette Capturer Service Started
 =====================================
 WebSocket: port ${PORT}
 REST API: port ${REST_PORT}
 
-Usage:
-1. Connect via WebSocket to start capturing
-2. Use 'start-capture' event with { casino, table, url }
-3. Browser will open - login and navigate to roulette
-4. Numbers will be automatically detected and sent via 'number-detected' event
+Supported casinos: betfury, evolution, pinnacle, bet365, betway, 888casino
 `)

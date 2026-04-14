@@ -34,7 +34,10 @@ import {
   Wallet,
   Calculator,
   RotateCcw,
-  CircleDot
+  CircleDot,
+  Wifi,
+  WifiOff,
+  Scan
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -53,6 +56,7 @@ import { PeakLevelCharts } from './charts/PeakLevelCharts'
 import { UltimateSignals } from './charts/UltimateSignals'
 import ProfessionalRouletteEngine from './charts/ProfessionalRouletteEngine'
 import { calculatePeakHistory, getCurrentPeak, parseNumberText, type PeakRecord as EnginePeakRecord } from '@/lib/peak-engine'
+import { useRouletteCapturer } from '@/hooks/useRouletteCapturer'
 
 const BET_TYPE_OPTIONS = [
   { id: 'color', name: 'Colores (Rojo/Negro)', icon: '🎨' },
@@ -1246,6 +1250,60 @@ export function DashboardLive() {
     }
   }, [])
 
+  // Ref to keep latest handleNumberInput accessible from capturer callbacks
+  const handleNumberInputRef = useRef(handleNumberInput)
+  useEffect(() => { handleNumberInputRef.current = handleNumberInput }, [handleNumberInput])
+
+  // Auto Capture — Roulette Capturer integration
+  const [isAutoCapture, setIsAutoCapture] = useState(false)
+
+  const {
+    isConnected: capturerConnected,
+    isCapturing: capturerActive,
+    error: capturerError,
+    connect: capturerConnect,
+    disconnect: capturerDisconnect,
+    startCapture: capturerStart,
+    stopCapture: capturerStop,
+  } = useRouletteCapturer({
+    onNumberDetected: (captured) => {
+      handleNumberInputRef.current(captured.number)
+    },
+    onCaptureError: (err) => {
+      console.error('[AutoCapture] Error:', err)
+    }
+  })
+
+  // Toggle auto capture
+  const toggleAutoCapture = useCallback(() => {
+    if (isAutoCapture) {
+      // Stop
+      capturerStop()
+      capturerDisconnect()
+      setIsAutoCapture(false)
+    } else {
+      // Start
+      const connected = capturerConnected
+      if (!connected) {
+        capturerConnect()
+        // Wait a moment for connection, then start capture
+        setTimeout(() => {
+          const tableUrl = getTableUrl(selectedCasino, selectedTable)
+          if (tableUrl) {
+            capturerStart(selectedCasino, selectedTable, tableUrl)
+            setIsAutoCapture(true)
+          }
+        }, 1500)
+      } else {
+        const tableUrl = getTableUrl(selectedCasino, selectedTable)
+        if (tableUrl) {
+          capturerStart(selectedCasino, selectedTable, tableUrl)
+          setIsAutoCapture(true)
+        }
+      }
+    }
+  }, [isAutoCapture, capturerConnected, capturerConnect, capturerDisconnect, capturerStart, capturerStop, selectedCasino, selectedTable])
+
   // Handle join table
   const handleJoinTable = useCallback(() => {
     const newWindow = openCasino(selectedCasino, selectedTable)
@@ -1965,6 +2023,47 @@ export function DashboardLive() {
                             <span>Usa las teclas <strong>0-9</strong> para ingreso rápido</span>
                           </div>
                           <Button variant="ghost" size="sm" onClick={() => setShowKeyboardHint(false)} className="h-6 text-xs text-zinc-400">Ocultar</Button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Auto Capture Button */}
+                    <div className="mt-2">
+                      <Button
+                        onClick={toggleAutoCapture}
+                        className={`w-full font-bold py-2.5 text-sm transition-all ${
+                          isAutoCapture
+                            ? 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white shadow-lg shadow-green-500/20'
+                            : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 hover:border-zinc-600'
+                        }`}
+                      >
+                        {isAutoCapture ? (
+                          <>
+                            <Scan className="w-4 h-4 mr-2 animate-pulse" />
+                            Auto Captura ACTIVA
+                            {capturerActive && <span className="ml-2 w-2 h-2 rounded-full bg-green-300 animate-pulse" />}
+                          </>
+                        ) : (
+                          <>
+                            <WifiOff className="w-4 h-4 mr-2" />
+                            Activar Auto Captura
+                          </>
+                        )}
+                      </Button>
+                      {capturerError && !isAutoCapture && (
+                        <p className="text-[10px] text-red-400 mt-1 text-center">{capturerError}</p>
+                      )}
+                      {isAutoCapture && (
+                        <div className="mt-1.5 flex items-center justify-center gap-2 text-[10px]">
+                          <span className={`flex items-center gap-1 ${capturerConnected ? 'text-green-400' : 'text-red-400'}`}>
+                            {capturerConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+                            {capturerConnected ? 'Conectado' : 'Conectando...'}
+                          </span>
+                          <span className="text-zinc-600">|</span>
+                          <span className={`flex items-center gap-1 ${capturerActive ? 'text-green-400' : 'text-zinc-500'}`}>
+                            <Scan className="w-3 h-3" />
+                            {capturerActive ? 'Detectando numeros...' : 'Esperando...'}
+                          </span>
                         </div>
                       )}
                     </div>

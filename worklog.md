@@ -642,3 +642,22 @@ Stage Summary:
 - Indicador visual muestra la racha actual y próxima apuesta
 - TypeScript y lint limpios
 
+---
+Task ID: 3
+Agent: main
+Task: Implementar Auto Captura de numeros del casino
+
+Work Log:
+- Actualice useRouletteCapturer.ts: fix conexion directa a localhost:3004, refs para callbacks, auto-reconnect
+- Actualice roulette-capturer/index.ts: agregue selectores Betfury, detection en todos los frames (main + iframes), scan generico como fallback, intervalo 1.5s
+- Integre hook en DashboardLive.tsx: handleNumberInputRef para evitar stale closures, toggleAutoCapture, estado isAutoCapture
+- Agregue UI: boton "Activar Auto Captura" / "Auto Captura ACTIVA" con indicadores de conexion y deteccion
+- Reinicie servicio roulette-capturer con nuevos cambios (PID 3748, puerto 3004 activo)
+
+Stage Summary:
+- Servicio capturer corriendo en puerto 3004 (WebSocket) y 3005 (REST)
+- Hook conecta directamente a localhost:3004
+- Cuando se activa auto-capture: abre navegador Puppeteer -> navega al casino -> detecta numeros del DOM cada 1.5s
+- Numeros detectados se envian via WebSocket y se ingresan automaticamente al handleNumberInput
+- Flujo: Importar numeros -> Abrir Casino -> Activar Auto Captura -> numeros entran solos
+

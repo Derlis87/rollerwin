@@ -36,68 +36,77 @@ export function useRouletteCapturer(options: UseRouletteCapturerOptions = {}) {
 
   const socketRef = useRef<Socket | null>(null)
 
+  // Use refs for callbacks to prevent stale closures and unnecessary reconnections
+  const onNumberDetectedRef = useRef(onNumberDetected)
+  const onCaptureReadyRef = useRef(onCaptureReady)
+  const onCaptureErrorRef = useRef(onCaptureError)
+
+  useEffect(() => { onNumberDetectedRef.current = onNumberDetected }, [onNumberDetected])
+  useEffect(() => { onCaptureReadyRef.current = onCaptureReady }, [onCaptureReady])
+  useEffect(() => { onCaptureErrorRef.current = onCaptureError }, [onCaptureError])
+
   // Connect to capturer service
   const connect = useCallback(() => {
     if (socketRef.current?.connected) return
 
-    const socketUrl = `/?XTransformPort=${CAPTURER_PORT}`
-    
-    socketRef.current = io(socketUrl, {
-      path: '/socket.io',
-      transports: ['websocket', 'polling']
+    // Direct connection to the capturer service
+    const socketUrl = `http://localhost:${CAPTURER_PORT}`
+
+    const socket = io(socketUrl, {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 3000,
     })
 
-    socketRef.current.on('connect', () => {
-      console.log('🎥 Connected to Roulette Capturer')
+    socket.on('connect', () => {
+      console.log('Connected to Roulette Capturer')
       setIsConnected(true)
       setError(null)
     })
 
-    socketRef.current.on('disconnect', () => {
-      console.log('🔌 Disconnected from Roulette Capturer')
+    socket.on('disconnect', () => {
+      console.log('Disconnected from Roulette Capturer')
       setIsConnected(false)
       setIsCapturing(false)
     })
 
-    socketRef.current.on('connect_error', (err) => {
-      console.error('Capturer connection error:', err)
-      setError('No se pudo conectar al servicio de captura')
+    socket.on('connect_error', (err) => {
+      console.error('Capturer connection error:', err.message)
+      setError('No se pudo conectar al servicio de captura (puerto ' + CAPTURER_PORT + ')')
       setIsConnected(false)
     })
 
-    socketRef.current.on('capture-ready', (data: CaptureSession) => {
-      console.log('✅ Capture ready:', data)
+    socket.on('capture-ready', (data: CaptureSession) => {
+      console.log('Capture ready:', data.id)
       setCurrentSession(data)
       setIsCapturing(true)
-      onCaptureReady?.(data)
+      onCaptureReadyRef.current?.(data)
     })
 
-    socketRef.current.on('number-detected', (data: { 
+    socket.on('number-detected', (data: {
       sessionId: string
       number: CapturedNumber
-      totalNumbers: number 
+      totalNumbers: number
     }) => {
-      console.log('🎯 Number detected:', data.number)
       setNumbers(prev => [...prev, data.number].slice(-100))
-      onNumberDetected?.(data.number)
+      onNumberDetectedRef.current?.(data.number)
     })
 
-    socketRef.current.on('capture-error', (data: { error: string }) => {
+    socket.on('capture-error', (data: { error: string }) => {
       console.error('Capture error:', data.error)
       setError(data.error)
       setIsCapturing(false)
-      onCaptureError?.(data.error)
+      onCaptureErrorRef.current?.(data.error)
     })
 
-    socketRef.current.on('capture-stopped', () => {
+    socket.on('capture-stopped', () => {
       setIsCapturing(false)
       setCurrentSession(null)
     })
 
-    return () => {
-      socketRef.current?.disconnect()
-    }
-  }, [onNumberDetected, onCaptureReady, onCaptureError])
+    socketRef.current = socket
+  }, []) // Stable — no dependencies due to refs
 
   // Disconnect
   const disconnect = useCallback(() => {
@@ -108,35 +117,38 @@ export function useRouletteCapturer(options: UseRouletteCapturerOptions = {}) {
       setIsCapturing(false)
       setCurrentSession(null)
       setNumbers([])
+      setError(null)
     }
   }, [])
 
   // Start capture
   const startCapture = useCallback((casino: string, table: string, url: string) => {
     if (!socketRef.current?.connected) {
-      setError('No hay conexión al servicio de captura')
+      setError('No hay conexion al servicio de captura')
       return
     }
-
+    setError(null)
     socketRef.current.emit('start-capture', { casino, table, url })
   }, [])
 
   // Stop capture
   const stopCapture = useCallback(() => {
-    if (!socketRef.current?.connected || !currentSession) return
-
-    socketRef.current.emit('stop-capture', { sessionId: currentSession.id })
+    if (!socketRef.current?.connected) return
+    if (currentSession) {
+      socketRef.current.emit('stop-capture', { sessionId: currentSession.id })
+    }
+    setIsCapturing(false)
+    setCurrentSession(null)
   }, [currentSession])
 
-  // Manual number input
-  const inputNumber = useCallback((number: number) => {
-    if (!socketRef.current?.connected || !currentSession) return
-
-    socketRef.current.emit('input-number', { 
-      sessionId: currentSession.id, 
-      number 
-    })
-  }, [currentSession])
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.disconnect()
+      }
+    }
+  }, [])
 
   return {
     // State
@@ -145,14 +157,13 @@ export function useRouletteCapturer(options: UseRouletteCapturerOptions = {}) {
     currentSession,
     numbers,
     error,
-    
+
     // Actions
     connect,
     disconnect,
     startCapture,
     stopCapture,
-    inputNumber,
-    
+
     // Setters
     setNumbers
   }
