@@ -36,7 +36,6 @@ import {
   RotateCcw,
   CircleDot,
   Wifi,
-  WifiOff,
   Scan
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -1254,13 +1253,13 @@ export function DashboardLive() {
   const handleNumberInputRef = useRef(handleNumberInput)
   useEffect(() => { handleNumberInputRef.current = handleNumberInput }, [handleNumberInput])
 
-  // Auto Capture — Roulette Capturer integration
+  // Auto Capture — polls /api/capture/latest for numbers sent by the Tampermonkey userscript
   const [isAutoCapture, setIsAutoCapture] = useState(false)
 
   const {
     isConnected: capturerConnected,
     isCapturing: capturerActive,
-    error: capturerError,
+    totalCaptured: capturerTotal,
     connect: capturerConnect,
     disconnect: capturerDisconnect,
     startCapture: capturerStart,
@@ -1274,35 +1273,17 @@ export function DashboardLive() {
     }
   })
 
-  // Toggle auto capture
+  // Toggle auto capture — simple on/off, no Socket.IO needed
   const toggleAutoCapture = useCallback(() => {
     if (isAutoCapture) {
-      // Stop
       capturerStop()
       capturerDisconnect()
       setIsAutoCapture(false)
     } else {
-      // Start
-      const connected = capturerConnected
-      if (!connected) {
-        capturerConnect()
-        // Wait a moment for connection, then start capture
-        setTimeout(() => {
-          const tableUrl = getTableUrl(selectedCasino, selectedTable)
-          if (tableUrl) {
-            capturerStart(selectedCasino, selectedTable, tableUrl)
-            setIsAutoCapture(true)
-          }
-        }, 1500)
-      } else {
-        const tableUrl = getTableUrl(selectedCasino, selectedTable)
-        if (tableUrl) {
-          capturerStart(selectedCasino, selectedTable, tableUrl)
-          setIsAutoCapture(true)
-        }
-      }
+      capturerConnect()
+      setIsAutoCapture(true)
     }
-  }, [isAutoCapture, capturerConnected, capturerConnect, capturerDisconnect, capturerStart, capturerStop, selectedCasino, selectedTable])
+  }, [isAutoCapture, capturerConnect, capturerDisconnect, capturerStop])
 
   // Handle join table
   const handleJoinTable = useCallback(() => {
@@ -2041,30 +2022,40 @@ export function DashboardLive() {
                           <>
                             <Scan className="w-4 h-4 mr-2 animate-pulse" />
                             Auto Captura ACTIVA
-                            {capturerActive && <span className="ml-2 w-2 h-2 rounded-full bg-green-300 animate-pulse" />}
+                            <span className="ml-2 w-2 h-2 rounded-full bg-green-300 animate-pulse" />
                           </>
                         ) : (
                           <>
-                            <WifiOff className="w-4 h-4 mr-2" />
+                            <Wifi className="w-4 h-4 mr-2" />
                             Activar Auto Captura
                           </>
                         )}
                       </Button>
-                      {capturerError && !isAutoCapture && (
-                        <p className="text-[10px] text-red-400 mt-1 text-center">{capturerError}</p>
-                      )}
                       {isAutoCapture && (
-                        <div className="mt-1.5 flex items-center justify-center gap-2 text-[10px]">
-                          <span className={`flex items-center gap-1 ${capturerConnected ? 'text-green-400' : 'text-red-400'}`}>
-                            {capturerConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-                            {capturerConnected ? 'Conectado' : 'Conectando...'}
-                          </span>
-                          <span className="text-zinc-600">|</span>
-                          <span className={`flex items-center gap-1 ${capturerActive ? 'text-green-400' : 'text-zinc-500'}`}>
-                            <Scan className="w-3 h-3" />
-                            {capturerActive ? 'Detectando numeros...' : 'Esperando...'}
-                          </span>
+                        <div className="mt-1.5 space-y-1">
+                          <div className="flex items-center justify-center gap-2 text-[10px]">
+                            <span className="flex items-center gap-1 text-green-400">
+                              <Wifi className="w-3 h-3" />
+                              Monitoreando...
+                            </span>
+                            {capturerTotal > 0 && (
+                              <>
+                                <span className="text-zinc-600">|</span>
+                                <span className="text-zinc-400">
+                                  {capturerTotal} numeros capturados
+                                </span>
+                              </>
+                            )}
+                          </div>
+                          <p className="text-[9px] text-zinc-500 text-center leading-tight px-1">
+                            Asegurate de tener el userscript de Tampermonkey activo en la pagina del casino
+                          </p>
                         </div>
+                      )}
+                      {!isAutoCapture && (
+                        <p className="text-[9px] text-zinc-500 mt-1 text-center leading-tight px-1">
+                          Requiere Tampermonkey con el userscript instalado en la pagina del casino
+                        </p>
                       )}
                     </div>
                   </div>
