@@ -1380,7 +1380,7 @@ export function DashboardLive() {
         {/* Prediction with confidence */}
         {currentPrediction && numbers.length >= 5 && (
           <div className="p-3 border-b border-zinc-700">
-            <div className="text-xs text-zinc-400 mb-2">🎯 Predicción IA v3.0:</div>
+            <div className="text-xs text-zinc-400 mb-2">🎯 Predicción IA v4.0:</div>
             <div className="text-lg font-bold text-amber-500">{getPredictionDisplay()}</div>
             {/* Smart prediction options with confidence */}
             {smartPrediction && smartPrediction.options.length > 1 && (
@@ -1768,7 +1768,7 @@ export function DashboardLive() {
                     <CardContent className="py-4 space-y-3">
                       <div className="flex items-center justify-between flex-wrap gap-4">
                         <div>
-                          <div className="text-xs text-zinc-400 mb-1 flex items-center gap-2"><Target className="w-3 h-3" />PREDICCIÓN IA v3.0</div>
+                          <div className="text-xs text-zinc-400 mb-1 flex items-center gap-2"><Target className="w-3 h-3" />PREDICCIÓN IA v4.0</div>
                           <div className="text-2xl md:text-3xl font-bold text-amber-500">{getPredictionDisplay()}</div>
                         </div>
                         
