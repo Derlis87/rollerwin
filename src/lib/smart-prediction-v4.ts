@@ -1,13 +1,18 @@
 /**
- * Smart Prediction Engine v4.0
+ * Smart Prediction Engine v4.1 — Anti-Streak Edition
  * 
- * Mejoras sobre v3.0:
- *   1. Firma del Croupier — desplazamiento físico en la rueda (layout europeo)
- *   2. Markov Orden-3 — captura patrones de 3 resultados consecutivos
- *   3. Retroalimentación adaptativa — ajusta pesos según precisión real
- *   4. Z-score estricto para docenas/columnas (umbral -2.0, más sensible)
- *   5. Saturación de color mejorada — umbral más bajo (5 de 8 en vez de 6 de 8)
- *   6. Análisis de tripletas (ABC patterns) para docenas/columnas
+ * Mejoras sobre v4.0:
+ *   1. ANTI-STREAK para colores: cuando hay racha >= 3, se activa modo override
+ *      - Markov y Momentum se DESACTIVAN durante rachas (contaminados por la racha actual)
+ *      - Predicción fuerza el color opuesto con intensidad creciente
+ *      - Post-Streak History: analiza qué pasó históricamente después de rachas similares
+ *      - Compara racha actual vs longitud promedio histórica
+ *   2. Firma del Croupier — desplazamiento físico en la rueda (layout europeo)
+ *   3. Markov Orden-3 — captura patrones de 3 resultados consecutivos
+ *   4. Retroalimentación adaptativa — ajusta pesos según precisión real
+ *   5. Z-score estricto para docenas/columnas (umbral -2.0, más sensible)
+ *   6. Saturación de color mejorada — umbral más bajo (5 de 8 en vez de 6 de 8)
+ *   7. Análisis de tripletas (ABC patterns) para docenas/columnas
  */
 
 // European roulette wheel layout (clockwise from 0)
@@ -395,18 +400,13 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
   let contributingModules: ModuleName[] = []
 
   // ═══════════════════════════════════════════
-  // COLOR PREDICTION
+  // COLOR PREDICTION — v4.1 ANTI-STREAK
   // ═══════════════════════════════════════════
   if (betType === 'color') {
     const cats = ['red', 'black']
     const getCat = (n: number) => { const c = getNumberColor(n); return c === 'green' ? null : c }
-    const freq = multiWindowFreq(getCat, cats)
-    const markov = markovOrder2(getCat, cats)
-    const markov3 = markovOrder3(getCat, cats)
-    const saturation = saturationAnalysis(getCat, cats)
-    const wheel = wheelDisplacement(getCat, cats)
 
-    // Calculate streaks
+    // ── Calculate current streak ──
     const streaks: Record<string, number> = {}
     let maxR = 0, maxB = 0
     nonZero.forEach(n => {
@@ -414,6 +414,129 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       if (c === 'red') { maxR++; maxB = 0 } else if (c === 'black') { maxB++; maxR = 0 } else { maxR = 0; maxB = 0 }
     })
     streaks.red = maxR; streaks.black = maxB
+    const currentStreak = Math.max(maxR, maxB)
+    const streakColor = maxR > maxB ? 'red' : 'black'
+    const oppositeColor = maxR > maxB ? 'black' : 'red'
+
+    // ── NEW: Post-Streak History Analysis ──
+    // Analyze what historically follows after streaks of length >= currentStreak-1
+    const postStreakAnalysis = (): { breakPct: number; continuePct: number; avgStreakLen: number } => {
+      if (nonZero.length < 10) return { breakPct: 55, continuePct: 45, avgStreakLen: 2.5 }
+
+      const colorHistory = nonZero.map(n => getNumberColor(n)).filter((c): c is string => c !== null)
+      const allStreaks: number[] = [] // length of each streak found
+      const breaksAfterStreak: { streakLen: number; broke: boolean }[] = []
+
+      let sLen = 1
+      for (let i = 1; i < colorHistory.length; i++) {
+        if (colorHistory[i] === colorHistory[i - 1]) {
+          sLen++
+        } else {
+          allStreaks.push(sLen)
+          breaksAfterStreak.push({ streakLen: sLen, broke: true })
+          sLen = 1
+        }
+      }
+      allStreaks.push(sLen)
+      breaksAfterStreak.push({ streakLen: sLen, broke: false }) // last streak hasn't broken yet
+
+      const avgStreakLen = allStreaks.length > 0
+        ? allStreaks.reduce((a, b) => a + b, 0) / allStreaks.length
+        : 2.5
+
+      // Look at all completed streaks of similar length
+      const similarStreaks = breaksAfterStreak.filter(s => s.broke && s.streakLen >= Math.max(2, currentStreak - 1))
+      if (similarStreaks.length >= 2) {
+        // All completed streaks of this length broke (by definition) — streak ALWAYS ends
+        // The question is WHEN. Count how many broke at exactly this length vs continued longer
+        const brokeAtLen = breaksAfterStreak.filter(s => s.broke && s.streakLen === currentStreak).length
+        const survivedPastLen = breaksAfterStreak.filter(s => s.broke && s.streakLen > currentStreak).length
+        const total = brokeAtLen + survivedPastLen
+        if (total > 0) {
+          return {
+            breakPct: Math.round((brokeAtLen / total) * 100),
+            continuePct: Math.round((survivedPastLen / total) * 100),
+            avgStreakLen
+          }
+        }
+      }
+
+      return { breakPct: 55, continuePct: 45, avgStreakLen }
+    }
+
+    // ── STREAK OVERRIDE: when streak >= 3, anti-streak mode activates ──
+    const STREAK_OVERRIDE_THRESHOLD = 3
+    if (currentStreak >= STREAK_OVERRIDE_THRESHOLD) {
+      const postStreak = postStreakAnalysis()
+      const scores: Record<string, number> = { red: 0, black: 0 }
+      const baseScores: Record<string, number> = { red: 0, black: 0 }
+      contributingModules = ['streak']
+
+      // Core anti-streak score: gets stronger with longer streaks
+      // At streak 3: +45 opposite, at streak 5: +85 opposite, at streak 7: +120 opposite
+      const streakForce = 15 + (currentStreak - STREAK_OVERRIDE_THRESHOLD) * 20
+
+      // Post-streak history boost: if most streaks of this length broke, extra confidence
+      const historyBoost = postStreak.breakPct > 50
+        ? (postStreak.breakPct - 50) * 0.6
+        : 0
+
+      // The longer the streak vs average streak length, the more likely it breaks
+      const avgBoost = currentStreak > postStreak.avgStreakLen
+        ? (currentStreak - postStreak.avgStreakLen) * 8
+        : 0
+
+      const totalAntiStreakForce = streakForce + historyBoost + avgBoost
+
+      // Apply anti-streak force (always favor opposite color during streaks)
+      scores[oppositeColor] += totalAntiStreakForce
+      scores[streakColor] -= totalAntiStreakForce * 0.5
+
+      // Still allow wheel displacement to influence, but capped
+      const wheel = wheelDisplacement(getCat, cats)
+      if (wheel.signal && wheel.signal.targetNumber) {
+        const wheelCat = getCat(wheel.signal.targetNumber)
+        if (wheelCat && wheel.signal.reliability > 65) {
+          // Only boost if wheel agrees with anti-streak; ignore if it agrees with streak
+          if (wheelCat === oppositeColor) {
+            scores[oppositeColor] += 12
+            contributingModules.push('wheel')
+          }
+        }
+      }
+
+      // Small frequency check (only for last 10 to avoid contamination from current streak)
+      const beforeStreak = nonZero.slice(0, -(currentStreak))
+      if (beforeStreak.length >= 5) {
+        const freqs: Record<string, number> = { red: 0, black: 0 }
+        const slice = beforeStreak.slice(-10)
+        slice.forEach(n => { const c = getCat(n); if (c) freqs[c]++ })
+        const sTotal = slice.length || 1
+        cats.forEach(c => {
+          const pct = (freqs[c] / sTotal) * 100
+          if (pct < 45) scores[c] += 5 // slight boost to underrepresented before streak
+        })
+        contributingModules.push('freq')
+      }
+
+      const confs = toConfidence(scores, cats, 48.6)
+      const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
+      return {
+        type: 'color',
+        options: sorted.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: Math.round(confs[c]) })),
+        bestValue: sorted[0],
+        bestConfidence: Math.round(confs[sorted[0]]),
+        dealerSignal: wheel.signal || undefined
+      }
+    }
+
+    // ── NORMAL MODE (streak < 3): use full multi-module analysis ──
+    const freq = multiWindowFreq(getCat, cats)
+    const markov = markovOrder2(getCat, cats)
+    const markov3 = markovOrder3(getCat, cats)
+    const saturation = saturationAnalysis(getCat, cats)
+    const wheel = wheelDisplacement(getCat, cats)
+
     const streak = streakAnalysis(getCat, cats, streaks)
     const momentum = momentumAnalysis(getCat, cats)
 
@@ -434,12 +557,12 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
 
     // Layer 3: Markov Order-3
     const m3max = Math.max(...Object.values(markov3))
-    if (m3max > 0) { // Only if we have data
+    if (m3max > 0) {
       cats.forEach(c => { scores[c] += markov3[c] * getWeight('markov3') })
       contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov3'))
     }
 
-    // Layer 4: Streak
+    // Layer 4: Streak (soft reversion at streak=2)
     cats.forEach(c => { scores[c] += streak[c] * getWeight('streak') })
     contributingModules.push(...trackContribution(scores, baseScores, cats, 'streak'))
 
@@ -449,14 +572,14 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       contributingModules.push('momentum')
     }
 
-    // Layer 6: Saturation (NEW)
+    // Layer 6: Saturation
     const satMax = Math.max(...Object.values(saturation))
     if (satMax > 0) {
       cats.forEach(c => { scores[c] += saturation[c] * getWeight('saturation') })
       contributingModules.push(...trackContribution(scores, baseScores, cats, 'saturation'))
     }
 
-    // Layer 7: Wheel displacement (NEW)
+    // Layer 7: Wheel displacement
     const wheelMax = Math.max(...Object.values(wheel.scores))
     if (wheelMax > 0) {
       cats.forEach(c => { scores[c] += wheel.scores[c] * getWeight('wheel') })
