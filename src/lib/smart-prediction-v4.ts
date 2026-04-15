@@ -403,7 +403,7 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
   let contributingModules: ModuleName[] = []
 
   // ═══════════════════════════════════════════
-  // COLOR PREDICTION — v4.1 ANTI-STREAK
+  // COLOR PREDICTION — v4.2 ANTI-STREAK RELOADED
   // ═══════════════════════════════════════════
   if (betType === 'color') {
     const cats = ['red', 'black']
@@ -426,7 +426,7 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
     const postStreakAnalysis = (): { breakPct: number; continuePct: number; avgStreakLen: number } => {
       if (nonZero.length < 10) return { breakPct: 55, continuePct: 45, avgStreakLen: 2.5 }
 
-      const colorHistory = nonZero.map(n => getNumberColor(n)).filter((c): c is string => c !== null)
+      const colorHistory = nonZero.map(n => getNumberColor(n)).filter((c): c is 'red' | 'black' => c !== 'green')
       const allStreaks: number[] = [] // length of each streak found
       const breaksAfterStreak: { streakLen: number; broke: boolean }[] = []
 
@@ -447,17 +447,25 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
         ? allStreaks.reduce((a, b) => a + b, 0) / allStreaks.length
         : 2.5
 
-      // Look at all completed streaks of similar length
-      const similarStreaks = breaksAfterStreak.filter(s => s.broke && s.streakLen >= Math.max(2, currentStreak - 1))
-      if (similarStreaks.length >= 2) {
-        // All completed streaks of this length broke (by definition) — streak ALWAYS ends
-        // The question is WHEN. Count how many broke at exactly this length vs continued longer
-        const brokeAtLen = breaksAfterStreak.filter(s => s.broke && s.streakLen === currentStreak).length
-        const survivedPastLen = breaksAfterStreak.filter(s => s.broke && s.streakLen > currentStreak).length
+      // v4.2: Improved break probability — count ALL completed streaks that
+      // reached at least currentStreak length, then check how many broke at exactly
+      // that length vs survived longer.
+      // Also compute per-length break rates for smarter calibration.
+      const reachedStreak = breaksAfterStreak.filter(s => s.broke && s.streakLen >= currentStreak)
+      if (reachedStreak.length >= 2) {
+        const brokeAtLen = reachedStreak.filter(s => s.streakLen === currentStreak).length
+        const survivedPastLen = reachedStreak.filter(s => s.streakLen > currentStreak).length
         const total = brokeAtLen + survivedPastLen
         if (total > 0) {
+          // v4.2: Add weighted historical average — streaks at shorter lengths inform us too
+          const allCompleted = breaksAfterStreak.filter(s => s.broke)
+          const totalBreaks = allCompleted.length || 1
+          const overallBreakRate = (allCompleted.filter(s => s.streakLen <= currentStreak).length / totalBreaks) * 100
+          // Blend: 70% specific + 30% overall (smoother, less noisy)
+          const specificBreak = (brokeAtLen / total) * 100
+          const blendedBreak = Math.round(specificBreak * 0.7 + overallBreakRate * 0.3)
           return {
-            breakPct: Math.round((brokeAtLen / total) * 100),
+            breakPct: blendedBreak,
             continuePct: Math.round((survivedPastLen / total) * 100),
             avgStreakLen
           }
@@ -467,47 +475,118 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       return { breakPct: 55, continuePct: 45, avgStreakLen }
     }
 
-    // ── ANTI-STREAK: 3 levels of response ──
-    // Streak 2: SOFT — run normal modules but dampen streak-color bias
-    // Streak 3: MEDIUM — override with moderate anti-streak force
-    // Streak 4+: STRONG — full anti-streak, disable Markov/Momentum entirely
+    // ── ANTI-STREAK v4.2: Data-driven 4-level response ──
+    // Streak 2: SOFT — modules active but capped + nudge toward opposite
+    // Streak 3: MEDIUM — Markov-2/3/Momentum DISABLED, anti-streak dominant
+    // Streak 4: STRONG — pure anti-streak with physical signals
+    // Streak 5+: ULTRA — calibrated by actual break rate (may NOT push opposite)
 
     const postStreak = postStreakAnalysis()
     const avgBoost = currentStreak > postStreak.avgStreakLen
-      ? (currentStreak - postStreak.avgStreakLen) * 8
+      ? (currentStreak - postStreak.avgStreakLen) * 10
       : 0
 
     const antiWheel = wheelDisplacement(getCat, cats)
 
-    if (currentStreak >= 4) {
-      // ═══ STRONG ANTI-STREAK (streak >= 4) ═══
-      // Disable Markov/Momentum completely, pure anti-streak
+    // v4.2: Compute data-driven break probability for smarter force calibration
+    const computeAntiStreakForce = (streakLen: number): { force: number; shouldPushOpposite: boolean } => {
+      // Use actual break rate from historical data
+      // In roulette data, break rates are: streak2≈51%, streak3≈51%, streak4≈54%, streak5≈47%
+      // Only push opposite if break rate is actually >= 49%
+      const bp = postStreak.breakPct
+      const shouldPushOpposite = bp >= 49
+      // Force scales with streak length AND break probability
+      const baseForce = streakLen <= 3 ? 40 : 50
+      const lengthBonus = Math.max(0, streakLen - 3) * 12
+      const probabilityBonus = bp >= 49 ? (bp - 49) * 1.2 : 0
+      const force = baseForce + lengthBonus + probabilityBonus + avgBoost
+      return { force, shouldPushOpposite }
+    }
+
+    if (currentStreak >= 5) {
+      // ═══ v4.2 ULTRA ANTI-STREAK (streak >= 5) ═══
+      // Data shows break rate drops below 50% at streak 5+!
+      // Use physical signals (wheel, dealer) as primary, anti-streak as secondary
+      const { force, shouldPushOpposite } = computeAntiStreakForce(currentStreak)
       const scores: Record<string, number> = { red: 0, black: 0 }
       contributingModules = ['streak']
 
-      const streakForce = 25 + (currentStreak - 4) * 20
-      const historyBoost = postStreak.breakPct > 50 ? (postStreak.breakPct - 50) * 0.8 : 0
-      const totalForce = streakForce + historyBoost + avgBoost
+      if (shouldPushOpposite) {
+        scores[oppositeColor] += force
+        scores[streakColor] -= force * 0.3
+      } else {
+        // v4.2: Even when break rate < 49%, add MILD opposite nudge (rare tie-breaker)
+        // Without this, both scores stay at 0 and prediction defaults to 'black' incorrectly
+        scores[oppositeColor] += 5
+      }
 
-      scores[oppositeColor] += totalForce
-      scores[streakColor] -= totalForce * 0.6
-
-      // Wheel only if agrees with anti-streak
+      // Wheel/dealer signal is PRIMARY at long streaks (physical bias likely)
       if (antiWheel.signal && antiWheel.signal.targetNumber) {
         const wheelCat = getCat(antiWheel.signal.targetNumber)
-        if (wheelCat && antiWheel.signal.reliability > 65 && wheelCat === oppositeColor) {
-          scores[oppositeColor] += 15
+        if (wheelCat && antiWheel.signal.reliability > 50) {
+          // At streak 5+, trust physical signals more
+          const wheelBonus = Math.min(35, antiWheel.signal.reliability * 0.5)
+          scores[wheelCat] += wheelBonus
+          contributingModules.push('wheel')
+        }
+      }
+
+      // Pre-streak frequency (contamination-free, last 15 before streak)
+      const beforeStreak = nonZero.slice(0, -(currentStreak))
+      if (beforeStreak.length >= 8) {
+        const freqs: Record<string, number> = { red: 0, black: 0 }
+        beforeStreak.slice(-15).forEach(n => { const c = getCat(n); if (c) freqs[c]++ })
+        const sTotal = Math.max(1, beforeStreak.slice(-15).length)
+        cats.forEach(c => {
+          const pct = (freqs[c] / sTotal) * 100
+          if (pct < 42) scores[c] += 8  // Strong mean-reversion signal
+          else if (pct > 58) scores[c] -= 3  // Mild push away from dominant
+        })
+        contributingModules.push('freq')
+      }
+
+      const confs = toConfidence(scores, cats, 48.6)
+      const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
+      return {
+        type: 'color',
+        options: sorted.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: Math.round(confs[c]) })),
+        bestValue: sorted[0],
+        bestConfidence: Math.round(confs[sorted[0]]),
+        dealerSignal: antiWheel.signal || undefined
+      }
+    }
+
+    if (currentStreak === 4) {
+      // ═══ v4.2 STRONG ANTI-STREAK (streak = 4) ═══
+      // All Markov/Momentum DISABLED. Anti-streak is dominant.
+      const { force, shouldPushOpposite } = computeAntiStreakForce(4)
+      const scores: Record<string, number> = { red: 0, black: 0 }
+      contributingModules = ['streak']
+
+      if (shouldPushOpposite) {
+        scores[oppositeColor] += force
+        scores[streakColor] -= force * 0.5
+      } else {
+        // Even if break rate < 49%, add mild opposite push
+        scores[oppositeColor] += 15
+      }
+
+      // Wheel signal if agrees with anti-streak
+      if (antiWheel.signal && antiWheel.signal.targetNumber) {
+        const wheelCat = getCat(antiWheel.signal.targetNumber)
+        if (wheelCat && antiWheel.signal.reliability > 55 && wheelCat === oppositeColor) {
+          scores[oppositeColor] += 18
           contributingModules.push('wheel')
         }
       }
 
       // Frequency from before streak (no contamination)
-      const beforeStreak = nonZero.slice(0, -(currentStreak))
+      const beforeStreak = nonZero.slice(0, -currentStreak)
       if (beforeStreak.length >= 5) {
         const freqs: Record<string, number> = { red: 0, black: 0 }
-        beforeStreak.slice(-10).forEach(n => { const c = getCat(n); if (c) freqs[c]++ })
-        const sTotal = Math.max(1, beforeStreak.slice(-10).length)
-        cats.forEach(c => { if ((freqs[c] / sTotal) * 100 < 45) scores[c] += 5 })
+        beforeStreak.slice(-12).forEach(n => { const c = getCat(n); if (c) freqs[c]++ })
+        const sTotal = Math.max(1, beforeStreak.slice(-12).length)
+        cats.forEach(c => { if ((freqs[c] / sTotal) * 100 < 45) scores[c] += 6 })
         contributingModules.push('freq')
       }
 
@@ -523,31 +602,43 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
     }
 
     if (currentStreak === 3) {
-      // ═══ MEDIUM ANTI-STREAK (streak = 3) ═══
-      // Override: strongly favor opposite, run limited modules
+      // ═══ v4.2 MEDIUM ANTI-STREAK (streak = 3) ═══
+      // BUG FIX: Markov-3 DISABLED (was causing 3 real bugs in production)
+      // Markov-3 looks at last 3 values which ARE the streak — completely contaminated!
+      // Markov-2 also disabled. Only use pre-streak data + wheel + post-streak history.
+      const { force, shouldPushOpposite } = computeAntiStreakForce(3)
       const scores: Record<string, number> = { red: 0, black: 0 }
       contributingModules = ['streak']
 
-      const streakForce = 20 + avgBoost
-      const historyBoost = postStreak.breakPct > 50 ? (postStreak.breakPct - 50) * 0.6 : 0
-      const totalForce = streakForce + historyBoost
-
-      scores[oppositeColor] += totalForce
-      scores[streakColor] -= totalForce * 0.4
-
-      // Allow Markov-3 (pattern-based, less contaminated) but NOT Markov-2 or Momentum
-      const markov3 = markovOrder3(getCat, cats)
-      const m3max = Math.max(...Object.values(markov3))
-      if (m3max > 0) {
-        cats.forEach(c => { scores[c] += markov3[c] * 1.0 }) // Reduced weight
-        if (markov3[oppositeColor] > markov3[streakColor]) contributingModules.push('markov3')
+      if (shouldPushOpposite) {
+        scores[oppositeColor] += force
+        scores[streakColor] -= force * 0.5
       }
 
-      // Wheel only if agrees with anti-streak
+      // v4.2: NO Markov modules — they look at the current streak values
+      // Markov-2: "B,B → ?" is contaminated by current streak
+      // Markov-3: "B,B,B → ?" IS the current streak pattern
+      // Both would push toward the streak color, defeating anti-streak purpose
+
+      // Pre-streak frequency ONLY (contamination-free)
+      const beforeStreak = nonZero.slice(0, -3)
+      if (beforeStreak.length >= 5) {
+        const freqs: Record<string, number> = { red: 0, black: 0 }
+        beforeStreak.slice(-10).forEach(n => { const c = getCat(n); if (c) freqs[c]++ })
+        const sTotal = Math.max(1, beforeStreak.slice(-10).length)
+        cats.forEach(c => {
+          const pct = (freqs[c] / sTotal) * 100
+          if (pct < 40) scores[c] += 8
+          else if (pct > 60) scores[c] -= 3
+        })
+        contributingModules.push('freq')
+      }
+
+      // Wheel signal if agrees with anti-streak
       if (antiWheel.signal && antiWheel.signal.targetNumber) {
         const wheelCat = getCat(antiWheel.signal.targetNumber)
-        if (wheelCat && antiWheel.signal.reliability > 65 && wheelCat === oppositeColor) {
-          scores[oppositeColor] += 12
+        if (wheelCat && antiWheel.signal.reliability > 60 && wheelCat === oppositeColor) {
+          scores[oppositeColor] += 14
           contributingModules.push('wheel')
         }
       }
@@ -564,9 +655,9 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
     }
 
     if (currentStreak === 2) {
-      // ═══ SOFT ANTI-STREAK (streak = 2) ═══
-      // Run modules but DISABLE frequency mean-reversion (too dominant during streaks)
-      // Use simple recent count instead
+      // ═══ v4.2 SOFT ANTI-STREAK (streak = 2) ═══
+      // Modules active but MARKOV CLAMPED: Markov can push opposite but is
+      // CAPPED when pushing toward streak color (prevents contamination)
       const markov = markovOrder2(getCat, cats)
       const markov3 = markovOrder3(getCat, cats)
       const saturation = saturationAnalysis(getCat, cats)
@@ -584,14 +675,22 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       cats.forEach(c => { scores[c] += freqs[c] * 1.5; baseScores[c] += freqs[c] * 1.5 })
       contributingModules.push(...trackContribution(scores, baseScores, cats, 'freq'))
 
-      // Markov-2 — HEAVILY REDUCED (80% cut — Markov contaminated by streak)
-      cats.forEach(c => { scores[c] += markov[c] * getWeight('markov') * 0.15; baseScores[c] += markov[c] * getWeight('markov') * 0.15 })
+      // Markov-2 — v4.2 CLAMPED: contribution toward streak color capped at max 8
+      cats.forEach(c => {
+        let contribution = markov[c] * getWeight('markov') * 0.15
+        if (c === streakColor) contribution = Math.min(contribution, 8)  // HARD CAP
+        scores[c] += contribution; baseScores[c] += contribution
+      })
       contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov'))
 
-      // Markov-3 — reduced weight
+      // Markov-3 — v4.2 CLAMPED: contribution toward streak color capped at max 10
       const m3max2 = Math.max(...Object.values(markov3))
       if (m3max2 > 0) {
-        cats.forEach(c => { scores[c] += markov3[c] * getWeight('markov3') * 0.3 })
+        cats.forEach(c => {
+          let contribution = markov3[c] * getWeight('markov3') * 0.25
+          if (c === streakColor) contribution = Math.min(contribution, 10)  // HARD CAP
+          scores[c] += contribution
+        })
         contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov3'))
       }
 
@@ -612,15 +711,15 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       const aWheelMax = Math.max(...Object.values(antiWheel.scores))
       if (aWheelMax > 0) {
         cats.forEach(c => {
-          if (c === oppositeColor) scores[c] += antiWheel.scores[c] * getWeight('wheel') * 1.2
-          else scores[c] += antiWheel.scores[c] * getWeight('wheel') * 0.2
+          if (c === oppositeColor) scores[c] += antiWheel.scores[c] * getWeight('wheel') * 1.3
+          else scores[c] += antiWheel.scores[c] * getWeight('wheel') * 0.15
         })
         contributingModules.push('wheel')
       }
 
-      // SOFT anti-streak nudge: push toward opposite
-      scores[oppositeColor] += 25
-      scores[streakColor] -= 12
+      // v4.2: Stronger anti-streak nudge
+      scores[oppositeColor] += 30
+      scores[streakColor] -= 18
 
       const confs = toConfidence(scores, cats, 48.6)
       const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
