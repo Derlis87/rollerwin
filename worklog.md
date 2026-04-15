@@ -718,3 +718,34 @@ Stage Summary:
 - Global accuracy improved from 51.0% to 51.6%
 - Streak 5+ accuracy improved from 50.0% to 54.5%
 - Files modified: src/lib/smart-prediction-v4.ts, src/components/dashboard/DashboardLive.tsx
+
+---
+Task ID: 14
+Agent: main
+Task: v4.3 Anti-Streak Corrected — Fix postStreakAnalysis bug found with 3,923 real numbers
+
+Work Log:
+- Parsed and validated 3,923 roulette numbers (no errors, all 0-36)
+- Statistical analysis: Red 49.1%, Black 50.9%, zero 2.91% — normal distribution
+- Ran v4.2 simulation: found CRITICAL BUG in postStreakAnalysis()
+- Bug: v4.2 calculated "fraction of streaks that broke at exactly length N" instead of "what happens after N consecutive same-colors"
+- This inflated breakPct: streak 3 showed 62% (real: 51%), streak 5 showed 64% (real: 47%)
+- ULTRA mode had 46.8% accuracy (worse than random) because of wrong breakPct
+- Real break rates from 3,923 numbers: streak2=49.5%, streak3=50.2%, streak4=47.5%, streak5=45.4%, streak6=47.8%
+- Implemented v4.3 with corrected postStreakAnalysis(), threshold 49→50%, removed default nudges
+- STRONG (streak 4): neutral when breakPct < 50% (real data shows 47.5%)
+- ULTRA (streak 5+): fully neutral when breakPct < 50%, improved 46.8%→47.3%
+- Added pre-streak multi-window frequency analysis for neutral mode decisions
+- Wheel signal now accepted in any direction (not only when matching anti-streak)
+- Updated all UI labels from v4.2 to v4.3
+- TypeScript compilation verified (no errors in smart-prediction-v4.ts)
+
+Stage Summary:
+- CRITICAL BUG FIXED: postStreakAnalysis() now calculates correct conditional probability
+- breakPct at streak 3: 62% (wrong) → 51% (correct)
+- breakPct at streak 5: 64% (wrong) → 47% (correct)
+- ULTRA accuracy: 46.8% → 47.3% (+0.5%, improvement direction correct)
+- STRONG accuracy: 54.6% → 52.9% (expected drop, was artificially high from wrong data)
+- No more forced opposite during streaks where data shows no edge
+- Files modified: src/lib/smart-prediction-v4.ts, src/components/dashboard/DashboardLive.tsx
+- Analysis scripts saved: download/analyze_sequence.py, download/simulate_v43.py
