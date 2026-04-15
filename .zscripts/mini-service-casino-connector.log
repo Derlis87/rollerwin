@@ -4,7 +4,7 @@ bun install v1.3.10 (30e609e0)
 + express@4.22.1
 + socket.io@4.8.3
 
-83 packages installed [241.00ms]
+83 packages installed [161.00ms]
 [casino-connector] Running bun run dev...
 $ bun --hot index.ts
 🎰 Casino Connector Service running on port 3002
