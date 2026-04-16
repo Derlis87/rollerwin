@@ -774,3 +774,24 @@ Stage Summary:
   - Streak 6+: <50% → SAME COLOR (streak continues)
 - Key user insight: streaks of 3-5 are NORMAL (82.2% of 10-spin windows contain 3+ streak)
 - Files modified: src/lib/smart-prediction-v4.ts, src/components/dashboard/DashboardLive.tsx
+
+---
+Task ID: 1
+Agent: Main Agent
+Task: Analizar bug en motor v4.5 — predicciones opuestas durante rachas largas de color
+
+Work Log:
+- Analicé la imagen del usuario extrayendo 118-129 números con colores correctos
+- Simulé el motor v4.5 paso a paso sobre la secuencia
+- Identifiqué el bug exacto: a streak 3 (MEDIUM) y streak 4 (STRONG), el motor empuja opuesto con fuerzas de 44-64 pts basándose en ventajas estadísticamente insignificantes (1.8% y 1.4%)
+- El usuario reportó que durante una racha de Rojo x5 (12,23,21,32,1), el motor predijo "Negro" en streaks 3 y 4, fallando ambas veces
+- Corregí el motor v4.5→v4.6: eliminados modos MEDIUM y STRONG, unificado streaks 2-4 en SOFT (Markov decide sin anti-racha)
+- Anti-racha SOLO se activa a streak 5 (54.9% = ventaja REAL de 4.9%) y streak 7+ (empuja mismo color)
+- Actualicé etiquetas de versión en DashboardLive.tsx y smart-prediction-v4.ts
+- Build exitoso sin errores en archivos modificados
+
+Stage Summary:
+- Bug identificado: motor v4.5 empujaba opuesto con "ventajas falsas" de 1.4-1.8% en streaks 3-4
+- Fix aplicado: v4.6 No-Fake-Edge — solo anti-racha a streak 5+ donde hay ventaja real
+- Archivos modificados: src/lib/smart-prediction-v4.ts, src/components/dashboard/DashboardLive.tsx
+- Build verificado: exitoso

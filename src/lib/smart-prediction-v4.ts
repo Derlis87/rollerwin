@@ -1,36 +1,39 @@
 /**
- * Smart Prediction Engine v4.5 — Hardcoded Break-Probability Edition
+ * Smart Prediction Engine v4.6 — No-Fake-Edge Edition
  * 
- * BUG CRITICO CORREGIDO en v4.5:
- *   La función postStreakAnalysis dinámica (v4.3/v4.4) tenía un defecto conceptual:
- *   escaneaba el historial buscando ventanas de N colores iguales, INCLUYENDO
- *   sub-ventanas de rachas más largas. Esto distorsionaba el breakPct, especialmente
- *   para streaks 5+ donde empujaba en la dirección equivocada.
+ * BUG CRITICO CORREGIDO en v4.6:
+ *   v4.5 activaba anti-racha a streak 3 (51.8%) y streak 4 (51.4%),
+ *   empujando OPUESTO con fuerzas de 44-64 puntos. El problema: esas
+ *   "ventajas" de 1.8% y 1.4% son estadísticamente insignificantes.
+ *   El motor predecía "Negro" durante rachas de Rojo y fallaba 48% de
+ *   las veces, causando 2-3 predicciones equivocadas consecutivas.
  *
- *   Además, existía la "paradoja de inspección": las probabilidades calculadas
- *   como "qué fracción de rachas de exactamente N se rompen" son DIFERENTES de
- *   "cuando el motor ve N consecutivos, qué pasa en el siguiente spin".
+ *   El usuario reportó: "la racha de rojo era muy largo, seguia cayendo
+ *   rojo y el sofware seguia prediciendo que iba a caer Negro, es muy mala"
  *
- * v4.5 FIX: Reemplazado postStreakAnalysis dinámico con datos HARDCODEADOS
- *   calculados desde la perspectiva correcta del motor (3,920 spins validados).
+ * v4.6 FIX:
+ *   1. Eliminados modos MEDIUM (streak 3) y STRONG (streak 4)
+ *   2. Unificado streaks 2-4 en SOFT: Markov decide, SIN anti-racha
+ *   3. Anti-racha SOLO se activa a streak 5 (54.9% = ventaja REAL de 4.9%)
+ *   4. Streak 6: Neutral (48.5% = sin ventaja real)
+ *   5. Streak 7+: Empuja MISMO COLOR (racha probablemente continúa)
  *
- * Probabilidades validadas (perspectiva del motor):
- *   Streak 2: 49.7% rompe → NEUTRAL (sin ventaja)
- *   Streak 3: 51.8% rompe → empujar OPUESTO (ligera ventaja)
- *   Streak 4: 51.4% rompe → empujar OPUESTO (ligera ventaja)
- *   Streak 5: 54.9% rompe → empujar OPUESTO FUERTE (mejor ventaja!)
- *   Streak 6: 48.5% rompe → empujar MISMO COLOR (racha continúa)
- *   Streak 7: 45.3% rompe → empujar MISMO COLOR
- *   Streak 8: 44.8% rompe → empujar MISMO COLOR
- *   Streak 9+: 37.5% rompe → empujar MISMO COLOR (fuerte)
+ * NUEVA LÓGICA:
+ *   Streak 1:    NORMAL — Markov + freq + momentum + saturation + wheel
+ *   Streak 2-4:  SOFT   — Markov decide, SIN empujar opuesto, SIN cap
+ *   Streak 5:    ULTRA  — Empuja OPUESTO (54.9% = mejor ventaja!)
+ *   Streak 6:    ULTRA  — Neutral-ish (48.5% ≈ 50/50)
+ *   Streak 7+:   ULTRA  — Empuja MISMO COLOR (racha continúa, 45.3% o menos)
  *
- * CAMBIOS vs v4.4:
- *   1. Eliminado postStreakAnalysis dinámico → BREAK_PROBS tabla hardcoded
- *   2. SOFT (streak 2): Ya NO empuja opuesto (49.7% = sin ventaja)
- *   3. MEDIUM (streak 3): Empuja opuesto con fuerza calibrada (51.8%)
- *   4. STRONG (streak 4): Empuja opuesto suave (51.4%)
- *   5. ULTRA (streak 5): Empuja opuesto FUERTE (54.9% = mejor ventaja!)
- *   6. ULTRA (streak 6+): Empuja MISMO COLOR (racha probablemente continúa)
+ * Datos validados (perspectiva del motor, 3,920 spins):
+ *   Streak 2: 49.7% rompe → SIN ventaja
+ *   Streak 3: 51.8% rompe → 1.8% de ventaja (INSIGNIFICANTE)
+ *   Streak 4: 51.4% rompe → 1.4% de ventaja (INSIGNIFICANTE)
+ *   Streak 5: 54.9% rompe → 4.9% de ventaja (REAL, la mejor!)
+ *   Streak 6: 48.5% rompe → 1.5% para continuar (INSIGNIFICANTE)
+ *   Streak 7: 45.3% rompe → 4.7% para continuar (REAL)
+ *   Streak 8: 44.8% rompe → 5.2% para continuar (REAL)
+ *   Streak 9+: 37.5% rompe → 12.5% para continuar (MUY FUERTE)
  */
 
 // European roulette wheel layout (clockwise from 0)
@@ -626,100 +629,20 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       }
     }
 
-    if (currentStreak === 4) {
-      // ═══ v4.5 STRONG (streak = 4) — SLIGHT EDGE FOR OPPOSITE ═══
-      // Real data: 51.4% break rate — slight but real edge.
-      // v4.4 was pushing at correct direction but with weak force.
-      const { force, pushOpposite, pushSame } = computeAntiStreakForce(4)
-      const scores: Record<string, number> = { red: 0, black: 0 }
-      contributingModules = ['streak']
-
-      if (pushOpposite) {
-        // 54.6% → force = 30 + (54.6-50)*8 + 8 + avgBoost ≈ 30+37+8+avg ≈ 75+
-        scores[oppositeColor] += force
-        scores[streakColor] -= force * 0.5
-      }
-
-      // Wheel signal — only if aligns with opposite (our predicted direction)
-      if (antiWheel.signal && antiWheel.signal.targetNumber) {
-        const wheelCat = getCat(antiWheel.signal.targetNumber)
-        if (wheelCat && antiWheel.signal.reliability > 55) {
-          if (wheelCat === oppositeColor) {
-            const wheelBonus = Math.min(20, antiWheel.signal.reliability * 0.35)
-            scores[wheelCat] += wheelBonus
-            contributingModules.push('wheel')
-          }
-        }
-      }
-
-      // Pre-streak frequency as tiebreaker
-      const preFreq = preStreakFrequency(4)
-      if (Math.abs(preFreq.red) + Math.abs(preFreq.black) > 0) {
-        cats.forEach(c => { scores[c] += preFreq[c] * 0.5 })
-        contributingModules.push('freq')
-      }
-
-      const confs = toConfidence(scores, cats, 48.6)
-      const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
-      return {
-        type: 'color',
-        options: sorted.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: Math.round(confs[c]) })),
-        bestValue: sorted[0],
-        bestConfidence: Math.round(confs[sorted[0]]),
-        dealerSignal: antiWheel.signal || undefined
-      }
-    }
-
-    if (currentStreak === 3) {
-      // ═══ v4.5 MEDIUM (streak = 3) — SLIGHT EDGE FOR OPPOSITE ═══
-      // Real data: 51.3% break — marginal but positive edge.
-      // v4.4 was neutral (49.2%) due to postStreakAnalysis bug.
-      const { force, pushOpposite, pushSame } = computeAntiStreakForce(3)
-      const scores: Record<string, number> = { red: 0, black: 0 }
-      contributingModules = ['streak']
-
-      if (pushOpposite) {
-        // 51.3% → force = 30 + (51.3-50)*8 + 0 = ~40.4 (moderate)
-        scores[oppositeColor] += force
-        scores[streakColor] -= force * 0.4
-      }
-
-      // Pre-streak frequency as tiebreaker
-      const preFreq = preStreakFrequency(3)
-      if (Math.abs(preFreq.red) + Math.abs(preFreq.black) > 0) {
-        cats.forEach(c => { scores[c] += preFreq[c] * 0.5 })
-        contributingModules.push('freq')
-      }
-
-      // Wheel signal — only if aligns with opposite
-      if (antiWheel.signal && antiWheel.signal.targetNumber) {
-        const wheelCat = getCat(antiWheel.signal.targetNumber)
-        if (wheelCat && antiWheel.signal.reliability > 60) {
-          if (wheelCat === oppositeColor) {
-            const wheelBonus = Math.min(18, antiWheel.signal.reliability * 0.3)
-            scores[wheelCat] += wheelBonus
-            contributingModules.push('wheel')
-          }
-        }
-      }
-
-      const confs = toConfidence(scores, cats, 48.6)
-      const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
-      return {
-        type: 'color',
-        options: sorted.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: Math.round(confs[c]) })),
-        bestValue: sorted[0],
-        bestConfidence: Math.round(confs[sorted[0]]),
-        dealerSignal: antiWheel.signal || undefined
-      }
-    }
-
-    if (currentStreak === 2) {
-      // ═══ v4.5 SOFT (streak = 2) — NEUTRAL ═══
-      // Real data: 49.7% break — basically 50/50, NO edge for either direction.
-      // v4.4 was sometimes pushing opposite (incorrectly).
-      // v4.5: NO anti-streak push, let Markov and other modules decide.
-      const { force, pushOpposite, pushSame } = computeAntiStreakForce(2)
+    if (currentStreak <= 4) {
+      // ═══ v4.6 SOFT (streak 2-4) — NEUTRAL, SIN anti-racha ═══
+      // v4.5 BUG CORREGIDO: Las ventajas a streak 3 (1.8%) y streak 4 (1.4%)
+      // son estadísticamente insignificantes. El motor predecía opuesto 3 veces
+      // seguidas (streaks 3,4,5) y fallaba frecuentemente, causando pérdidas.
+      //
+      // Datos reales:
+      //   Streak 2: 49.7% break → SIN ventaja (neutral)
+      //   Streak 3: 51.8% break → ventaja de solo 1.8% (insignificante)
+      //   Streak 4: 51.4% break → ventaja de solo 1.4% (insignificante)
+      //   Streak 5: 54.9% break → ventaja REAL de 4.9% (útil)
+      //
+      // v4.6 FIX: Streaks 2-4 = SOFT neutro. Markov y otros módulos deciden.
+      // Solo a streak 5+ se activa anti-racha (donde hay ventaja real).
 
       const markov = markovOrder2(getCat, cats)
       const markov3 = markovOrder3(getCat, cats)
@@ -730,36 +653,36 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       cats.forEach(c => { baseScores[c] = 0; scores[c] = 0 })
       contributingModules = []
 
-      // Markov-2 — CLAMPED when pushing toward streak color
+      // Markov-2 — peso completo, SIN cap (Markov decide libremente)
       cats.forEach(c => {
-        let contribution = markov[c] * getWeight('markov') * 0.2
-        if (c === streakColor) contribution = Math.min(contribution, 6)  // HARD CAP
+        const contribution = markov[c] * getWeight('markov') * 0.2
         scores[c] += contribution; baseScores[c] += contribution
       })
       contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov'))
 
-      // Markov-3 — CLAMPED when pushing toward streak color
+      // Markov-3 — peso completo, SIN cap
       const m3max2 = Math.max(...Object.values(markov3))
       if (m3max2 > 0) {
         cats.forEach(c => {
           let contribution = markov3[c] * getWeight('markov3') * 0.3
-          if (c === streakColor) contribution = Math.min(contribution, 8)  // HARD CAP
+          // Solo un cap leve en streak 4 para evitar que Markov domine demasiado
+        if (c === streakColor && currentStreak === 4) contribution = Math.min(contribution, 12)
           scores[c] += contribution
         })
         contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov3'))
       }
 
-      // v4.5: NO anti-streak push at streak 2 (49.7% = no edge)
-      // Let Markov, saturation, and wheel signals drive the prediction
+      // v4.6: CERO anti-streak push en streaks 2-4
+      // La racha puede continuar naturalmente sin que el motor la combata
 
-      // Saturation
+      // Saturation — si un color domina los últimos 8 spins
       const satMax = Math.max(...Object.values(saturation))
       if (satMax > 0) {
         cats.forEach(c => { scores[c] += saturation[c] * getWeight('saturation') })
         contributingModules.push(...trackContribution(scores, baseScores, cats, 'saturation'))
       }
 
-      // Wheel signal — accepted in ANY direction
+      // Wheel signal — aceptado en CUALQUIER dirección
       if (antiWheel.signal && antiWheel.signal.targetNumber) {
         const wheelCat = getCat(antiWheel.signal.targetNumber)
         if (wheelCat && antiWheel.signal.reliability > 55) {
