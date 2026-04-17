@@ -795,3 +795,24 @@ Stage Summary:
 - Fix aplicado: v4.6 No-Fake-Edge — solo anti-racha a streak 5+ donde hay ventaja real
 - Archivos modificados: src/lib/smart-prediction-v4.ts, src/components/dashboard/DashboardLive.tsx
 - Build verificado: exitoso
+---
+Task ID: 1
+Agent: Main Agent
+Task: Fix v4.6 remanent anti-streak bias causing "stupid person" behavior during Red streaks
+
+Work Log:
+- Analyzed uploaded screenshot of roulette software showing prediction behavior
+- Read full smart-prediction-v4.ts code (v4.6) to find remaining anti-streak bias sources
+- Found 3 critical bugs in v4.6 that still caused the software to predict opposite color during streaks
+- BUG 1: saturationAnalysis was active in SOFT mode (streaks 2-4). During a 4-red streak, last 8 spins have 5+ reds → saturation pushed BLACK with up to 50 points (weight 2.5 * score 20). This "saturation" was not independent info — it was CAUSED BY the streak itself.
+- BUG 2: Markov-3 cap at streak 4 (`Math.min(contribution, 12)`) artificially limited the streak color's score
+- BUG 3: SOFT mode range was `currentStreak <= 4` which included streaks 0-1, making NORMAL mode dead code for color predictions
+- Fixed all 3 bugs in smart-prediction-v4.ts (version bumped to v4.7)
+- Also reduced ULTRA mode force at streak 5 from ~85+ to ~59 (proportional to 4.9% edge, not exaggerated)
+- Updated DashboardLive.tsx version labels from v4.6 to v4.7
+- Build passed successfully
+
+Stage Summary:
+- v4.7 fixes: (1) Saturation disabled in SOFT mode, (2) Markov-3 cap removed at streak 4, (3) SOFT mode range corrected to streaks 2-4 only, (4) ULTRA force reduced to proportional levels
+- Files modified: /home/z/my-project/src/lib/smart-prediction-v4.ts, /home/z/my-project/src/components/dashboard/DashboardLive.tsx
+- Build: SUCCESS
