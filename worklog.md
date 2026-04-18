@@ -886,3 +886,24 @@ Stage Summary:
 - Key change: REMOVED same-color push at streaks 3-5, REPLACED with opposite nudge based on validated probabilities
 - Expected improvement: ~25% reduction in peaks 4-6, accuracy in streaks 3-5 improves from ~48% to ~52%
 - Files modified: /home/z/my-project/src/lib/smart-prediction-v4.ts, /home/z/my-project/src/components/dashboard/DashboardLive.tsx
+
+---
+Task ID: 2
+Agent: Main
+Task: Create Post-Number Transition Analysis filter
+
+Work Log:
+- Created /home/z/my-project/src/lib/after-number-engine.ts — analyzes historical data to find what follows each number (0-36)
+- Created /home/z/my-project/src/components/dashboard/charts/AfterNumberFilter.tsx — UI component with confidence bars
+- Integrated into DashboardLive.tsx — shows after last number that fell
+- Fixed TypeScript errors (normalize functions returning generic {a,b} instead of named properties)
+- Updated version labels to v5.1
+
+Stage Summary:
+- New feature: "PRONÓSTICO POST-NÚMERO" panel
+- Shows prediction for color, dozen, column, parity after each number
+- Based on 100% historical data from the pasted sequence
+- Confidence bars for each category
+- Summary badges showing combined prediction
+- Files created: after-number-engine.ts, AfterNumberFilter.tsx
+- Files modified: DashboardLive.tsx (import + render)
