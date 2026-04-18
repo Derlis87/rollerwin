@@ -840,3 +840,29 @@ Stage Summary:
 - Files modified: smart-prediction-v4.ts (v4.8), DashboardLive.tsx (labels)
 - Script created: /home/z/my-project/scripts/simulate-full.ts
 - Build: SUCCESS
+---
+Task ID: 1
+Agent: Main Agent
+Task: Fix bad streaks (Pico: 7+) in Smart Prediction v4.8
+
+Work Log:
+- Analyzed user screenshot showing Pico: 7 (7 consecutive prediction errors)
+- Read v4.8 prediction engine code to understand streak handling logic
+- Read peak-engine.ts to understand how "Pico" (peak) is calculated
+- Read DashboardLive.tsx to understand live prediction flow (prediction regenerated at each peak)
+- Wrote simulation script (simulate-v48-focused.ts) testing 7 different streak scenarios
+- Found root cause: In SOFT mode (streaks 2-5), Markov has strong historical anti-streak bias ("BB→R") from thousands of past spins. This bias dominates and predicts opposite color for 4-5 consecutive spins before ULTRA saves at streak 6.
+- Also found that toConfidence FLOOR=5 compresses close scores, making it harder to flip predictions
+- Implemented v4.9 Streak-Context Dampening in smart-prediction-v4.ts
+- Updated version labels in DashboardLive.tsx to v4.9
+- Validated with simulation: max peak reduced from 5 to 3 in most tests
+
+Stage Summary:
+- v4.8 max peak: 5 (synthetic), 7 (user's real data)
+- v4.9 max peak: 3 (most tests), 4 (edge cases with Greens)
+- Key fix: Progressive dampening of Markov's anti-streak bias at streaks 3-5
+  - Streak 3: opposite score *= 0.40, same color += 28
+  - Streak 4: opposite score *= 0.20, same color += 38
+  - Streak 5: opposite score *= 0.08, same color += 50
+- Build passes successfully
+- Files modified: src/lib/smart-prediction-v4.ts, src/components/dashboard/DashboardLive.tsx

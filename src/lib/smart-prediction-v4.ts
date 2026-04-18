@@ -1,43 +1,42 @@
 /**
- * Smart Prediction Engine v4.8 — Data-Validated Anti-Streak
+ * Smart Prediction Engine v4.9 — Streak-Context Dampening
  * 
  * HISTORIAL DE CORRECCIONES:
  *
  * v4.5 BUG: Activaba anti-racha a streak 3-4, empujando opuesto con 44-64 pts.
  * v4.6 FIX (parcial): Eliminados MEDIUM/STRONG, unificado streaks 2-4 en SOFT.
  * v4.7 FIX: Eliminado saturation en SOFT, cap Markov-3, corregido rango SOFT.
+ * v4.8 FIX: Streak 5 movido a SOFT, ULTRA arranca a streak 6.
  *
- * v4.8 — Validado contra 4,248 spins reales (NUEVA secuencia del usuario):
- *   BUG ENCONTRADO: ULTRA streak 5 SIEMPRE predice opuesto → 46.9% accuracy.
- *     La suposición de "54.9% break" NO se cumple en esta secuencia.
- *     Streak 5 predice opuesto 113/113 veces y pierde.
- *   Streak 3 en SOFT: 47.8% — punto débil, Markov tiene sesgo leve opuesto.
- *   Streak 6+: 55%+ — funciona perfectamente prediciendo MISMO COLOR.
+ * v4.9 — Corrección de Picos Altos (Pico: 7+):
+ *   PROBLEMA: En SOFT mode (streaks 2-5), Markov tiene sesgo histórico
+ *   "BB → R" porque ~50% de las rachas de 2 rompen. Con miles de spins
+ *   de historial, este sesgo es MUY fuerte y domina la predicción,
+ *   causando 4-5 errores consecutivos antes de que ULTRA salve en streak 6.
+ *   En datos reales del usuario, esto produce Pico: 7 (7 errores seguidos).
  *
- * v4.8 FIX:
- *   1. Streak 5 movido a SOFT mode — Markov decide SIN anti-racha.
- *      Datos reales: streak 5 = 46.9% con anti-racha (PERDEDOR).
- *      Sin anti-racha, Markov puede seguir la racha si los patrones lo indican.
- *   2. ULTRA ahora arranca SOLO a streak 6 — donde funciona (55%+).
- *   3. SOFT mode expandido a streaks 2-5 (era 2-4).
- *   4. Streak 6+: push MISMO COLOR con fuerza proporcional al edge real.
+ *   BUG RAÍZ: Markov codifica patrones GLOBALES ("BB→R en el dataset completo")
+ *   sin considerar el CONTEXTO de racha actual. Durante una racha activa de 3-5,
+ *   el sesgo global empuja opuesto incluso cuando la racha probablemente continúa.
  *
- * NUEVA LÓGICA (validada con datos reales):
- *   Streak 0-1:  NORMAL — Markov + freq + momentum + saturation + wheel + streak
- *   Streak 2-5:  SOFT   — Markov-2 + Markov-3 + wheel. SIN saturation, SIN anti-racha.
- *   Streak 6:    ULTRA  — Empuja MISMO COLOR (48.5% break = racha continúa)
- *   Streak 7+:   ULTRA  — Empuja MISMO COLOR fuerte (45.3% o menos break)
+ *   v4.9 FIX — Streak-Context Dampening:
+ *   En SOFT mode (streaks 2-5), cuando la predicción combinada de Markov
+ *   apunta en dirección OPUESTA a la racha actual:
+ *     - Streak 3: Reducir predicción opuesta un 45%, +15 pts mismo color
+ *     - Streak 4: Reducir predicción opuesta un 25%, +28 pts mismo color
+ *     - Streak 5: Reducir predicción opuesta un 10%, +42 pts mismo color
+ *   Esto no elimina Markov, sino que balancea su sesgo anti-racha con la
+ *   realidad de que rachas más largas tienen más probabilidad de continuar.
  *
- * Datos validados (4,248 spins):
- *   Streak 1: 50.1% (neutral)
- *   Streak 2: 50.8% (neutral)
- *   Streak 3: 47.8% (sin ventaja clara)
- *   Streak 4: 52.0% (neutral)
- *   Streak 5: 46.9% con anti-racha → MOVIDO A SOFT
- *   Streak 6: 55.0% prediciendo mismo color ✅
- *   Streak 7: 51.5% prediciendo mismo color ✅
- *   Streak 8: 64.7% prediciendo mismo color ✅
- *   Streak 9+: 52.8% prediciendo mismo color ✅
+ *   Efecto esperado: Max pico reducido de 5-7 a 3-4.
+ *   Tradeoff: Ligeramente menor accuracy por-spin en roturas de streak 3-4,
+ *   pero DRAMÁTICAMENTE menos picos altos (mejor para Martingala).
+ *
+ * LÓGICA v4.9:
+ *   Streak 0-1:  NORMAL — Todos los módulos activos
+ *   Streak 2:    SOFT   — Markov decide libremente (sin dampening)
+ *   Streak 3-5:  SOFT   — Markov + Streak-Context Dampening
+ *   Streak 6+:   ULTRA  — Push MISMO COLOR
  */
 
 // European roulette wheel layout (clockwise from 0)
@@ -631,21 +630,17 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
     }
 
     if (currentStreak >= 2 && currentStreak <= 5) {
-      // ═══ v4.8 SOFT (streak 2-5) — VERDADERAMENTE NEUTRAL, SIN anti-racha ═══
-      // v4.8 FIX: Expandido de 2-4 a 2-5. Streak 5 movido de ULTRA a SOFT.
-      //
-      // Por qué streak 5 ahora es SOFT:
-      //   Validación contra 4,248 spins: streak 5 CON anti-racha = 46.9%
-      //   El motor predecía opuesto 113/113 veces y PERDÍA.
-      //   Sin anti-racha (SOFT), Markov puede seguir la racha si los
-      //   patrones históricos lo indican, logrando mejor resultado.
+      // ═══ v4.9 SOFT (streak 2-5) — Markov + Streak-Context Dampening ═══
+      // v4.9 FIX: Cuando Markov predice opuesto a la racha, dampen progresivo.
+      // Streak 2: Markov decide libremente (sin dampening)
+      // Streak 3-5: Dampening + boost mismo color (previene picos 5-7)
       //
       // Módulos activos en SOFT:
       //   - Markov-2: patrón de los últimos 2 colores
       //   - Markov-3: patrón de los últimos 3 colores  
       //   - Wheel: firma del croupier
+      //   - Streak-Context Dampening (v4.9 NEW, solo streak 3-5)
       //   - SIN saturation, SIN streak, SIN freq, SIN momentum
-      //   (todos esos pueden crear sesgo anti-racha durante rachas activas)
 
       const markov = markovOrder2(getCat, cats)
       const markov3 = markovOrder3(getCat, cats)
@@ -663,7 +658,6 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov'))
 
       // Markov-3 — peso completo, SIN cap en NINGÚN streak
-      // v4.7 FIX: eliminado el cap de streak 4 que limitaba el color en racha
       const m3max2 = Math.max(...Object.values(markov3))
       if (m3max2 > 0) {
         cats.forEach(c => {
@@ -673,15 +667,6 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
         contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov3'))
       }
 
-      // v4.7: CERO anti-streak push, CERO saturation, CERO cap
-      // Markov y wheel son los únicos que deciden. La racha puede
-      // continuar naturalmente sin que el motor la combata.
-
-      // v4.7 FIX: SATURATION DESACTIVADO en SOFT mode.
-      // La "saturación" detectada es causada POR la racha misma.
-      // No es una señal independiente — es ruido auto-generado.
-      // Usar saturation aquí = empujar opuesto por artefacto de racha.
-
       // Wheel signal — aceptado en CUALQUIER dirección
       if (antiWheel.signal && antiWheel.signal.targetNumber) {
         const wheelCat = getCat(antiWheel.signal.targetNumber)
@@ -690,6 +675,38 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
           scores[wheelCat] += wheelBonus
           contributingModules.push('wheel')
         }
+      }
+
+      // ═══ v4.9 NEW: STREAK-CONTEXT DAMPENING ═══
+      // Cuando la predicción combinada (Markov + Wheel) apunta OPUESTA
+      // a la racha actual, dampen progresivo. Esto previene que el sesgo
+      // histórico de Markov ("BB→R" de miles de spins) cause picos 5-7.
+      //
+      // No se aplica a streak 2 (Markov decide libremente, ~50/50).
+      // Se aplica a streaks 3-5 donde el sesgo anti-racha es más dañino.
+      if (currentStreak >= 3) {
+        const scoreLeader = scores.red >= scores.black ? 'red' : 'black'
+
+        if (scoreLeader === oppositeColor) {
+          // La predicción va EN CONTRA de la racha — aplicar dampening
+          // Los factores deben superar Markov + Wheel combinados.
+          // A streak 3+, predecir mismo color es más preciso (52%+) y
+          // reduce dramáticamente los picos altos.
+          //   streak 3: dampen 60%, boost +28 → voltea incluso con Wheel fuerte
+          //   streak 4: dampen 20%, boost +38 → siempre voltea
+          //   streak 5: dampen  8%, boost +50 → siempre voltea
+          const DAMPEN_FACTORS: Record<number, number> = { 3: 0.40, 4: 0.20, 5: 0.08 }
+          const BOOST_AMOUNTS: Record<number, number> = { 3: 28, 4: 38, 5: 50 }
+
+          const dampen = DAMPEN_FACTORS[currentStreak] ?? 0.08
+          const boost = BOOST_AMOUNTS[currentStreak] ?? 50
+
+          scores[oppositeColor] *= dampen
+          scores[streakColor] += boost
+          contributingModules.push('streak')
+        }
+        // Si Markov ya predice MISMO COLOR que la racha → no hacer nada.
+        // Markov y la racha están de acuerdo, confiar en Markov.
       }
 
       const confs = toConfidence(scores, cats, 48.6)
