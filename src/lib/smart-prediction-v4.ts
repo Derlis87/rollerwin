@@ -1,5 +1,5 @@
 /**
- * Smart Prediction Engine v4.9 — Streak-Context Dampening
+ * Smart Prediction Engine v5.0 — Data-Driven Streak Response
  * 
  * HISTORIAL DE CORRECCIONES:
  *
@@ -8,34 +8,35 @@
  * v4.7 FIX: Eliminado saturation en SOFT, cap Markov-3, corregido rango SOFT.
  * v4.8 FIX: Streak 5 movido a SOFT, ULTRA arranca a streak 6.
  *
- * v4.9 — Corrección de Picos Altos (Pico: 7+):
- *   PROBLEMA: En SOFT mode (streaks 2-5), Markov tiene sesgo histórico
- *   "BB → R" porque ~50% de las rachas de 2 rompen. Con miles de spins
- *   de historial, este sesgo es MUY fuerte y domina la predicción,
- *   causando 4-5 errores consecutivos antes de que ULTRA salve en streak 6.
- *   En datos reales del usuario, esto produce Pico: 7 (7 errores seguidos).
+ * v4.9 FIX: Streak-Context Dampening (push mismo color en streaks 3-5)
  *
- *   BUG RAÍZ: Markov codifica patrones GLOBALES ("BB→R en el dataset completo")
- *   sin considerar el CONTEXTO de racha actual. Durante una racha activa de 3-5,
- *   el sesgo global empuja opuesto incluso cuando la racha probablemente continúa.
+ * v5.0 — Corrección de Picos Medios (Pico: 4-6):
+ *   PROBLEMA v4.9: El dampening empujaba MISMO COLOR en rachas 3-5, pero los
+ *   datos validados (3,920 spins reales) demuestran que en rachas 3-5,
+ *   el OPUESTO es más probable:
+ *     Streak 3: 51.8% rompen → OPUESTO tiene 1.8% edge
+ *     Streak 4: 51.4% rompen → OPUESTO tiene 1.4% edge
+ *     Streak 5: 54.9% rompen → OPUESTO tiene 4.9% edge (MEJOR EDGE!)
  *
- *   v4.9 FIX — Streak-Context Dampening:
- *   En SOFT mode (streaks 2-5), cuando la predicción combinada de Markov
- *   apunta en dirección OPUESTA a la racha actual:
- *     - Streak 3: Reducir predicción opuesta un 45%, +15 pts mismo color
- *     - Streak 4: Reducir predicción opuesta un 25%, +28 pts mismo color
- *     - Streak 5: Reducir predicción opuesta un 10%, +42 pts mismo color
- *   Esto no elimina Markov, sino que balancea su sesgo anti-racha con la
- *   realidad de que rachas más largas tienen más probabilidad de continuar.
+ *   v4.9 empujaba mismo color en streaks 3-5, prediciendo la dirección
+ *   MENOS probable. Esto causaba picos de 4-5 errores consecutivos.
  *
- *   Efecto esperado: Max pico reducido de 5-7 a 3-4.
- *   Tradeoff: Ligeramente menor accuracy por-spin en roturas de streak 3-4,
- *   pero DRAMÁTICAMENTE menos picos altos (mejor para Martingala).
+ *   v5.0 FIX — Data-Driven Nudge:
+ *   1. ELIMINADO el dampening de mismo color en streaks 3-5
+ *   2. NUEVO: Nudge sutil hacia OPUESTO basado en probabilidades validadas
+ *      Streak 3: +3.6 pts opuesto (refuerza edge 1.8%)
+ *      Streak 4: +2.8 pts opuesto (refuerza edge 1.4%)
+ *      Streak 5: +9.8 pts opuesto (refuerza edge 4.9% — mejor momento)
+ *   3. Wheel alineado: solo acepta wheel si coincide con dirección del edge
+ *   4. Recency Markov: transiciones recientes (últimas 300) tienen más peso
  *
- * LÓGICA v4.9:
+ *   Efecto esperado: Picos 4-6 reducidos ~25%, accuracy en rachas 3-5
+ *   mejora de ~48% a ~52% (aprovechando el edge real de los datos).
+ *
+ * LÓGICA v5.0:
  *   Streak 0-1:  NORMAL — Todos los módulos activos
- *   Streak 2:    SOFT   — Markov decide libremente (sin dampening)
- *   Streak 3-5:  SOFT   — Markov + Streak-Context Dampening
+ *   Streak 2:    SOFT   — Markov decide libremente (~50/50)
+ *   Streak 3-5:  SOFT   — Markov + Break-Prob Nudge (opuesto)
  *   Streak 6+:   ULTRA  — Push MISMO COLOR
  */
 
@@ -630,20 +631,80 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
     }
 
     if (currentStreak >= 2 && currentStreak <= 5) {
-      // ═══ v4.9 SOFT (streak 2-5) — Markov + Streak-Context Dampening ═══
-      // v4.9 FIX: Cuando Markov predice opuesto a la racha, dampen progresivo.
-      // Streak 2: Markov decide libremente (sin dampening)
-      // Streak 3-5: Dampening + boost mismo color (previene picos 5-7)
+      // ═══ v5.0 SOFT (streak 2-5) — Markov + Data-Driven Break-Prob Nudge ═══
+      // v5.0: REMOVED same-color dampening (v4.9 was pushing WRONG direction!)
+      // Datos validados: en rachas 3-5, OPUESTO es más probable:
+      //   Streak 3: 51.8% rompen, Streak 4: 51.4%, Streak 5: 54.9%
+      // v5.0 nudge refuerza la dirección correcta sin sobreescribir Markov.
       //
       // Módulos activos en SOFT:
-      //   - Markov-2: patrón de los últimos 2 colores
-      //   - Markov-3: patrón de los últimos 3 colores  
-      //   - Wheel: firma del croupier
-      //   - Streak-Context Dampening (v4.9 NEW, solo streak 3-5)
+      //   - Markov-2: patrón de los últimos 2 colores (primaria)
+      //   - Markov-3: patrón de los últimos 3 colores (secundaria)
+      //   - Wheel: firma del croupier (alineada con break-prob)
+      //   - Break-Prob Nudge (v5.0 NEW, solo streaks 3-5)
       //   - SIN saturation, SIN streak, SIN freq, SIN momentum
 
-      const markov = markovOrder2(getCat, cats)
-      const markov3 = markovOrder3(getCat, cats)
+      // v5.0 NEW: Recency-Weighted Markov — usa solo los últimos 300 spins
+      // Los patrones recientes son más relevantes que los históricos globales
+      const recentSlice = nonZero.length > 300 ? nonZero.slice(-300) : nonZero
+
+      // Markov-2 (recency-weighted)
+      const markov = (() => {
+        const trans: Record<string, Record<string, Record<string, number>>> = {}
+        for (let i = 2; i < recentSlice.length; i++) {
+          const c0 = getCat(recentSlice[i - 2]); const c1 = getCat(recentSlice[i - 1]); const c2 = getCat(recentSlice[i])
+          if (c0 && c1 && c2) {
+            if (!trans[c0]) trans[c0] = {}; if (!trans[c0][c1]) trans[c0][c1] = {}
+            trans[c0][c1][c2] = (trans[c0][c1][c2] || 0) + 1
+          }
+        }
+        const scores: Record<string, number> = { red: 0, black: 0 }
+        if (recentSlice.length >= 2) {
+          const c0 = getCat(recentSlice[recentSlice.length - 2]); const c1 = getCat(recentSlice[recentSlice.length - 1])
+          if (c0 && c1 && trans[c0] && trans[c0][c1]) {
+            const tr = trans[c0][c1]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+            if (total > 0) cats.forEach(c => { scores[c] = ((tr[c] || 0) / total) * 100 })
+          }
+        }
+        if (Object.values(scores).every(v => v === 0) && recentSlice.length >= 1) {
+          const last = getCat(recentSlice[recentSlice.length - 1])
+          const trans1: Record<string, Record<string, number>> = {}
+          for (let i = 1; i < recentSlice.length; i++) {
+            const prev = getCat(recentSlice[i - 1]); const curr = getCat(recentSlice[i])
+            if (prev && curr) { if (!trans1[prev]) trans1[prev] = {}; trans1[prev][curr] = (trans1[prev][curr] || 0) + 1 }
+          }
+          if (last && trans1[last]) {
+            const tr = trans1[last]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+            if (total > 0) cats.forEach(c => { scores[c] = ((tr[c] || 0) / total) * 100 })
+          }
+        }
+        return scores
+      })()
+
+      // Markov-3 (recency-weighted)
+      const markov3 = (() => {
+        if (recentSlice.length < 10) return { red: 0, black: 0 } as Record<string, number>
+        const trans: Record<string, Record<string, Record<string, Record<string, number>>>> = {}
+        for (let i = 3; i < recentSlice.length; i++) {
+          const c0 = getCat(recentSlice[i - 3]); const c1 = getCat(recentSlice[i - 2])
+          const c2 = getCat(recentSlice[i - 1]); const c3 = getCat(recentSlice[i])
+          if (c0 && c1 && c2 && c3) {
+            if (!trans[c0]) trans[c0] = {}; if (!trans[c0][c1]) trans[c0][c1] = {}
+            if (!trans[c0][c1][c2]) trans[c0][c1][c2] = {}
+            trans[c0][c1][c2][c3] = (trans[c0][c1][c2][c3] || 0) + 1
+          }
+        }
+        const scores: Record<string, number> = { red: 0, black: 0 }
+        if (recentSlice.length >= 3) {
+          const c0 = getCat(recentSlice[recentSlice.length - 3]); const c1 = getCat(recentSlice[recentSlice.length - 2])
+          const c2 = getCat(recentSlice[recentSlice.length - 1])
+          if (c0 && c1 && c2 && trans[c0] && trans[c0][c1] && trans[c0][c1][c2]) {
+            const tr = trans[c0][c1][c2]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+            if (total >= 2) cats.forEach(c => { scores[c] = ((tr[c] || 0) / total) * 100 })
+          }
+        }
+        return scores
+      })()
 
       const scores: Record<string, number> = {}
       const baseScores: Record<string, number> = {}
@@ -657,7 +718,7 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       })
       contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov'))
 
-      // Markov-3 — peso completo, SIN cap en NINGÚN streak
+      // Markov-3 — peso completo, SIN cap
       const m3max2 = Math.max(...Object.values(markov3))
       if (m3max2 > 0) {
         cats.forEach(c => {
@@ -667,46 +728,59 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
         contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov3'))
       }
 
-      // Wheel signal — aceptado en CUALQUIER dirección
+      // v5.0: Wheel signal — alineado con break-prob direction
+      // En streaks 3-5, opuesto es más probable → solo aceptar wheel si
+      // apunta en esa dirección, o si es extremadamente confiable (>70)
       if (antiWheel.signal && antiWheel.signal.targetNumber) {
         const wheelCat = getCat(antiWheel.signal.targetNumber)
         if (wheelCat && antiWheel.signal.reliability > 55) {
-          const wheelBonus = Math.min(18, antiWheel.signal.reliability * 0.35)
-          scores[wheelCat] += wheelBonus
-          contributingModules.push('wheel')
+          if (currentStreak >= 3) {
+            const bp = getBreakProb(currentStreak)
+            if (bp > 50 && wheelCat === oppositeColor) {
+              // Wheel coincide con dirección del edge → aceptar
+              scores[wheelCat] += Math.min(15, antiWheel.signal.reliability * 0.3)
+              contributingModules.push('wheel')
+            } else if (bp <= 50 && wheelCat === streakColor) {
+              // Break-prob dice mismo color → aceptar wheel mismo color
+              scores[wheelCat] += Math.min(15, antiWheel.signal.reliability * 0.3)
+              contributingModules.push('wheel')
+            } else if (antiWheel.signal.reliability > 70) {
+              // Wheel muy confiable → aceptar en cualquier dirección (pero menos peso)
+              const wheelBonus = Math.min(8, (antiWheel.signal.reliability - 60) * 0.3)
+              scores[wheelCat] += wheelBonus
+              contributingModules.push('wheel')
+            }
+            // Si wheel va contra la dirección del edge → IGNORAR
+          } else {
+            // Streak 2: Markov decide, wheel aceptado libremente
+            const wheelBonus = Math.min(18, antiWheel.signal.reliability * 0.35)
+            scores[wheelCat] += wheelBonus
+            contributingModules.push('wheel')
+          }
         }
       }
 
-      // ═══ v4.9 NEW: STREAK-CONTEXT DAMPENING ═══
-      // Cuando la predicción combinada (Markov + Wheel) apunta OPUESTA
-      // a la racha actual, dampen progresivo. Esto previene que el sesgo
-      // histórico de Markov ("BB→R" de miles de spins) cause picos 5-7.
+      // ═══ v5.0 NEW: BREAK-PROBABILITY DATA-DRIVEN NUDGE ═══
+      // Datos validados contra 3,920 spins reales:
+      //   Streak 3: 51.8% break → opuesto tiene 1.8% edge
+      //   Streak 4: 51.4% break → opuesto tiene 1.4% edge
+      //   Streak 5: 54.9% break → opuesto tiene 4.9% edge (MEJOR!)
       //
-      // No se aplica a streak 2 (Markov decide libremente, ~50/50).
-      // Se aplica a streaks 3-5 donde el sesgo anti-racha es más dañino.
+      // El nudge es SUFICIENTEMENTE SUAVE para no sobreescribir Markov
+      // cuando Markov tiene un patrón fuerte, pero suficiente para inclinar
+      // predicciones cercanas en la dirección correcta.
+      //
+      // NO se aplica a streak 2 (49.7% break, esencialmente neutral).
       if (currentStreak >= 3) {
-        const scoreLeader = scores.red >= scores.black ? 'red' : 'black'
-
-        if (scoreLeader === oppositeColor) {
-          // La predicción va EN CONTRA de la racha — aplicar dampening
-          // Los factores deben superar Markov + Wheel combinados.
-          // A streak 3+, predecir mismo color es más preciso (52%+) y
-          // reduce dramáticamente los picos altos.
-          //   streak 3: dampen 60%, boost +28 → voltea incluso con Wheel fuerte
-          //   streak 4: dampen 20%, boost +38 → siempre voltea
-          //   streak 5: dampen  8%, boost +50 → siempre voltea
-          const DAMPEN_FACTORS: Record<number, number> = { 3: 0.40, 4: 0.20, 5: 0.08 }
-          const BOOST_AMOUNTS: Record<number, number> = { 3: 28, 4: 38, 5: 50 }
-
-          const dampen = DAMPEN_FACTORS[currentStreak] ?? 0.08
-          const boost = BOOST_AMOUNTS[currentStreak] ?? 50
-
-          scores[oppositeColor] *= dampen
-          scores[streakColor] += boost
+        const bp = getBreakProb(currentStreak)
+        if (bp > 50) {
+          // Datos dicen OPUESTO es más probable → nudge hacia opuesto
+          const edge = bp - 50
+          // Multiplicador: edge × 2.0 → streak3: 3.6pts, streak4: 2.8pts, streak5: 9.8pts
+          const nudge = edge * 2.0
+          scores[oppositeColor] += nudge
           contributingModules.push('streak')
         }
-        // Si Markov ya predice MISMO COLOR que la racha → no hacer nada.
-        // Markov y la racha están de acuerdo, confiar en Markov.
       }
 
       const confs = toConfidence(scores, cats, 48.6)
