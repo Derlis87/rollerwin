@@ -6,7 +6,7 @@ bun install v1.3.10 (30e609e0)
 + socket.io@4.8.3
 + tesseract.js@5.1.1
 
-198 packages installed [610.96s]
+198 packages installed [611.38s]
 [roulette-capturer] Running bun run dev...
 $ bun --hot index.ts
 Roulette Capturer Service running on port 3004
