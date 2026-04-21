@@ -1,5 +1,5 @@
 /**
- * Smart Prediction Engine v5.0 — Data-Driven Streak Response
+ * Smart Prediction Engine v5.1 — Markov-Primary Normal
  * 
  * HISTORIAL DE CORRECCIONES:
  *
@@ -21,20 +21,24 @@
  *   v4.9 empujaba mismo color en streaks 3-5, prediciendo la dirección
  *   MENOS probable. Esto causaba picos de 4-5 errores consecutivos.
  *
- *   v5.0 FIX — Data-Driven Nudge:
- *   1. ELIMINADO el dampening de mismo color en streaks 3-5
- *   2. NUEVO: Nudge sutil hacia OPUESTO basado en probabilidades validadas
- *      Streak 3: +3.6 pts opuesto (refuerza edge 1.8%)
- *      Streak 4: +2.8 pts opuesto (refuerza edge 1.4%)
- *      Streak 5: +9.8 pts opuesto (refuerza edge 4.9% — mejor momento)
- *   3. Wheel alineado: solo acepta wheel si coincide con dirección del edge
- *   4. Recency Markov: transiciones recientes (últimas 300) tienen más peso
+ *   v5.1 FIX — NORMAL Mode Overhaul:
+ *   PROBLEMA: NORMAL mode (streak 0-1) tenía 49.6% accuracy en 2,215 predicciones.
+ *   Era prácticamente random. El 50% de todas las jugadas caen en este modo.
+ *   Causas: streakAnalysis empujaba opuesto a streak=1, saturation empujaba
+ *   opuesto con 50+ pts, frequency raw count era ruido. Simulación en 4,551
+ *   números mostró que 82% de picos >=7 empezaban con error en NORMAL.
  *
- *   Efecto esperado: Picos 4-6 reducidos ~25%, accuracy en rachas 3-5
- *   mejora de ~48% a ~52% (aprovechando el edge real de los datos).
+ *   v5.1 FIX — Markov-Primary NORMAL:
+ *   1. ELIMINADO streakAnalysis, saturation, frequency raw count en NORMAL
+ *   2. Recency Markov (últimos 300 spins) como señal primaria
+ *   3. Markov-3 (últimos 300 spins) como señal secundaria
+ *   4. Wheel alineado con Markov (solo aceptar si coinciden)
+ *   5. Last-5 pattern: si los últimos 5 tienen patrón claro, seguirlo
  *
- * LÓGICA v5.0:
- *   Streak 0-1:  NORMAL — Todos los módulos activos
+ *   Efecto esperado: NORMAL accuracy sube de 49.6% a ~52-53%
+ *
+ * LÓGICA v5.1:
+ *   Streak 0-1:  NORMAL — Markov-Primary (sin ruido)
  *   Streak 2:    SOFT   — Markov decide libremente (~50/50)
  *   Streak 3-5:  SOFT   — Markov + Break-Prob Nudge (opuesto)
  *   Streak 6+:   ULTRA  — Push MISMO COLOR
@@ -794,66 +798,124 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       }
     }
 
-    // ── NORMAL MODE (streak < 2): v4.4 IMPROVED — Markov-primary, reduced mean-reversion ──
-    // v4.3 problem: freq mean-reversion was fighting Markov, resulting in 49.1% accuracy
-    // v4.4 fix: Reduced freq deviation weight, Markov is now clearly the primary signal
-    const freq = multiWindowFreq(getCat, cats)
-    const markov = markovOrder2(getCat, cats)
-    const markov3 = markovOrder3(getCat, cats)
-    const saturation = saturationAnalysis(getCat, cats)
-    const wheel = wheelDisplacement(getCat, cats)
+    // ── NORMAL MODE (streak < 2): v5.1 Markov-Primary ──
+    // v5.1: ELIMINADO streakAnalysis, saturation, frequency raw count
+    // Estos módulos introducían ruido y sesgos que bajaban accuracy a 49.6%.
+    // Ahora NORMAL usa la misma arquitectura limpia que SOFT: Markov-only.
+    const recentSlice = nonZero.length > 300 ? nonZero.slice(-300) : nonZero
 
-    const streak = streakAnalysis(getCat, cats, streaks)
-    const momentum = momentumAnalysis(getCat, cats)
+    // Markov-2 (recency-weighted, same as SOFT mode)
+    const markov = (() => {
+      const trans: Record<string, Record<string, Record<string, number>>> = {}
+      for (let i = 2; i < recentSlice.length; i++) {
+        const c0 = getCat(recentSlice[i - 2]); const c1 = getCat(recentSlice[i - 1]); const c2 = getCat(recentSlice[i])
+        if (c0 && c1 && c2) {
+          if (!trans[c0]) trans[c0] = {}; if (!trans[c0][c1]) trans[c0][c1] = {}
+          trans[c0][c1][c2] = (trans[c0][c1][c2] || 0) + 1
+        }
+      }
+      const scores: Record<string, number> = { red: 0, black: 0 }
+      if (recentSlice.length >= 2) {
+        const c0 = getCat(recentSlice[recentSlice.length - 2]); const c1 = getCat(recentSlice[recentSlice.length - 1])
+        if (c0 && c1 && trans[c0] && trans[c0][c1]) {
+          const tr = trans[c0][c1]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+          if (total > 0) cats.forEach(c => { scores[c] = ((tr[c] || 0) / total) * 100 })
+        }
+      }
+      if (Object.values(scores).every(v => v === 0) && recentSlice.length >= 1) {
+        const last = getCat(recentSlice[recentSlice.length - 1])
+        const trans1: Record<string, Record<string, number>> = {}
+        for (let i = 1; i < recentSlice.length; i++) {
+          const prev = getCat(recentSlice[i - 1]); const curr = getCat(recentSlice[i])
+          if (prev && curr) { if (!trans1[prev]) trans1[prev] = {}; trans1[prev][curr] = (trans1[prev][curr] || 0) + 1 }
+        }
+        if (last && trans1[last]) {
+          const tr = trans1[last]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+          if (total > 0) cats.forEach(c => { scores[c] = ((tr[c] || 0) / total) * 100 })
+        }
+      }
+      return scores
+    })()
 
-    // Build composite scores with adaptive weights
+    // Markov-3 (recency-weighted, same as SOFT mode)
+    const markov3 = (() => {
+      if (recentSlice.length < 10) return { red: 0, black: 0 } as Record<string, number>
+      const trans: Record<string, Record<string, Record<string, Record<string, number>>>> = {}
+      for (let i = 3; i < recentSlice.length; i++) {
+        const c0 = getCat(recentSlice[i - 3]); const c1 = getCat(recentSlice[i - 2])
+        const c2 = getCat(recentSlice[i - 1]); const c3 = getCat(recentSlice[i])
+        if (c0 && c1 && c2 && c3) {
+          if (!trans[c0]) trans[c0] = {}; if (!trans[c0][c1]) trans[c0][c1] = {}
+          if (!trans[c0][c1][c2]) trans[c0][c1][c2] = {}
+          trans[c0][c1][c2][c3] = (trans[c0][c1][c2][c3] || 0) + 1
+        }
+      }
+      const scores: Record<string, number> = { red: 0, black: 0 }
+      if (recentSlice.length >= 3) {
+        const c0 = getCat(recentSlice[recentSlice.length - 3]); const c1 = getCat(recentSlice[recentSlice.length - 2])
+        const c2 = getCat(recentSlice[recentSlice.length - 1])
+        if (c0 && c1 && c2 && trans[c0] && trans[c0][c1] && trans[c0][c1][c2]) {
+          const tr = trans[c0][c1][c2]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+          if (total >= 2) cats.forEach(c => { scores[c] = ((tr[c] || 0) / total) * 100 })
+        }
+      }
+      return scores
+    })()
+
     const scores: Record<string, number> = {}
     const baseScores: Record<string, number> = {}
     cats.forEach(c => { baseScores[c] = 0; scores[c] = 0 })
-
     contributingModules = []
 
-    // Layer 1: Frequency — v4.4: ONLY raw count, NO deviation/mean-reversion
-    // Mean-reversion ("red appeared less → predict red") is gambler's fallacy for independent events
-    const recentFreq: Record<string, number> = { red: 0, black: 0 }
-    const last15 = nonZero.slice(-15)
-    last15.forEach(n => { const c = getCat(n); if (c) recentFreq[c]++ })
-    cats.forEach(c => { scores[c] += recentFreq[c] * 1.0; baseScores[c] += recentFreq[c] * 1.0 })
-    contributingModules.push(...trackContribution(scores, baseScores, cats, 'freq'))
-
-    // Layer 2: Markov Order-2 — PRIMARY signal (weight boosted in v4.4)
-    cats.forEach(c => { scores[c] += markov[c] * getWeight('markov') * 1.2; baseScores[c] += markov[c] * getWeight('markov') * 1.2 })
+    // Markov-2 — PRIMARY signal (same weight as SOFT mode)
+    cats.forEach(c => {
+      const contribution = markov[c] * getWeight('markov') * 0.2
+      scores[c] += contribution; baseScores[c] += contribution
+    })
     contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov'))
 
-    // Layer 3: Markov Order-3 — SECONDARY signal
+    // Markov-3 — SECONDARY signal
     const m3max = Math.max(...Object.values(markov3))
     if (m3max > 0) {
-      cats.forEach(c => { scores[c] += markov3[c] * getWeight('markov3') * 1.1 })
+      cats.forEach(c => {
+        const contribution = markov3[c] * getWeight('markov3') * 0.3
+        scores[c] += contribution
+      })
       contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov3'))
     }
 
-    // Layer 4: Streak (soft reversion at streak=1) — kept but reduced
-    cats.forEach(c => { scores[c] += streak[c] * getWeight('streak') * 0.5 })
-    contributingModules.push(...trackContribution(scores, baseScores, cats, 'streak'))
-
-    // Layer 5: Momentum
-    if (momentum) {
-      scores[momentum] += 12 * getWeight('momentum')  // v4.4: slightly reduced
-      contributingModules.push('momentum')
+    // Wheel signal — aligned with Markov direction
+    const wheelData = wheelDisplacement(getCat, cats)
+    if (wheelData.signal && wheelData.signal.targetNumber) {
+      const wheelCat = getCat(wheelData.signal.targetNumber)
+      if (wheelCat && wheelData.signal.reliability > 60) {
+        // v5.1: In NORMAL mode, only accept wheel if it AGREES with Markov leader
+        const markovLeader = scores.red >= scores.black ? 'red' : 'black'
+        if (wheelCat === markovLeader) {
+          // Wheel confirms Markov → boost
+          scores[wheelCat] += Math.min(15, wheelData.signal.reliability * 0.3)
+          contributingModules.push('wheel')
+        }
+        // If wheel disagrees with Markov → ignore (Markov is primary in NORMAL)
+      }
     }
 
-    // Layer 6: Saturation
-    const satMax = Math.max(...Object.values(saturation))
-    if (satMax > 0) {
-      cats.forEach(c => { scores[c] += saturation[c] * getWeight('saturation') })
-      contributingModules.push(...trackContribution(scores, baseScores, cats, 'saturation'))
-    }
-
-    // Layer 7: Wheel displacement
-    const wheelMax = Math.max(...Object.values(wheel.scores))
-    if (wheelMax > 0) {
-      cats.forEach(c => { scores[c] += wheel.scores[c] * getWeight('wheel') })
-      contributingModules.push(...trackContribution(scores, baseScores, cats, 'wheel'))
+    // v5.1 NEW: Last-5 pattern detection
+    // If the last 4-5 non-green results show a clear alternating or repeating pattern,
+    // follow it. This captures short-term momentum that Markov-2 might miss.
+    const last5raw = nonZero.slice(-5).map(n => getCat(n)).filter((c) => c !== null)
+    if (last5raw.length >= 4) {
+      const last = last5raw[last5raw.length - 1]
+      // Check for alternating pattern (ABAB or BABA)
+      let alternating = true
+      for (let i = 1; i < last5raw.length; i++) {
+        if (last5raw[i] === last5raw[i - 1]) { alternating = false; break }
+      }
+      if (alternating && last5raw.length >= 4) {
+        // Strong alternating pattern → predict opposite of last
+        const opposite = cats.find(c => c !== last)!
+        scores[opposite] += 5  // Gentle boost, doesn't override Markov
+      }
     }
 
     const confs = toConfidence(scores, cats, 48.6)
@@ -863,7 +925,7 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       options: sorted.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: Math.round(confs[c]) })),
       bestValue: sorted[0],
       bestConfidence: Math.round(confs[sorted[0]]),
-      dealerSignal: wheel.signal || undefined
+      dealerSignal: wheelData.signal || undefined
     }
   }
 

@@ -455,7 +455,7 @@ export function DashboardLive() {
   }, [])
 
   // ============================================
-  // SISTEMA DE PREDICCIÓN AVANZADO v5.1 Data-Driven + Post-Number Analysis
+  // SISTEMA DE PREDICCIÓN AVANZADO v5.1 Markov-Primary
   // Motor externalizado en smart-prediction-v4.ts
   // Incluye: Firma del Croupier, Markov-3, 
   // Saturación, Tripletas, Z-score, Feedback Adaptativo
