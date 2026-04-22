@@ -407,7 +407,8 @@ function printResults(result: SimResult) {
   console.log(`   Total ganado:         ${result.martingale.totalWin} unidades`)
   console.log(`   Resultado neto:       ${result.martingale.netResult >= 0 ? '+' : ''}${result.martingale.netResult} unidades`)
   console.log(`   ROI:                  ${result.martingale.roi.toFixed(2)}%`)
-  console.log(`   Busts (4 pérdidas):   ${result.martingale.bustCount}`)
+  console.log(`   Busts (3 seguidas):   ${result.martingale.bustCount} → -7 unidades c/u`)
+  console.log(`   Costo total busts:    ${result.martingale.bustCount * -7} unidades`)
   
   // Profitability analysis
   console.log(`\n📊 ANÁLISIS DE RENTABILIDAD:`)
