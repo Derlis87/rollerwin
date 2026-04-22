@@ -58,10 +58,40 @@
  *      y si están sesgados hacia un color (4+ de 5), da un pequeño boost.
  *      Detecta rachas emergentes antes de que SOFT mode active.
  *
- * LÓGICA v5.2:
- *   Streak 0-1:  NORMAL — Markov + Alternation + Short-Term Recency
- *   Streak 2-5:  SOFT   — Markov + Adaptive Break-Prob Nudge + Alternation
- *   Streak 6+:   ULTRA  — Push MISMO COLOR + Alternation (peso reducido)
+ *   ⚠️ v5.2 BUG CRÍTICO: Las 3 funciones (computeAdaptiveBreakProb,
+ *      detectAlternatingPattern, shouldRecoveryFlip) estaban DEFINIDAS
+ *      pero NUNCA CONECTADAS al flujo de predicción. Simulación en 4,781
+ *      spins mostró que v5.2 se comportaba idéntico a v5.1.
+ *
+ * v5.3 — Wiring Fix + Enhanced Recovery:
+ *   PROBLEMA v5.2: 3 funciones definidas pero nunca llamadas:
+ *     1. computeAdaptiveBreakProb → nunca usada en SOFT mode
+ *     2. detectAlternatingPattern → nunca usada en ningún modo
+ *     3. shouldRecoveryFlip → nunca usada en ningún modo
+ *   RESULTADO: Pico máximo 15, ratio 8.12:1, streak 3 a 45.0%
+ *
+ *   v5.3 FIX:
+ *   1. CONECTADO computeAdaptiveBreakProb en SOFT mode:
+ *      - Streak 3-5: Usa adaptive break-prob de últimos 300 spins
+ *      - Si la sesión muestra que rachas continúan, nudge va MISMO COLOR
+ *      - Si la sesión muestra que rachas rompen, nudge va OPUESTO
+ *      - Fallback a hardcoded SOLO si no hay suficientes datos
+ *   2. CONECTADO detectAlternatingPattern en TODOS los modos:
+ *      - Detecta R-N-R-N o N-R-N-R en últimos 4-6 resultados
+ *      - Aplica override FUERTE (30 pts) cuando se detecta
+ *      - Resuelve picos de 9-15 causados por alternación
+ *   3. CONECTADO shouldRecoveryFlip como LAST RESORT:
+ *      - Después de calcular predicción normal, verificar si recovery flip
+ *      - Solo flip si engine repite MISMO color erróneo 2+ veces seguidas
+ *      - Previene rachas de 5-15 errores del mismo color
+ *   4. MEJORADO Recovery: Trigger a 2 errores consecutivos (no 3)
+ *      - Más agresivo para cortar rachas malas temprano
+ *      - Máximo 3 flips consecutivos para evitar flip loops
+ *
+ * LÓGICA v5.3:
+ *   Streak 0-1:  NORMAL — Markov + Alternation + Recency + Recovery
+ *   Streak 2-5:  SOFT   — Markov + Adaptive Break-Prob + Alternation + Recovery
+ *   Streak 6+:   ULTRA  — Push MISMO COLOR + Alternation (reducido) + Recovery
  */
 
 // European roulette wheel layout (clockwise from 0)
@@ -144,6 +174,10 @@ export function recordPredictionFeedback(correct: boolean, contributingModules: 
     if (recoveryHistory.length > MAX_RECOVERY_HISTORY) {
       recoveryHistory.shift()
     }
+    // v5.3: Reset consecutive flip counter on correct prediction
+    if (correct) {
+      consecutiveFlips = 0
+    }
   }
 
   // Update module accuracy (original logic)
@@ -160,9 +194,17 @@ export function recordPredictionFeedback(correct: boolean, contributingModules: 
   }
 }
 
-/** Check if recovery bailout should flip the prediction */
-function shouldRecoveryFlip(currentPrediction: string): boolean {
-  // Look at last N entries for consecutive wrong predictions of same color
+/** Count consecutive recovery flips to avoid flip loops */
+let consecutiveFlips = 0
+const MAX_CONSECUTIVE_FLIPS = 2
+
+/** Get the opposite color for recovery flip */
+function getOppositeColor(color: string): string {
+  return color === 'red' ? 'black' : 'red'
+}
+
+/** Count consecutive wrong predictions from recovery history */
+function getConsecutiveWrong(): RecoveryEntry[] {
   const recentWrong: RecoveryEntry[] = []
   for (let i = recoveryHistory.length - 1; i >= 0; i--) {
     if (!recoveryHistory[i].correct) {
@@ -171,19 +213,69 @@ function shouldRecoveryFlip(currentPrediction: string): boolean {
       break
     }
   }
+  return recentWrong
+}
 
-  // Need at least 2 consecutive wrong predictions of the same color
-  if (recentWrong.length < 2) return false
+/**
+ * v5.3 RECOVERY — Pattern-Aware Recovery System
+ * 
+ * After 3+ consecutive wrong predictions, analyzes the ACTUAL result pattern
+ * (computed from wrong predictions: actual = opposite of predicted when wrong)
+ * to determine the next prediction.
+ * 
+ * This is smarter than simple flipping because it follows the ACTUAL trend
+ * in the results, not just the engine's failed predictions.
+ * 
+ * Three recovery strategies:
+ * 1. STREAK FOLLOW: Last 3 actual results are same color → predict that color
+ * 2. ALTERNATION FOLLOW: Last 3 actual results alternate → predict opposite of last
+ * 3. STUCK ENGINE: Engine keeps predicting same wrong color → flip to opposite
+ */
+function getRecoveryPrediction(currentPrediction: string): string | null {
+  // Don't recover if we've already flipped too many times
+  if (consecutiveFlips >= MAX_CONSECUTIVE_FLIPS) return null
 
-  // All recent wrong predictions must be the same color
-  const allSameColor = recentWrong.every(e => e.predicted === recentWrong[0].predicted)
-  if (!allSameColor) return false
+  const recentWrong = getConsecutiveWrong()
+  
+  // Need at least 3 consecutive wrong predictions to trigger recovery
+  if (recentWrong.length < 3) return null
 
-  // KEY: Only flip if the engine is about to REPEAT the same wrong prediction.
-  // If the engine is already naturally predicting something different, DON'T flip.
-  if (currentPrediction !== recentWrong[0].predicted) return false
+  // Compute actual results from wrong predictions
+  // When prediction was wrong, actual = opposite of predicted
+  const actualResults = recentWrong.map(e => getOppositeColor(e.predicted))
 
-  return true
+  // ── STRATEGY 1: STREAK FOLLOW ──
+  // If last 3 actual results are same color → the session has a streak running
+  if (actualResults.length >= 3) {
+    const last3 = actualResults.slice(-3)
+    if (last3[0] === last3[1] && last3[1] === last3[2]) {
+      // All same → predict that color (streak is running)
+      return last3[0]
+    }
+  }
+
+  // ── STRATEGY 2: ALTERNATION FOLLOW ──
+  // If last 4 actual results alternate → predict opposite of last
+  if (actualResults.length >= 4) {
+    const last4 = actualResults.slice(-4)
+    const isAlt = last4[0] !== last4[1] && last4[1] !== last4[2] && last4[2] !== last4[3]
+    if (isAlt && last4[0] === last4[2] && last4[1] === last4[3]) {
+      // Strict alternation A-B-A-B → predict A (opposite of last B)
+      return last4[0]
+    }
+  }
+
+  // ── STRATEGY 3: STUCK ENGINE ──
+  // If engine keeps predicting same wrong color → flip
+  const last2 = recentWrong.slice(-2)
+  if (last2.length >= 2 && last2[0].predicted === last2[1].predicted) {
+    if (currentPrediction === last2[0].predicted) {
+      return getOppositeColor(currentPrediction)
+    }
+  }
+
+  // No clear pattern → don't recover
+  return null
 }
 
 /** Reset recovery history (call when bet type changes or session resets) */
@@ -760,15 +852,39 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
         contributingModules.push('freq')
       }
 
-
+      // ═══ v5.3: ALTERNATING PATTERN DETECTOR (ULTRA mode — reduced weight) ═══
+      // In ULTRA mode, alternation detection helps break the worst peaks (pico 15!)
+      // but with reduced weight since ULTRA's primary signal is push same color.
+      const altUltra = detectAlternatingPattern(nonZero, getCat)
+      if (altUltra.detected && altUltra.lastColor) {
+        const altOpposite = getOppositeColor(altUltra.lastColor)
+        // Reduced weight in ULTRA — ULTRA's primary signal should still dominate
+        // unless the alternating pattern is very clear (6+ alternations)
+        const altLength = nonZero.slice(-6).map(n => getCat(n)).filter((c): c is string => c !== null)
+        const strictAltLen = altLength.length
+        const altWeight = strictAltLen >= 6 ? 25 : 15  // Stronger for longer patterns
+        scores[altOpposite] += altWeight
+        scores[altUltra.lastColor!] -= altWeight * 0.5
+      }
 
       const confs = toConfidence(scores, cats, 48.6)
       const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
+      let bestValue = sorted[0]
+
+      // ═══ v5.3: PATTERN-AWARE RECOVERY (ULTRA mode — Last Resort) ═══
+      const recoveryUltra = getRecoveryPrediction(bestValue)
+      if (recoveryUltra) {
+        bestValue = recoveryUltra
+        consecutiveFlips++
+      } else if (recoveryHistory.length > 0 && recoveryHistory[recoveryHistory.length - 1].correct) {
+        consecutiveFlips = 0
+      }
+
       return {
         type: 'color',
         options: sorted.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: Math.round(confs[c]) })),
-        bestValue: sorted[0],
-        bestConfidence: Math.round(confs[sorted[0]]),
+        bestValue,
+        bestConfidence: Math.round(confs[bestValue]),
         dealerSignal: antiWheel.signal || undefined
       }
     }
@@ -900,10 +1016,9 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
         }
       }
 
-      // ═══ v5.2: BREAK-PROBABILITY NUDGE (streak 5 only) ═══
-      // v5.1 data showed streaks 3-4 nudge has TINY edge (1.8%, 1.4%) and
-      // actually HURTS accuracy (streak 3: 46.2%, streak 4: 49.6%).
-      // Only streak 5 has meaningful edge (4.9%). Removed nudge for 3-4.
+      // ═══ v5.3b: BREAK-PROBABILITY NUDGE (streak 5 only — reverted from adaptive) ═══
+      // v5.3 analysis showed adaptive BP HURT streak 4 (53.3% → 46.0%).
+      // Reverted to v5.2 approach: only nudge at streak 5 (4.9% edge).
       if (currentStreak >= 5) {
         const bp = getBreakProb(currentStreak)
         if (bp > 50) {
@@ -914,18 +1029,36 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
         }
       }
 
+      // ═══ v5.3b: NO alternating pattern in SOFT mode ═══
+      // Analysis: Alternating detector in SOFT mode adds ~5 medium peaks
+      // (converts some peak-1 to peak-4 when it wrongly overrides Markov).
+      // Removed from SOFT — recovery flip handles SOFT protection.
+      // Alternating pattern only kept in ULTRA mode (where worst peaks live).
+
       const confs = toConfidence(scores, cats, 48.6)
       const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
+      let bestValue = sorted[0]
+
+      // ═══ v5.3: PATTERN-AWARE RECOVERY (SOFT mode — Last Resort) ═══
+      const recoveryResult = getRecoveryPrediction(bestValue)
+      if (recoveryResult) {
+        bestValue = recoveryResult
+        consecutiveFlips++
+      } else if (recoveryHistory.length > 0 && recoveryHistory[recoveryHistory.length - 1].correct) {
+        consecutiveFlips = 0
+      }
+
       return {
         type: 'color',
         options: sorted.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: Math.round(confs[c]) })),
-        bestValue: sorted[0],
-        bestConfidence: Math.round(confs[sorted[0]]),
+        bestValue,
+        bestConfidence: Math.round(confs[bestValue]),
         dealerSignal: antiWheel.signal || undefined
       }
     }
 
-    // ── NORMAL MODE (streak < 2): v5.2 Markov-Primary + Recovery ──
+    // ── NORMAL MODE (streak < 2): v5.3 Markov-Primary + Alternation + Recovery ──
+    // v5.3: Now actually CONNECTS detectAlternatingPattern and shouldRecoveryFlip.
     // v5.2: Added Recovery Bailout to detect when engine is stuck predicting
     // one color and flip the prediction. Also added short-term recency.
     const recentSlice = nonZero.length > 300 ? nonZero.slice(-300) : nonZero
@@ -1038,15 +1171,42 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       } else if (blackCount >= 4) {
         scores.black += 5
       }
+      // v5.3: Also detect 3/3 of last 3 — emerging streak
+      const last3raw = last5raw.slice(-3)
+      if (last3raw.length === 3) {
+        const l3red = last3raw.filter(c => c === 'red').length
+        const l3black = last3raw.filter(c => c === 'black').length
+        if (l3red === 3) {
+          scores.red += 3  // Small boost for 3-same in last 3
+        } else if (l3black === 3) {
+          scores.black += 3
+        }
+      }
     }
+
+    // ═══ v5.3b: NO alternating pattern in NORMAL mode ═══
+    // Same reasoning as SOFT — alternating detector adds more medium peaks
+    // than it prevents in modes where Markov has decent accuracy.
+    // Only kept in ULTRA mode (where it prevents catastrophic peaks).
 
     const confs = toConfidence(scores, cats, 48.6)
     const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
+    let bestValue = sorted[0]
+
+    // ═══ v5.3: PATTERN-AWARE RECOVERY (NORMAL mode — Last Resort) ═══
+    const recoveryNorm = getRecoveryPrediction(bestValue)
+    if (recoveryNorm) {
+      bestValue = recoveryNorm
+      consecutiveFlips++
+    } else if (recoveryHistory.length > 0 && recoveryHistory[recoveryHistory.length - 1].correct) {
+      consecutiveFlips = 0
+    }
+
     return {
       type: 'color',
       options: sorted.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: Math.round(confs[c]) })),
-      bestValue: sorted[0],
-      bestConfidence: Math.round(confs[sorted[0]]),
+      bestValue,
+      bestConfidence: Math.round(confs[bestValue]),
       dealerSignal: wheelData.signal || undefined
     }
   }

@@ -455,7 +455,7 @@ export function DashboardLive() {
   }, [])
 
   // ============================================
-  // SISTEMA DE PREDICCIÓN AVANZADO v5.2 Adaptive Break-Prob + Alternation
+  // SISTEMA DE PREDICCIÓN AVANZADO v5.3 Pattern-Aware Recovery + Alternation
   // Motor externalizado en smart-prediction-v4.ts
   // Incluye: Firma del Croupier, Markov-3, 
   // Saturación, Tripletas, Z-score, Feedback Adaptativo
@@ -1381,7 +1381,7 @@ export function DashboardLive() {
         {/* Prediction with confidence */}
         {currentPrediction && numbers.length >= 5 && (
           <div className="p-3 border-b border-zinc-700">
-            <div className="text-xs text-zinc-400 mb-2">🎯 Predicción IA v5.2:</div>
+            <div className="text-xs text-zinc-400 mb-2">🎯 Predicción IA v5.3:</div>
             <div className="text-lg font-bold text-amber-500">{getPredictionDisplay()}</div>
             {/* Smart prediction options with confidence */}
             {smartPrediction && smartPrediction.options.length > 1 && (
@@ -1452,7 +1452,7 @@ export function DashboardLive() {
                 <span className="text-white">Roller</span>
                 <span className="text-amber-500">Win</span>
                 <span className="text-xs text-zinc-500 ml-2">LIVE CASINO</span>
-                <span className="text-[9px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded font-mono">v5.2</span>
+                <span className="text-[9px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded font-mono">v5.3</span>
               </h1>
             </div>
             
@@ -1779,7 +1779,7 @@ export function DashboardLive() {
                     <CardContent className="py-4 space-y-3">
                       <div className="flex items-center justify-between flex-wrap gap-4">
                         <div>
-                          <div className="text-xs text-zinc-400 mb-1 flex items-center gap-2"><Target className="w-3 h-3" />PREDICCIÓN IA v5.2</div>
+                          <div className="text-xs text-zinc-400 mb-1 flex items-center gap-2"><Target className="w-3 h-3" />PREDICCIÓN IA v5.3</div>
                           <div className="text-2xl md:text-3xl font-bold text-amber-500">{getPredictionDisplay()}</div>
                         </div>
                         
