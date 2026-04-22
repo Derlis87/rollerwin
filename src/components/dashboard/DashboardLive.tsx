@@ -36,7 +36,8 @@ import {
   RotateCcw,
   CircleDot,
   Wifi,
-  Scan
+  Scan,
+  FileDown
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -1555,6 +1556,16 @@ export function DashboardLive() {
                     <Button onClick={handleJoinTable} className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-bold py-6 text-lg">
                       <ExternalLink className="w-5 h-5 mr-2" />Abrir Casino y Unirse a Mesa
                     </Button>
+
+                    <div className="mt-4">
+                      <Button
+                        onClick={() => window.open('/api/download?file=estrategia-rentable-v52.pdf', '_blank')}
+                        className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold py-3 text-sm flex items-center justify-center gap-2"
+                      >
+                        <FileDown className="w-4 h-4" />
+                        Descargar Estrategia Rentable (PDF)
+                      </Button>
+                    </div>
 
                     <div className="mt-4 p-4 bg-gradient-to-r from-amber-500/10 to-cyan-500/10 border border-amber-500/30 rounded-lg">
                       <h4 className="text-amber-500 font-bold mb-3 flex items-center gap-2"><Zap className="w-4 h-4" />¿Cómo Funciona?</h4>
