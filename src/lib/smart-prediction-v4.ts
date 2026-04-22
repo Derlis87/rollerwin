@@ -1,5 +1,5 @@
 /**
- * Smart Prediction Engine v5.2 — Adaptive Break-Prob + Alternation Detector
+ * Smart Prediction Engine v6.0 — Ultra-Selective + Streak-Aware Filtering
  * 
  * HISTORIAL DE CORRECCIONES:
  *
@@ -122,6 +122,35 @@
  *   Streak 0-1:  NORMAL — Micro-Markov(50) + Markov(300) + Recency + Recovery + SKIP
  *   Streak 2-5:  SOFT   — Micro-Markov(50) + Markov(300) + Break-Prob + Recovery + SKIP
  *   Streak 6+:   ULTRA  — Push MISMO COLOR + Micro-Markov + Recovery + SKIP
+ *
+ * v6.0 — Ultra-Selective + Streak-Aware Filtering:
+ *   PROBLEMA v5.5: Ratio 9.65:1 ✅ pero neto -758 unidades ❌.
+ *   31 rachas fatales ≥4, max streak 9, 18 busts.
+ *   SOFT mode (streak 2-5) tiene 49.6% accuracy = RANDOM.
+ *   Streak 3: 36.5% accuracy, Streak 5: 30.0% — PEOR que random!
+ *   El motor apuesta en situaciones sin edge, perdiendo unidades.
+ *
+ *   v6.0 FILOSOFÍA: NO apostar cuando NO hay edge demostrado.
+ *   Calidad sobre cantidad. Mejor perder oportunidades que unidades.
+ *
+ *   v6.0 CAMBIOS:
+ *   1. SOFT SKIP ZONE (streaks 3-5): Datos demuestran que NO hay edge.
+ *      Streak 3: 36.5% accuracy, Streak 5: 30.0% — activamente dañino.
+ *      → SKIP TOTAL en streaks 3-5. Solo apostar streak 2 (54.4%).
+ *   2. ULTRA FILTER: Streak 6 tiene ~48.5% break = sin edge real.
+ *      → SKIP streak 6. Solo apostar streak 7+ (edge demostrado 51-55%).
+ *   3. NORMAL STRICT: Threshold 28→38. Solo apostar señales FUERTES.
+ *      Requerir consensus agreement >= 2 para no skipear.
+ *   4. ALTERNATION STRICT: Solo activar con strength >= 60 (de 40-50).
+ *      Reduce falsos positivos de alternación.
+ *   5. MIN BET SIGNAL: Señal mínima para apostar (score diff) más alta.
+ *
+ * LÓGICA v6.0:
+ *   Streak 0-1:  NORMAL — Consensus(3w) + Markov + SKIP(strength<38 or consensus<2)
+ *   Streak 2:    SOFT   — Markov + Consensus + SKIP(strength<30 or consensus<2)
+ *   Streak 3-5:  SKIP   — No hay edge demostrado → SKIP TOTAL
+ *   Streak 6:    SKIP   — Sin edge suficiente → SKIP
+ *   Streak 7+:   ULTRA  — Push MISMO COLOR + Alternation (solo strength≥60)
  */
 
 // European roulette wheel layout (clockwise from 0)
@@ -296,8 +325,8 @@ function getNumberColor(n: number): 'red' | 'black' | 'green' {
 //   NORMAL: Higher threshold (more selective) — this is where most predictions happen
 //   SOFT:   Medium threshold — streak context provides some signal
 //   ULTRA:  No skip — ULTRA's streak-based push is already a strong signal
-const SKIP_THRESHOLD_NORMAL = 28.0
-const SKIP_THRESHOLD_SOFT = 24.0
+const SKIP_THRESHOLD_NORMAL = 38.0  // v6.0: 28→38 — mucho más selectivo
+const SKIP_THRESHOLD_SOFT = 30.0     // v6.0: 24→30 — solo streak 2
 const SKIP_THRESHOLD = 15.0  // Fallback for parity/dozen
 
 /** v5.5: CONSENSUS MARKOV — multi-window Markov with agreement scoring
@@ -465,14 +494,8 @@ function detectAlternatingPattern(
   // Strength: 100% transitions = perfect alternation, 50% = random
   const strength = Math.round(Math.max(0, (transitionRate - 0.5) * 200))  // 0-100 scale
 
-  // v5.5: Detect with only 3 results (emerging alternation)
-  if (recent.length >= 3) {
-    const last3 = recent.slice(-3)
-    if (last3[0] !== last3[1] && last3[1] !== last3[2]) {
-      const ctxStrength = recent.length >= 6 ? strength : 40
-      return { detected: true, lastColor: last, strength: Math.max(ctxStrength, 40) }
-    }
-  }
+  // v6.0: Only detect strict alternation (4+ results) — no false positives from 3-result noise
+  // Removed the weak 3-result detection that was triggering on random noise
 
   // Original: strict alternation in 4+ results
   if (recent.length >= 4) {
@@ -483,8 +506,8 @@ function detectAlternatingPattern(
     if (strictAlt) return { detected: true, lastColor: last, strength: Math.max(strength, 70) }
   }
 
-  // v5.5: Partial alternation — 75%+ of last 5+ are alternating
-  if (recent.length >= 5 && strength >= 50) {
+  // v6.0: Partial alternation — 80%+ of last 6+ are alternating (stricter)
+  if (recent.length >= 6 && strength >= 60) {
     return { detected: true, lastColor: last, strength }
   }
 
@@ -923,17 +946,28 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       return scores
     }
 
-    if (currentStreak >= 6) {
-      // ═══ v4.8 ULTRA (streak >= 6) — PUSH MISMO COLOR ═══
-      // Validado contra 4,248 spins reales:
-      //   Streak 5: 46.9% CON anti-racha → MOVIDO A SOFT (era perdedor)
-      //   Streak 6: 55.0% prediciendo mismo color ✅
-      //   Streak 7: 51.5% prediciendo mismo color ✅
-      //   Streak 8: 64.7% prediciendo mismo color ✅
-      //   Streak 9+: 52.8% prediciendo mismo color ✅
-      //
-      // v4.8: ULTRA SOLO push MISMO COLOR. Nunca más push opuesto.
-      // A streak 6+, los datos demuestran que la racha continúa más a menudo.
+    // ═══ v6.0: STREAK-AWARE FILTERING ═══
+    // Skip streaks where data shows NO predictive edge
+    if (currentStreak >= 3 && currentStreak <= 6) {
+      // v6.0: SKIP ZONE — streaks 3-6 have no demonstrated edge
+      // Streak 3: 36.5% accuracy, Streak 4: 58.6% (but tiny sample=58), Streak 5: 30.0%
+      // Streak 6: 53.8% but only 65 samples — marginal
+      // → Skip ALL to protect capital
+      return {
+        type: 'color',
+        options: cats.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: 50 })),
+        bestValue: streakColor,  // Return the current streak color as "prediction" (irrelevant since skipped)
+        bestConfidence: 50,
+        dealerSignal: antiWheel.signal || undefined,
+        shouldSkip: true,
+        signalStrength: 0
+      }
+    }
+
+    if (currentStreak >= 7) {
+      // ═══ v6.0 ULTRA (streak >= 7) — PUSH MISMO COLOR (ONLY streak 7+) ═══
+      // v6.0: Removed streak 6 from ULTRA — data shows insufficient edge
+      // Only streak 7+ has demonstrated continuation edge (51-55%)
       const bp = getBreakProb(currentStreak)
       const continuePct = 100 - bp
       const edge = continuePct - 50  // How much > 50% the continue probability is
@@ -1008,16 +1042,10 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       }
     }
 
-    if (currentStreak >= 2 && currentStreak <= 5) {
-      // ═══ v5.2 SOFT (streak 2-5) — Markov-Primary + Reduced Nudge ═══
-      // v5.2: Removed break-prob nudge at streaks 3-4 (tiny 1.8%/1.4% edge was HURTING).
-      // Only streak 5 retains the nudge (4.9% edge). Markov decides freely at 2-4.
-      //
-      // Módulos activos en SOFT:
-      //   - Markov-2: patrón de los últimos 2 colores (primaria)
-      //   - Markov-3: patrón de los últimos 3 colores (secundaria)
-      //   - Wheel: firma del croupier (alineada con break-prob)
-      //   - Break-Prob Nudge (solo streak 5, 4.9% edge)
+    if (currentStreak === 2) {
+      // ═══ v6.0 SOFT (streak 2 ONLY) — Markov + Consensus + Strict Skip ═══
+      // v6.0: Streaks 3-5 moved to SKIP ZONE (no edge demonstrated).
+      // Only streak 2 retains SOFT status — data shows 54.4% accuracy.
 
       // v5.0 NEW: Recency-Weighted Markov — usa solo los últimos 300 spins
       // Los patrones recientes son más relevantes que los históricos globales
@@ -1135,38 +1163,26 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
         }
       }
 
-      // ═══ v5.3b: BREAK-PROBABILITY NUDGE (streak 5 only — reverted from adaptive) ═══
-      // v5.3 analysis showed adaptive BP HURT streak 4 (53.3% → 46.0%).
-      // Reverted to v5.2 approach: only nudge at streak 5 (4.9% edge).
-      if (currentStreak >= 5) {
-        const bp = getBreakProb(currentStreak)
-        if (bp > 50) {
-          const edge = bp - 50
-          const nudge = edge * 2.0
-          scores[oppositeColor] += nudge
-          contributingModules.push('streak')
-        }
-      }
+      // ═══ v6.0: REMOVED break-prob nudge (was for streak 5 only, now in SKIP ZONE) ═══
 
-      // ═══ v5.5: CONSENSUS QUALITY GATE (SOFT mode) ═══
+      // ═══ v6.0: CONSENSUS QUALITY GATE (SOFT mode — stricter) ═══
       const consensusSoft = buildConsensusMarkov(nonZero, getCat)
       if (consensusSoft.consensus && consensusSoft.agreement === 3) {
         scores[consensusSoft.consensus] += 10
       }
 
-      // ═══ v5.5: ALTERNATION (SOFT mode — strength-aware) ═══
+      // ═══ v6.0: ALTERNATION (SOFT mode — strict strength ≥60) ═══
       const altSoft = detectAlternatingPattern(nonZero, getCat)
       if (altSoft.detected && altSoft.lastColor) {
         const altOpposite = getOppositeColor(altSoft.lastColor)
-        const altBoost = Math.max(8, Math.round(altSoft.strength * 0.18))
+        const altBoost = Math.max(10, Math.round(altSoft.strength * 0.2))
         scores[altOpposite] += altBoost
         scores[altSoft.lastColor!] -= altBoost * 0.5
       }
 
-      // ═══ v5.5: ADAPTIVE SKIP (SOFT mode — medium threshold) ═══
+      // ═══ v6.0: ADAPTIVE SKIP (SOFT mode — strict: strength < 30 OR consensus < 2) ═══
       const skipSoft = shouldSkipPrediction(scores, cats)
-      const noConsensusSoft = consensusSoft.agreement <= 1
-      const adaptiveSkipSoft = skipSoft.strength < SKIP_THRESHOLD_SOFT
+      const adaptiveSkipSoft = skipSoft.strength < SKIP_THRESHOLD_SOFT || consensusSoft.agreement <= 1
       if (adaptiveSkipSoft) {
         return {
           type: 'color',
@@ -1340,11 +1356,10 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       scores[consensusNorm.consensus] += 12
     }
 
-    // ═══ v5.5: ADAPTIVE SKIP — higher threshold in NORMAL mode ═══
+    // ═══ v6.0: ADAPTIVE SKIP — stricter: strength < 38 OR consensus < 2 ═══
     const skipCheck = shouldSkipPrediction(scores, cats)
-    // v5.5: Also skip if NO consensus (all 3 windows disagree — no pattern)
-    const noConsensus = consensusNorm.agreement <= 1
-    const adaptiveSkip = skipCheck.strength < SKIP_THRESHOLD_NORMAL
+    // v6.0: Skip if signal too weak OR no multi-window consensus
+    const adaptiveSkip = skipCheck.strength < SKIP_THRESHOLD_NORMAL || consensusNorm.agreement <= 1
     if (adaptiveSkip) {
       return {
         type: 'color',
@@ -1357,9 +1372,9 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       }
     }
 
-    // ═══ v5.5: ALTERNATION AS TIEBREAKER (NORMAL mode — strength-aware) ═══
+    // ═══ v6.0: ALTERNATION AS TIEBREAKER (NORMAL mode — strict strength ≥60) ═══
     const altNorm = detectAlternatingPattern(nonZero, getCat)
-    if (altNorm.detected && altNorm.lastColor) {
+    if (altNorm.detected && altNorm.lastColor && altNorm.strength >= 60) {
       const altOpposite = getOppositeColor(altNorm.lastColor)
       // v5.5: Boost proportional to alternation strength
       const altBoost = Math.max(8, Math.round(altNorm.strength * 0.2))
