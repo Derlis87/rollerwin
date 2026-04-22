@@ -1,4 +1,36 @@
 # RollerWin Development Worklog
+## VERSION ACTUAL: V6.0 — RENTABLE ✅
+
+---
+## Task ID: V6.0-FINAL — Confirmación y limpieza final
+### Agent: Main Agent (Super Z)
+### Date: 2026-04-23
+### Task: Confirmar V6.0 rentable, limpiar archivos obsoletos
+
+### Simulación Final Confirmada:
+**Secuencia 1 (4,781 números):** 57.0% accuracy | +98 net | 0 busts | 14.80:1 ratio | +16.17% ROI ✅
+**Secuencia 2 (4,832 números):** 56.6% accuracy | +94 net | 0 busts | 14.05:1 ratio | +15.41% ROI ✅
+
+### Limpieza realizada:
+- Archivados 9 simuladores obsoletos → scripts/archive/
+- Solo queda scripts/simulate-v60.ts como simulador activo
+- Motor: src/lib/smart-prediction-v4.ts (V6.0)
+- Worklog V6.0: download/worklog-v60.md
+
+### Estado del Proyecto V6.0:
+| Componente | Archivo | Versión |
+|-----------|---------|---------|
+| Motor de predicción | src/lib/smart-prediction-v4.ts | V6.0 ✅ |
+| Simulador | scripts/simulate-v60.ts | V6.0 ✅ |
+| Dashboard UI | DashboardLive.tsx | V6.0 ✅ |
+| API /predict | src/app/api/predict/route.ts | V6.0 ✅ |
+| API /peaks | src/app/api/prediction/peaks/route.ts | V6.0 ✅ |
+| PredictionPanel | PredictionPanel.tsx | V6.0 ✅ |
+
+### NO Modificar (por restricción):
+- PRO-ENGINE V5
+- Statistical Inference Engine
+- Señales Sniper
 
 ---
 ## Task ID: V6.0-UPGRADE — Update all components to Smart Prediction V6.0
