@@ -933,3 +933,25 @@ Stage Summary:
 - Expected improvement: NORMAL accuracy from 49.6% to ~52-53%, reducing peak formation
 - Files modified: smart-prediction-v4.ts (NORMAL mode overhaul), DashboardLive.tsx (version labels)
 - Bankroll result pre-fix: -67 units (needs re-test post-fix)
+
+---
+Task ID: 2
+Agent: Main
+Task: Disenar estrategia rentable con gestion de bankroll basada en resultados del grafico de picos
+
+Work Log:
+- Analice la imagen subida (88 picos de distribucion): 79 bajos (89.8%), 6 medios (6.8%), 3 altos (3.4%)
+- Calcular el ratio bajos/(med+alt) = 8.78:1 (por encima del umbral de equilibrio de 7:1)
+- Cruce datos con simulacion v5.2 completa (4,619 numeros, ratio 8.15:1)
+- Disene estrategia completa con 8 secciones: analisis, martingala, bankroll, fases, picos, sesion, proyecciones, resumen
+- Genere PDF profesional con portada y 10 tablas de datos
+- Merge de cover HTML + body ReportLab en PDF final de 12 paginas
+
+Stage Summary:
+- PDF generado: /home/z/my-project/download/estrategia-rentable-v52.pdf (12 paginas)
+- Portada profesional con metricas clave: ratio 8.78:1, 89.8% picos bajos, +16 unidades netas
+- Estrategia clave: Apostar en NORMAL y SOFT (rachas 2-5), NO apostar en ULTRA (racha 6+)
+- Bankroll recomendado: 70 unidades (perfil moderado, 95% confianza)
+- Objetivo de sesion: +7 a +14 unidades, limite de perdida: -21 unidades
+- Ganancia proyectada mensual: +14 a +92 unidades (20-131% ROI)
+- Todas las reglas basadas en datos reales de simulacion
