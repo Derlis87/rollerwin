@@ -1779,7 +1779,7 @@ export function DashboardLive() {
                     <CardContent className="py-4 space-y-3">
                       <div className="flex items-center justify-between flex-wrap gap-4">
                         <div>
-                          <div className="text-xs text-zinc-400 mb-1 flex items-center gap-2"><Target className="w-3 h-3" />PREDICCIÓN IA v5.1</div>
+                          <div className="text-xs text-zinc-400 mb-1 flex items-center gap-2"><Target className="w-3 h-3" />PREDICCIÓN IA v5.2</div>
                           <div className="text-2xl md:text-3xl font-bold text-amber-500">{getPredictionDisplay()}</div>
                         </div>
                         
