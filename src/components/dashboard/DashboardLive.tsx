@@ -50,7 +50,6 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { useAppStore, getNumberColor } from '@/store/app-store'
 import { CASINO_CONFIGS, openCasino, getTableUrl } from '@/lib/casino-urls'
-import AfterNumberFilter from './charts/AfterNumberFilter'
 import { ColorParityChart } from './charts/ColorParityChart'
 import { PeakLevelCharts } from './charts/PeakLevelCharts'
 import { UltimateSignals } from './charts/UltimateSignals'
@@ -455,7 +454,7 @@ export function DashboardLive() {
   }, [])
 
   // ============================================
-  // SISTEMA DE PREDICCIÓN AVANZADO v5.1 Markov-Primary
+  // SISTEMA DE PREDICCIÓN AVANZADO v5.2 Adaptive Break-Prob + Alternation
   // Motor externalizado en smart-prediction-v4.ts
   // Incluye: Firma del Croupier, Markov-3, 
   // Saturación, Tripletas, Z-score, Feedback Adaptativo
@@ -1381,7 +1380,7 @@ export function DashboardLive() {
         {/* Prediction with confidence */}
         {currentPrediction && numbers.length >= 5 && (
           <div className="p-3 border-b border-zinc-700">
-            <div className="text-xs text-zinc-400 mb-2">🎯 Predicción IA v5.1:</div>
+            <div className="text-xs text-zinc-400 mb-2">🎯 Predicción IA v5.2:</div>
             <div className="text-lg font-bold text-amber-500">{getPredictionDisplay()}</div>
             {/* Smart prediction options with confidence */}
             {smartPrediction && smartPrediction.options.length > 1 && (
@@ -1452,7 +1451,7 @@ export function DashboardLive() {
                 <span className="text-white">Roller</span>
                 <span className="text-amber-500">Win</span>
                 <span className="text-xs text-zinc-500 ml-2">LIVE CASINO</span>
-                <span className="text-[9px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded font-mono">v5.1</span>
+                <span className="text-[9px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded font-mono">v5.2</span>
               </h1>
             </div>
             
@@ -1841,7 +1840,6 @@ export function DashboardLive() {
                 ) : null}
 
                 {/* Charts */}
-                {numbers.length >= 10 && <AfterNumberFilter numbers={numbers} />}
                 {numbers.length >= 5 && <ColorParityChart numbers={numbers} />}
 
                 {/* Peak Level Charts - inside main panel to avoid gap */}

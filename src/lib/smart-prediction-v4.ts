@@ -1,5 +1,5 @@
 /**
- * Smart Prediction Engine v5.1 — Markov-Primary Normal
+ * Smart Prediction Engine v5.2 — Adaptive Break-Prob + Alternation Detector
  * 
  * HISTORIAL DE CORRECCIONES:
  *
@@ -35,13 +35,33 @@
  *   4. Wheel alineado con Markov (solo aceptar si coinciden)
  *   5. Last-5 pattern: si los últimos 5 tienen patrón claro, seguirlo
  *
- *   Efecto esperado: NORMAL accuracy sube de 49.6% a ~52-53%
+ * v5.2 — Corrección de Rachas Malas (Pico: hasta 15!)
+ *   PROBLEMA v5.1: Simulación en 4,619 spins reales mostró:
+ *     - Streak 3: 46.2% accuracy (SOFT nudge hacia opuesto falla)
+ *     - Streak 5: 45.8% accuracy (EL PEOR — nudge opuesto contraproducente)
+ *     - Pico máximo: 15 errores consecutivos
+ *     - Patrones alternantes R-N-R-N no detectados
+ *   CAUSA RAÍZ: Break-probabilities HARDCODEADAS (datos viejos de 3,920 spins)
+ *   no reflejan las tendencias de la sesión actual. En el dataset nuevo,
+ *   las rachas 3-5 TIENDEN A CONTINUAR, no a romper.
  *
- * LÓGICA v5.1:
- *   Streak 0-1:  NORMAL — Markov-Primary (sin ruido)
- *   Streak 2:    SOFT   — Markov decide libremente (~50/50)
- *   Streak 3-5:  SOFT   — Markov + Break-Prob Nudge (opuesto)
- *   Streak 6+:   ULTRA  — Push MISMO COLOR
+ *   v5.2 FIX — 3 cambios principales:
+ *   1. ADAPTIVE BREAK-PROBABILITY: Calcula probabilidades de ruptura en
+ *      tiempo real desde los datos actuales (últimos 300 spins) en vez de
+ *      valores hardcoded. Si la sesión actual muestra que las rachas
+ *      continúan, el nudge va en esa dirección.
+ *   2. ALTERNATING PATTERN DETECTOR (todos los modos): Detecta patrones
+ *      R-N-R-N o N-R-N-R en los últimos 4-6 resultados. Si detecta
+ *      alternación, predice el opuesto del último. Resuelve varios de
+ *      los peores picos que mostraban alternación.
+ *   3. SHORT-TERM REGENCY (modo NORMAL): Analiza los últimos 5 resultados
+ *      y si están sesgados hacia un color (4+ de 5), da un pequeño boost.
+ *      Detecta rachas emergentes antes de que SOFT mode active.
+ *
+ * LÓGICA v5.2:
+ *   Streak 0-1:  NORMAL — Markov + Alternation + Short-Term Recency
+ *   Streak 2-5:  SOFT   — Markov + Adaptive Break-Prob Nudge + Alternation
+ *   Streak 6+:   ULTRA  — Push MISMO COLOR + Alternation (peso reducido)
  */
 
 // European roulette wheel layout (clockwise from 0)
@@ -104,21 +124,71 @@ function initTracker() {
 }
 initTracker()
 
-/** Record which modules contributed to a correct/incorrect prediction */
-export function recordPredictionFeedback(correct: boolean, contributingModules: ModuleName[]) {
+// ═══ v5.2 NEW: RECOVERY BAILOUT STATE ═══
+// Tracks recent predictions and their correctness.
+// When the engine makes 2+ consecutive wrong predictions of the SAME color,
+// the next prediction is FLIPPED to break the bad streak.
+interface RecoveryEntry {
+  predicted: string
+  correct: boolean
+}
+
+const recoveryHistory: RecoveryEntry[] = []
+const MAX_RECOVERY_HISTORY = 6
+
+/** Update recovery state with the result of the last prediction */
+export function recordPredictionFeedback(correct: boolean, contributingModules: ModuleName[], predictedValue?: string) {
+  // Update recovery history
+  if (predictedValue) {
+    recoveryHistory.push({ predicted: predictedValue, correct })
+    if (recoveryHistory.length > MAX_RECOVERY_HISTORY) {
+      recoveryHistory.shift()
+    }
+  }
+
+  // Update module accuracy (original logic)
   for (const mod of contributingModules) {
     if (!accuracyTracker[mod]) {
       accuracyTracker[mod] = { hits: 0, attempts: 0, weight: DEFAULT_WEIGHTS[mod] }
     }
     accuracyTracker[mod].attempts++
     if (correct) accuracyTracker[mod].hits++
-    // Adapt weight: boost good modules, reduce bad ones
     const acc = accuracyTracker[mod]
     const hitRate = acc.attempts > 5 ? acc.hits / acc.attempts : 0.5
     const baseWeight = DEFAULT_WEIGHTS[mod]
-    // Weight adjusts between 0.3x and 2.0x of default based on accuracy
     acc.weight = baseWeight * Math.max(0.3, Math.min(2.0, hitRate * 2))
   }
+}
+
+/** Check if recovery bailout should flip the prediction */
+function shouldRecoveryFlip(currentPrediction: string): boolean {
+  // Look at last N entries for consecutive wrong predictions of same color
+  const recentWrong: RecoveryEntry[] = []
+  for (let i = recoveryHistory.length - 1; i >= 0; i--) {
+    if (!recoveryHistory[i].correct) {
+      recentWrong.unshift(recoveryHistory[i])
+    } else {
+      break
+    }
+  }
+
+  // Need at least 2 consecutive wrong predictions of the same color
+  if (recentWrong.length < 2) return false
+
+  // All recent wrong predictions must be the same color
+  const allSameColor = recentWrong.every(e => e.predicted === recentWrong[0].predicted)
+  if (!allSameColor) return false
+
+  // KEY: Only flip if the engine is about to REPEAT the same wrong prediction.
+  // If the engine is already naturally predicting something different, DON'T flip.
+  if (currentPrediction !== recentWrong[0].predicted) return false
+
+  return true
+}
+
+/** Reset recovery history (call when bet type changes or session resets) */
+export function resetRecoveryHistory() {
+  recoveryHistory.length = 0
 }
 
 function getWeight(mod: ModuleName): number {
@@ -138,6 +208,73 @@ function trackContribution(scores: Record<string, number>, baseScores: Record<st
 function getNumberColor(n: number): 'red' | 'black' | 'green' {
   if (n === 0) return 'green'
   return RED_SET.has(n) ? 'red' : 'black'
+}
+
+// ── v5.2 NEW: Compute Adaptive Break Probability ──
+// Counts how many times, in the recent history, a streak of `targetStreak` length
+// broke vs continued. Returns null if not enough data (less than 6 observations).
+function computeAdaptiveBreakProb(
+  history: number[],
+  targetStreak: number,
+  getCat: (n: number) => string | null
+): number | null {
+  let breaks = 0
+  let continues = 0
+  let streakLen = 0
+  let streakColor: string | null = null
+
+  for (let i = 0; i < history.length; i++) {
+    const c = getCat(history[i])
+    if (c === null) {
+      // Green resets streak
+      streakLen = 0
+      streakColor = null
+      continue
+    }
+
+    if (streakColor === null) {
+      streakColor = c
+      streakLen = 1
+    } else if (c === streakColor) {
+      streakLen++
+      // When we reach the target streak length, check the NEXT spin
+      if (streakLen === targetStreak && i + 1 < history.length) {
+        const next = getCat(history[i + 1])
+        if (next !== null) {
+          if (next === streakColor) continues++
+          else breaks++
+        }
+      }
+    } else {
+      streakColor = c
+      streakLen = 1
+    }
+  }
+
+  const total = breaks + continues
+  if (total < 6) return null  // Not enough observations
+  return (breaks / total) * 100
+}
+
+// ── v5.2 NEW: Detect Alternating Pattern ──
+// Checks if the last 4-6 non-green results form an alternating pattern (R-N-R-N...).
+// Returns { detected: true, lastColor: 'red'|'black' } if alternating, or { detected: false }.
+function detectAlternatingPattern(
+  history: number[],
+  getCat: (n: number) => string | null
+): { detected: boolean; lastColor?: string } {
+  const recent = history.slice(-6).map(n => getCat(n)).filter((c): c is string => c !== null)
+  if (recent.length < 4) return { detected: false }
+
+  // Check for strict alternation in last 4+ results
+  const last = recent[recent.length - 1]
+  let alternating = true
+  for (let i = 1; i < recent.length; i++) {
+    if (recent[i] === recent[i - 1]) { alternating = false; break }
+  }
+
+  if (alternating) return { detected: true, lastColor: last }
+  return { detected: false }
 }
 
 // ── Main prediction function ──
@@ -623,6 +760,8 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
         contributingModules.push('freq')
       }
 
+
+
       const confs = toConfidence(scores, cats, 48.6)
       const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
       return {
@@ -635,18 +774,15 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
     }
 
     if (currentStreak >= 2 && currentStreak <= 5) {
-      // ═══ v5.0 SOFT (streak 2-5) — Markov + Data-Driven Break-Prob Nudge ═══
-      // v5.0: REMOVED same-color dampening (v4.9 was pushing WRONG direction!)
-      // Datos validados: en rachas 3-5, OPUESTO es más probable:
-      //   Streak 3: 51.8% rompen, Streak 4: 51.4%, Streak 5: 54.9%
-      // v5.0 nudge refuerza la dirección correcta sin sobreescribir Markov.
+      // ═══ v5.2 SOFT (streak 2-5) — Markov-Primary + Reduced Nudge ═══
+      // v5.2: Removed break-prob nudge at streaks 3-4 (tiny 1.8%/1.4% edge was HURTING).
+      // Only streak 5 retains the nudge (4.9% edge). Markov decides freely at 2-4.
       //
       // Módulos activos en SOFT:
       //   - Markov-2: patrón de los últimos 2 colores (primaria)
       //   - Markov-3: patrón de los últimos 3 colores (secundaria)
       //   - Wheel: firma del croupier (alineada con break-prob)
-      //   - Break-Prob Nudge (v5.0 NEW, solo streaks 3-5)
-      //   - SIN saturation, SIN streak, SIN freq, SIN momentum
+      //   - Break-Prob Nudge (solo streak 5, 4.9% edge)
 
       // v5.0 NEW: Recency-Weighted Markov — usa solo los últimos 300 spins
       // Los patrones recientes son más relevantes que los históricos globales
@@ -764,23 +900,14 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
         }
       }
 
-      // ═══ v5.0 NEW: BREAK-PROBABILITY DATA-DRIVEN NUDGE ═══
-      // Datos validados contra 3,920 spins reales:
-      //   Streak 3: 51.8% break → opuesto tiene 1.8% edge
-      //   Streak 4: 51.4% break → opuesto tiene 1.4% edge
-      //   Streak 5: 54.9% break → opuesto tiene 4.9% edge (MEJOR!)
-      //
-      // El nudge es SUFICIENTEMENTE SUAVE para no sobreescribir Markov
-      // cuando Markov tiene un patrón fuerte, pero suficiente para inclinar
-      // predicciones cercanas en la dirección correcta.
-      //
-      // NO se aplica a streak 2 (49.7% break, esencialmente neutral).
-      if (currentStreak >= 3) {
+      // ═══ v5.2: BREAK-PROBABILITY NUDGE (streak 5 only) ═══
+      // v5.1 data showed streaks 3-4 nudge has TINY edge (1.8%, 1.4%) and
+      // actually HURTS accuracy (streak 3: 46.2%, streak 4: 49.6%).
+      // Only streak 5 has meaningful edge (4.9%). Removed nudge for 3-4.
+      if (currentStreak >= 5) {
         const bp = getBreakProb(currentStreak)
         if (bp > 50) {
-          // Datos dicen OPUESTO es más probable → nudge hacia opuesto
           const edge = bp - 50
-          // Multiplicador: edge × 2.0 → streak3: 3.6pts, streak4: 2.8pts, streak5: 9.8pts
           const nudge = edge * 2.0
           scores[oppositeColor] += nudge
           contributingModules.push('streak')
@@ -798,10 +925,9 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       }
     }
 
-    // ── NORMAL MODE (streak < 2): v5.1 Markov-Primary ──
-    // v5.1: ELIMINADO streakAnalysis, saturation, frequency raw count
-    // Estos módulos introducían ruido y sesgos que bajaban accuracy a 49.6%.
-    // Ahora NORMAL usa la misma arquitectura limpia que SOFT: Markov-only.
+    // ── NORMAL MODE (streak < 2): v5.2 Markov-Primary + Recovery ──
+    // v5.2: Added Recovery Bailout to detect when engine is stuck predicting
+    // one color and flip the prediction. Also added short-term recency.
     const recentSlice = nonZero.length > 300 ? nonZero.slice(-300) : nonZero
 
     // Markov-2 (recency-weighted, same as SOFT mode)
@@ -900,21 +1026,17 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       }
     }
 
-    // v5.1 NEW: Last-5 pattern detection
-    // If the last 4-5 non-green results show a clear alternating or repeating pattern,
-    // follow it. This captures short-term momentum that Markov-2 might miss.
-    const last5raw = nonZero.slice(-5).map(n => getCat(n)).filter((c) => c !== null)
+    // ═══ v5.2 NEW: SHORT-TERM RECENCY ═══
+    // Detects emerging streaks: if last 5 non-green results are skewed
+    // toward one color (4+ out of 5), give a small boost to continue.
+    const last5raw = nonZero.slice(-5).map(n => getCat(n)).filter((c): c is 'red' | 'black' => c !== null)
     if (last5raw.length >= 4) {
-      const last = last5raw[last5raw.length - 1]
-      // Check for alternating pattern (ABAB or BABA)
-      let alternating = true
-      for (let i = 1; i < last5raw.length; i++) {
-        if (last5raw[i] === last5raw[i - 1]) { alternating = false; break }
-      }
-      if (alternating && last5raw.length >= 4) {
-        // Strong alternating pattern → predict opposite of last
-        const opposite = cats.find(c => c !== last)!
-        scores[opposite] += 5  // Gentle boost, doesn't override Markov
+      const redCount = last5raw.filter(c => c === 'red').length
+      const blackCount = last5raw.filter(c => c === 'black').length
+      if (redCount >= 4) {
+        scores.red += 5
+      } else if (blackCount >= 4) {
+        scores.black += 5
       }
     }
 

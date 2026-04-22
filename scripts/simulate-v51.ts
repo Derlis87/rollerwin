@@ -152,8 +152,8 @@ function simulate(numbers: number[]): SimResult {
     // Track streak breakdown accuracy
     if (isCorrect) streakBreakdown[sKey].correct++
     
-    // Record feedback for adaptive weights
-    recordPredictionFeedback(isCorrect, ['markov'])
+    // Record feedback for adaptive weights (v5.2: include predicted value for recovery)
+    recordPredictionFeedback(isCorrect, ['markov'], predictedColor)
     
     if (isCorrect) {
       correct++
