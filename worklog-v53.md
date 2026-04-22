@@ -27,3 +27,34 @@ Stage Summary:
 - Files modified:
   - /home/z/my-project/scripts/simulate-v53.ts (new simulator)
   - /home/z/my-project/download/clean-sequence-v53.txt (cleaned sequence)
+
+---
+Task ID: 2
+Agent: Main (Super Z)
+Task: Verify V5.3 profitability against NEW 4,876-number sequence
+
+Work Log:
+- User pasted new ~5,000 number sequence with formatting issues (28,35 stuck numbers, spaces before commas, periods, etc.)
+- Saved raw to download/raw-sequence-v3.txt (18.2KB)
+- Cleaned with Python regex extracting all 0-36 numbers: 4,876 valid numbers
+- All 37 numbers (0-36) present with uniform distribution
+- Saved clean to download/clean-sequence-v3.txt
+- Ran V5.3 simulator with full metrics tracking
+
+Stage Summary:
+- V5.3 Results vs 4,876 NEW real spins:
+  - Ratio bajos/(med+alt): 7.94:1 ✅ (above 7:1 break-even)
+  - Max loss streak: 14 ❌ (target: ≤3)
+  - Fatal streaks (≥4): 157 (12.5%)
+  - Martingale busts: 336 → -2,352 units
+  - Martingale net: -4,141 units ❌
+  - Recovery flips: 384 at 52.1% (random)
+  - Accuracy global: 49.6% (essentially random)
+  - Peak 15 [NORMAL] worst case
+  - ULTRA mode: 53.6% accuracy ✅
+- CONCLUSION: Results nearly identical to previous 4,781-number sequence
+  - Ratio passes but martingala fails due to statistical inevitability of 4+ loss streaks at ~50% accuracy
+  - V5.4 proposed to user for approval
+- Files created:
+  - /home/z/my-project/download/raw-sequence-v3.txt
+  - /home/z/my-project/download/clean-sequence-v3.txt
