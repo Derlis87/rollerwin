@@ -249,63 +249,21 @@ function getConsecutiveWrong(): RecoveryEntry[] {
 }
 
 /**
- * v5.3 RECOVERY — Pattern-Aware Recovery System
+ * v5.5 RECOVERY — DISABLED (was actively harmful: 41.8% accuracy)
  * 
- * After 3+ consecutive wrong predictions, analyzes the ACTUAL result pattern
- * (computed from wrong predictions: actual = opposite of predicted when wrong)
- * to determine the next prediction.
+ * v5.3/v5.4 recovery had 3 strategies, but testing on 4,781 spins showed:
+ *   - Total flips: 304
+ *   - Correct: 127 (41.8%)
+ *   - Incorrect: 170 (55.9%)
  * 
- * This is smarter than simple flipping because it follows the ACTUAL trend
- * in the results, not just the engine's failed predictions.
+ * The recovery system was WORSE than random (50%), actively hurting accuracy.
+ * Every flip that's wrong EXTENDS the loss streak instead of cutting it.
  * 
- * Three recovery strategies:
- * 1. STREAK FOLLOW: Last 3 actual results are same color → predict that color
- * 2. ALTERNATION FOLLOW: Last 3 actual results alternate → predict opposite of last
- * 3. STUCK ENGINE: Engine keeps predicting same wrong color → flip to opposite
+ * v5.5: Recovery is DISABLED. The engine relies on its core prediction
+ * signals + skip mechanism + alternation detection instead.
  */
 function getRecoveryPrediction(currentPrediction: string): string | null {
-  // Don't recover if we've already flipped too many times
-  if (consecutiveFlips >= MAX_CONSECUTIVE_FLIPS) return null
-
-  const recentWrong = getConsecutiveWrong()
-  
-  // v5.4: Trigger at 3 consecutive wrong (reverted from 2 — 2 was counterproductive)
-  if (recentWrong.length < 3) return null
-
-  // Compute actual results from wrong predictions
-  // When prediction was wrong, actual = opposite of predicted
-  const actualResults = recentWrong.map(e => getOppositeColor(e.predicted))
-
-  // v5.4: STRATEGY 1: STREAK FOLLOW (only 2 needed now since we trigger at 2)
-  // If last 2 actual results are same color → session has a streak running
-  if (actualResults.length >= 2) {
-    const last2actual = actualResults.slice(-2)
-    if (last2actual[0] === last2actual[1]) {
-      // Both same → predict that color (streak is running)
-      return last2actual[0]
-    }
-  }
-
-  // v5.4: STRATEGY 2: ALTERNATION FOLLOW (enhanced — works with just 2)
-  // If last 2 actual results alternate → predict opposite of last
-  if (actualResults.length >= 2) {
-    const last2a = actualResults.slice(-2)
-    if (last2a[0] !== last2a[1]) {
-      // Alternation detected → predict opposite of last (which = first)
-      return last2a[0]
-    }
-  }
-
-  // v5.4: STRATEGY 3: STUCK ENGINE (always check)
-  // If engine keeps predicting same wrong color → flip
-  const last2predicted = recentWrong.slice(-2)
-  if (last2predicted.length >= 2 && last2predicted[0].predicted === last2predicted[1].predicted) {
-    if (currentPrediction === last2predicted[0].predicted) {
-      return getOppositeColor(currentPrediction)
-    }
-  }
-
-  // No clear pattern → don't recover
+  // v5.5: DISABLED — recovery was counterproductive
   return null
 }
 
@@ -333,8 +291,71 @@ function getNumberColor(n: number): 'red' | 'black' | 'green' {
   return RED_SET.has(n) ? 'red' : 'black'
 }
 
-// ═══ v5.4: SKIP THRESHOLD ═══
-const SKIP_THRESHOLD = 15.0
+// ═══ v5.5: ADAPTIVE SKIP THRESHOLD ═══
+// v5.4 used fixed 15.0. v5.5 uses context-aware thresholds:
+//   NORMAL: Higher threshold (more selective) — this is where most predictions happen
+//   SOFT:   Medium threshold — streak context provides some signal
+//   ULTRA:  No skip — ULTRA's streak-based push is already a strong signal
+const SKIP_THRESHOLD_NORMAL = 28.0
+const SKIP_THRESHOLD_SOFT = 24.0
+const SKIP_THRESHOLD = 15.0  // Fallback for parity/dozen
+
+/** v5.5: CONSENSUS MARKOV — multi-window Markov with agreement scoring
+ *  Builds Markov-2 at multiple window sizes and checks if they AGREE.
+ *  Returns { scores, consensus, agreement } where:
+ *    consensus: the color that most windows agree on (or null if tied)
+ *    agreement: 0-3, how many windows agree on the consensus color
+ *    scores: combined scores from all windows
+ *  The key insight: if 3 independent windows all say RED, that's a much
+ *  stronger signal than 1 window saying RED with slightly higher confidence.
+ */
+function buildConsensusMarkov(
+  data: number[],
+  getCat: (n: number) => string | null
+): { scores: Record<string, number>; consensus: string | null; agreement: number; windowResults: Array<{ window: number; color: string; pct: number }> } {
+  const windows = [20, 50, 100]
+  const windowResults: Array<{ window: number; color: string; pct: number }> = []
+  const scores: Record<string, number> = { red: 0, black: 0 }
+
+  for (const windowSize of windows) {
+    const slice = data.length > windowSize ? data.slice(-windowSize) : data
+    const trans: Record<string, Record<string, Record<string, number>>> = {}
+    for (let i = 2; i < slice.length; i++) {
+      const c0 = getCat(slice[i - 2]); const c1 = getCat(slice[i - 1]); const c2 = getCat(slice[i])
+      if (c0 && c1 && c2) {
+        if (!trans[c0]) trans[c0] = {}; if (!trans[c0][c1]) trans[c0][c1] = {}
+        trans[c0][c1][c2] = (trans[c0][c1][c2] || 0) + 1
+      }
+    }
+    if (slice.length >= 2) {
+      const c0 = getCat(slice[slice.length - 2]); const c1 = getCat(slice[slice.length - 1])
+      if (c0 && c1 && trans[c0] && trans[c0][c1]) {
+        const tr = trans[c0][c1]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+        if (total > 0) {
+          const redPct = ((tr['red'] || 0) / total) * 100
+          const blackPct = ((tr['black'] || 0) / total) * 100
+          const leader = redPct > blackPct ? 'red' : 'black'
+          const leaderPct = Math.max(redPct, blackPct)
+          windowResults.push({ window: windowSize, color: leader, pct: leaderPct })
+          // Amplified scoring for consensus
+          const amplification = 1.0 + (leaderPct - 50) * 0.02  // Higher pct = more amplification
+          scores[leader] += leaderPct * amplification
+        }
+      }
+    }
+  }
+
+  // Count agreement
+  const redVotes = windowResults.filter(r => r.color === 'red').length
+  const blackVotes = windowResults.filter(r => r.color === 'black').length
+  let consensus: string | null = null
+  let agreement = 0
+  if (redVotes > blackVotes) { consensus = 'red'; agreement = redVotes }
+  else if (blackVotes > redVotes) { consensus = 'black'; agreement = blackVotes }
+  // If tied, no consensus
+
+  return { scores, consensus, agreement, windowResults }
+}
 
 /** v5.4: Build micro-Markov from short window with amplification */
 function buildMicroMarkov(
@@ -428,19 +449,46 @@ function computeAdaptiveBreakProb(
 function detectAlternatingPattern(
   history: number[],
   getCat: (n: number) => string | null
-): { detected: boolean; lastColor?: string } {
-  const recent = history.slice(-6).map(n => getCat(n)).filter((c): c is string => c !== null)
-  if (recent.length < 4) return { detected: false }
+): { detected: boolean; lastColor?: string; strength: number } {
+  const recent = history.slice(-8).map(n => getCat(n)).filter((c): c is string => c !== null)
+  if (recent.length < 3) return { detected: false, strength: 0 }
 
-  // Check for strict alternation in last 4+ results
   const last = recent[recent.length - 1]
-  let alternating = true
+
+  // v5.5: Count transitions (color changes) and compute strength
+  let transitions = 0
   for (let i = 1; i < recent.length; i++) {
-    if (recent[i] === recent[i - 1]) { alternating = false; break }
+    if (recent[i] !== recent[i - 1]) transitions++
+  }
+  const maxTransitions = recent.length - 1
+  const transitionRate = maxTransitions > 0 ? transitions / maxTransitions : 0
+  // Strength: 100% transitions = perfect alternation, 50% = random
+  const strength = Math.round(Math.max(0, (transitionRate - 0.5) * 200))  // 0-100 scale
+
+  // v5.5: Detect with only 3 results (emerging alternation)
+  if (recent.length >= 3) {
+    const last3 = recent.slice(-3)
+    if (last3[0] !== last3[1] && last3[1] !== last3[2]) {
+      const ctxStrength = recent.length >= 6 ? strength : 40
+      return { detected: true, lastColor: last, strength: Math.max(ctxStrength, 40) }
+    }
   }
 
-  if (alternating) return { detected: true, lastColor: last }
-  return { detected: false }
+  // Original: strict alternation in 4+ results
+  if (recent.length >= 4) {
+    let strictAlt = true
+    for (let i = 1; i < recent.length; i++) {
+      if (recent[i] === recent[i - 1]) { strictAlt = false; break }
+    }
+    if (strictAlt) return { detected: true, lastColor: last, strength: Math.max(strength, 70) }
+  }
+
+  // v5.5: Partial alternation — 75%+ of last 5+ are alternating
+  if (recent.length >= 5 && strength >= 50) {
+    return { detected: true, lastColor: last, strength }
+  }
+
+  return { detected: false, strength }
 }
 
 // ── Main prediction function ──
@@ -926,17 +974,14 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
         contributingModules.push('freq')
       }
 
-      // ═══ v5.3: ALTERNATING PATTERN DETECTOR (ULTRA mode — reduced weight) ═══
-      // In ULTRA mode, alternation detection helps break the worst peaks (pico 15!)
+      // ═══ v5.5: ALTERNATING PATTERN DETECTOR (ULTRA mode — strength-aware) ═══
+      // In ULTRA mode, alternation detection helps break the worst peaks
       // but with reduced weight since ULTRA's primary signal is push same color.
       const altUltra = detectAlternatingPattern(nonZero, getCat)
       if (altUltra.detected && altUltra.lastColor) {
         const altOpposite = getOppositeColor(altUltra.lastColor)
-        // Reduced weight in ULTRA — ULTRA's primary signal should still dominate
-        // unless the alternating pattern is very clear (6+ alternations)
-        const altLength = nonZero.slice(-6).map(n => getCat(n)).filter((c): c is string => c !== null)
-        const strictAltLen = altLength.length
-        const altWeight = strictAltLen >= 6 ? 25 : 15  // Stronger for longer patterns
+        // v5.5: Weight proportional to alternation strength
+        const altWeight = Math.max(15, Math.round(altUltra.strength * 0.35))
         scores[altOpposite] += altWeight
         scores[altUltra.lastColor!] -= altWeight * 0.5
       }
@@ -1103,23 +1148,26 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
         }
       }
 
-      // ═══ v5.4: MICRO-MARKOV (50 spins) — extra signal in SOFT ═══
-      const microMarkovSoft = buildMicroMarkov(nonZero, getCat, 50)
-      cats.forEach(c => {
-        scores[c] += microMarkovSoft[c] * getWeight('markov') * 0.3
-      })
+      // ═══ v5.5: CONSENSUS QUALITY GATE (SOFT mode) ═══
+      const consensusSoft = buildConsensusMarkov(nonZero, getCat)
+      if (consensusSoft.consensus && consensusSoft.agreement === 3) {
+        scores[consensusSoft.consensus] += 10
+      }
 
-      // ═══ v5.4: ALTERNATION AS TIEBREAKER (SOFT mode) ═══
+      // ═══ v5.5: ALTERNATION (SOFT mode — strength-aware) ═══
       const altSoft = detectAlternatingPattern(nonZero, getCat)
       if (altSoft.detected && altSoft.lastColor) {
         const altOpposite = getOppositeColor(altSoft.lastColor)
-        scores[altOpposite] += 10
-        scores[altSoft.lastColor!] -= 5
+        const altBoost = Math.max(8, Math.round(altSoft.strength * 0.18))
+        scores[altOpposite] += altBoost
+        scores[altSoft.lastColor!] -= altBoost * 0.5
       }
 
-      // ═══ v5.4: SKIP CHECK (SOFT mode — more lenient threshold) ═══
+      // ═══ v5.5: ADAPTIVE SKIP (SOFT mode — medium threshold) ═══
       const skipSoft = shouldSkipPrediction(scores, cats)
-      if (skipSoft.skip) {
+      const noConsensusSoft = consensusSoft.agreement <= 1
+      const adaptiveSkipSoft = skipSoft.strength < SKIP_THRESHOLD_SOFT
+      if (adaptiveSkipSoft) {
         return {
           type: 'color',
           options: cats.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: 50 })),
@@ -1282,15 +1330,22 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       }
     }
 
-    // ═══ v5.4: MICRO-MARKOV (50 spins) — PRIMARY signal in NORMAL ═══
-    const microMarkov = buildMicroMarkov(nonZero, getCat, 50)
-    cats.forEach(c => {
-      scores[c] += microMarkov[c] * getWeight('markov') * 0.35
-    })
+    // ═══ v5.5: CONSENSUS QUALITY GATE — multi-window agreement as filter ═══
+    // Instead of adding consensus to scores (which inflates them and kills skip),
+    // use it as a QUALITY GATE: if windows disagree, signal is unreliable → SKIP
+    const consensusNorm = buildConsensusMarkov(nonZero, getCat)
+    // If 0 or 1 windows agree (no consensus or weak), add small bonus
+    // If all 3 agree, that's a strong signal — DON'T skip even with low score
+    if (consensusNorm.consensus && consensusNorm.agreement === 3) {
+      scores[consensusNorm.consensus] += 12
+    }
 
-    // ═══ v5.4: SKIP CHECK — Don't bet when signal is weak ═══
+    // ═══ v5.5: ADAPTIVE SKIP — higher threshold in NORMAL mode ═══
     const skipCheck = shouldSkipPrediction(scores, cats)
-    if (skipCheck.skip) {
+    // v5.5: Also skip if NO consensus (all 3 windows disagree — no pattern)
+    const noConsensus = consensusNorm.agreement <= 1
+    const adaptiveSkip = skipCheck.strength < SKIP_THRESHOLD_NORMAL
+    if (adaptiveSkip) {
       return {
         type: 'color',
         options: cats.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: 50 })),
@@ -1302,14 +1357,14 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       }
     }
 
-    // ═══ v5.4: ALTERNATION AS TIEBREAKER (NORMAL mode) ═══
-    if (skipCheck.strength < 8) {
-      const altNorm = detectAlternatingPattern(nonZero, getCat)
-      if (altNorm.detected && altNorm.lastColor) {
-        const altOpposite = getOppositeColor(altNorm.lastColor)
-        scores[altOpposite] += 12
-        scores[altNorm.lastColor!] -= 6
-      }
+    // ═══ v5.5: ALTERNATION AS TIEBREAKER (NORMAL mode — strength-aware) ═══
+    const altNorm = detectAlternatingPattern(nonZero, getCat)
+    if (altNorm.detected && altNorm.lastColor) {
+      const altOpposite = getOppositeColor(altNorm.lastColor)
+      // v5.5: Boost proportional to alternation strength
+      const altBoost = Math.max(8, Math.round(altNorm.strength * 0.2))
+      scores[altOpposite] += altBoost
+      scores[altNorm.lastColor!] -= altBoost * 0.5
     }
 
     const confs = toConfidence(scores, cats, 48.6)

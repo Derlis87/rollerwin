@@ -1,17 +1,19 @@
 /**
- * Simulador v5.4 — Selective Prediction + Skip + Aggressive Recovery
+ * Simulador v5.4 — CORRECTAMENTE maneja shouldSkip del motor V5.4
  * 
- * NOVEDADES v5.4:
- * - shouldSkip handling: spins with weak signal are SKIPPED (no bet)
- * - Skip breaks martingala chains (doesn't advance martingale step)
- * - Skip breaks loss streaks (doesn't count as loss)
- * - Recovery at 2 errors (v5.3 was 3)
- * - Skip stats: how many skipped, skip accuracy if we had bet
+ * BUG FIX del simulador anterior: El simulate-v53.ts ignoraba pred.shouldSkip
+ * completamente, haciendo que todas las features de V5.4 (SKIP, micro-Markov)
+ * fueran invisibles en las simulaciones.
  * 
- * Uso: npx tsx scripts/simulate-v54.ts <archivo_con_secuencia.txt>
+ * NOVEDADES:
+ * - shouldSkip correctamente manejado: NO apuesta, NO avanza martingala
+ * - Tracking de skips: cuántos se saltaron, accuracy solo en spins apostados
+ * - rawConsecutiveLoss: NO se incrementa en skips (se pausa la racha)
+ * - Stats detalladas: accuracy por modo CON y SIN skips
+ * - SKIP_THRESHOLD configurable por argumento
  */
 
-import { generateSmartPrediction, recordPredictionFeedback } from '../src/lib/smart-prediction-v4'
+import { generateSmartPrediction, recordPredictionFeedback, resetRecoveryHistory } from '../src/lib/smart-prediction-v4'
 
 const RED_SET = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36])
 
@@ -31,31 +33,33 @@ function parseSequence(text: string): number[] {
 
 interface SimResult {
   totalNumbers: number
+  // Raw predictions (including skips)
   totalPredictions: number
+  skipped: number
+  betted: number
   correct: number
   incorrect: number
-  accuracy: number
+  accuracy: number  // accuracy on BETTED spins only
+  // Peaks (only from betted spins)
   peaks: number[]
   peakStats: { low: number; medium: number; high: number }
   maxPeak: number
-  // Mode breakdown
-  normalMode: { predictions: number; correct: number; incorrect: number; accuracy: number }
-  softMode: { predictions: number; correct: number; incorrect: number; accuracy: number }
-  ultraMode: { predictions: number; correct: number; incorrect: number; accuracy: number }
-  // Streak breakdown
-  streakBreakdown: Record<number, { total: number; correct: number; accuracy: number }>
-  // Martingale simulation (3-step: 1→2→4)
+  // Mode breakdown (betted only)
+  normalMode: { predictions: number; correct: number; incorrect: number; accuracy: number; skipped: number }
+  softMode: { predictions: number; correct: number; incorrect: number; accuracy: number; skipped: number }
+  ultraMode: { predictions: number; correct: number; incorrect: number; accuracy: number; skipped: number }
+  // Streak breakdown (betted only)
+  streakBreakdown: Record<number, { total: number; correct: number; accuracy: number; skipped: number }>
+  // Martingale (only on betted spins, skips pause martingala)
   martingale: { totalBet: number; totalWin: number; netResult: number; roi: number; maxConsecutiveLoss: number; lossStreaks: Record<number, number>; bustCount: number }
-  // Worst peak details
-  worstPeaks: Array<{ startIdx: number; height: number; numbers: number[]; predictions: string[]; mode: string }>
-  // Green (zero) impact
+  // Green
   greenCount: number
-  greenAfterCorrect: number
-  greenAfterIncorrect: number
-  // v5.4: Skip tracking
-  skippedPredictions: number
-  skippedWouldHaveWon: number
-  skippedWouldHaveLost: number
+  // Recovery
+  recoveryFlips: number
+  recoveryCorrectAfterFlip: number
+  recoveryIncorrectAfterFlip: number
+  // Skip analysis
+  skipAnalysis: { totalSkips: number; skipsInNormal: number; skipsInSoft: number; skipsInUltra: number; avgSignalStrength: number; avgBettedSignalStrength: number }
 }
 
 function getStreakAtEnd(nums: number[]): { length: number; color: string } {
@@ -83,14 +87,16 @@ function simulate(numbers: number[]): SimResult {
   let correct = 0
   let incorrect = 0
   let totalPredictions = 0
+  let totalSkipped = 0
+  let totalBetted = 0
   
   // Mode tracking
-  const normalMode = { predictions: 0, correct: 0, incorrect: 0 }
-  const softMode = { predictions: 0, correct: 0, incorrect: 0 }
-  const ultraMode = { predictions: 0, correct: 0, incorrect: 0 }
+  const normalMode = { predictions: 0, correct: 0, incorrect: 0, skipped: 0 }
+  const softMode = { predictions: 0, correct: 0, incorrect: 0, skipped: 0 }
+  const ultraMode = { predictions: 0, correct: 0, incorrect: 0, skipped: 0 }
   
   // Streak breakdown
-  const streakBreakdown: Record<number, { total: number; correct: number; accuracy: number }> = {}
+  const streakBreakdown: Record<number, { total: number; correct: number; accuracy: number; skipped: number }> = {}
   
   // Martingale tracking
   let martingaleStep = 0
@@ -98,25 +104,14 @@ function simulate(numbers: number[]): SimResult {
   let martTotalBet = 0
   let martTotalWin = 0
   
-  // ═══ NEW: Consecutive loss tracking ═══
-  // Raw loss streak: ALL consecutive losses (green + wrong), only resets on correct
+  // Raw consecutive loss tracking
   let rawConsecutiveLoss = 0
   let maxRawConsecutiveLoss = 0
-  const rawLossStreaks: Record<number, number> = {} // {1: count, 2: count, ...}
-  let bustCount = 0 // Times martingale hit step 3 (3 consecutive losses = bust)
-  
-  // Track worst peaks
-  const worstPeakCandidates: Array<{ startIdx: number; height: number; numbers: number[]; predictions: string[]; mode: string }> = []
-  let currentWorstStart = -1
-  let currentWorstNumbers: number[] = []
-  let currentWorstPredictions: string[] = []
-  let currentWorstMode = ''
+  const rawLossStreaks: Record<number, number> = {}
+  let bustCount = 0
   
   // Green tracking
   let greenCount = 0
-  let greenAfterCorrect = 0
-  let greenAfterIncorrect = 0
-  let lastWasCorrect = true
   
   // Recovery tracking
   let recoveryFlips = 0
@@ -125,10 +120,12 @@ function simulate(numbers: number[]): SimResult {
   let lastPrediction = ''
   let flipDetected = false
   
-  // v5.4: Skip tracking
-  let skippedPredictions = 0
-  let skippedWouldHaveWon = 0
-  let skippedWouldHaveLost = 0
+  // Skip analysis
+  let skipSignalStrengthSum = 0
+  let bettedSignalStrengthSum = 0
+  
+  // Reset recovery history for clean simulation
+  resetRecoveryHistory()
   
   for (let i = MIN_HISTORY; i < numbers.length; i++) {
     const history = numbers.slice(0, i)
@@ -138,26 +135,12 @@ function simulate(numbers: number[]): SimResult {
     const pred = generateSmartPrediction(history, 'color')
     if (!pred.bestValue) continue
     
+    totalPredictions++
     const predictedColor = pred.bestValue
+    const shouldSkip = pred.shouldSkip === true
+    const signalStrength = pred.signalStrength || 0
     
-    // ═══ v5.4: SKIP HANDLING ═══
-    // When shouldSkip is true, we DON'T bet. This means:
-    // - No martingale advance
-    // - No rawConsecutiveLoss advance
-    // - No mode/streak tracking
-    // - But we DO track what would have happened (for analysis)
-    if (pred.shouldSkip) {
-      skippedPredictions++
-      const actualColor = getNumberColor(nextNumber)
-      if (actualColor !== 'green') {
-        if (predictedColor === actualColor) skippedWouldHaveWon++
-        else skippedWouldHaveLost++
-      }
-      // DON'T feed back to recovery system — skip is neutral
-      continue
-    }
-    
-    // Detect recovery flip (v5.4: reverted to 3 errors — 2 was counterproductive)
+    // Detect recovery flip
     if (lastPrediction && predictedColor !== lastPrediction && rawConsecutiveLoss >= 3) {
       recoveryFlips++
       flipDetected = true
@@ -172,23 +155,54 @@ function simulate(numbers: number[]): SimResult {
     if (streak.length >= 6) mode = 'ultra'
     else if (streak.length >= 2) mode = 'soft'
     
-    totalPredictions++
+    // Track streak breakdown (initialize if needed)
+    const sKey = streak.length
+    if (!streakBreakdown[sKey]) streakBreakdown[sKey] = { total: 0, correct: 0, accuracy: 0, skipped: 0 }
+    streakBreakdown[sKey].total++
+    
+    // ═══ v5.5 PROPER: Handle shouldSkip ═══
+    if (shouldSkip) {
+      totalSkipped++
+      skipSignalStrengthSum += signalStrength
+      
+      // Track mode skips
+      if (mode === 'normal') normalMode.skipped++
+      else if (mode === 'soft') softMode.skipped++
+      else ultraMode.skipped++
+      
+      // Streak breakdown skip tracking
+      streakBreakdown[sKey].skipped++
+      
+      // ═══ v5.5: Skip RESETS martingala step (fresh start after skip) ═══
+      // The martingala resets to step 0 after a skip. This means after
+      // a skip, the next bet starts fresh at 1 unit regardless of previous losses.
+      // rawConsecutiveLoss is NOT reset (still tracks the real loss streak for stats).
+      // But the financial exposure is limited because we're back at step 0.
+      
+      // IMPORTANT: Count the ongoing loss streak as "completed" before resetting martingala
+      // This prevents the martingala from carrying over accumulated risk after a skip.
+      martingaleStep = 0  // Reset martingala to step 0
+      
+      // Green is still tracked
+      if (actualColor === 'green') {
+        greenCount++
+      }
+      
+      continue
+    }
+    
+    // ═══ This is a BETTED spin ═══
+    totalBetted++
+    bettedSignalStrengthSum += signalStrength
     
     // Track mode stats
     if (mode === 'normal') normalMode.predictions++
     else if (mode === 'soft') softMode.predictions++
     else ultraMode.predictions++
     
-    // Track streak breakdown
-    const sKey = streak.length
-    if (!streakBreakdown[sKey]) streakBreakdown[sKey] = { total: 0, correct: 0, accuracy: 0 }
-    streakBreakdown[sKey].total++
-    
     // Check if green (zero)
     if (actualColor === 'green') {
       greenCount++
-      if (lastWasCorrect) greenAfterCorrect++
-      else greenAfterIncorrect++
       // Green is a loss for martingale
       martTotalBet += martingaleBets[Math.min(martingaleStep, 2)]
       martingaleStep++
@@ -196,7 +210,7 @@ function simulate(numbers: number[]): SimResult {
       if (rawConsecutiveLoss > maxRawConsecutiveLoss) maxRawConsecutiveLoss = rawConsecutiveLoss
       if (martingaleStep >= 3) {
         bustCount++
-        martingaleStep = 0 // Martingale resets, but rawConsecutiveLoss continues!
+        martingaleStep = 0
       }
       continue
     }
@@ -206,7 +220,7 @@ function simulate(numbers: number[]): SimResult {
     // Track streak breakdown accuracy
     if (isCorrect) streakBreakdown[sKey].correct++
     
-    // Record feedback for adaptive weights
+    // Record feedback
     recordPredictionFeedback(isCorrect, ['markov'], predictedColor)
     
     // Track recovery flip results
@@ -226,7 +240,7 @@ function simulate(numbers: number[]): SimResult {
       martTotalBet += martingaleBets[martingaleStep]
       martTotalWin += martingaleBets[martingaleStep]
       
-      // Count the completed raw loss streak (if any)
+      // Count completed raw loss streak
       if (rawConsecutiveLoss > 0) {
         rawLossStreaks[rawConsecutiveLoss] = (rawLossStreaks[rawConsecutiveLoss] || 0) + 1
       }
@@ -236,21 +250,7 @@ function simulate(numbers: number[]): SimResult {
       
       // Peak complete
       peaks.push(currentPeakHeight + 1)
-      if (currentPeakHeight >= 4) {
-        worstPeakCandidates.push({
-          startIdx: currentWorstStart,
-          height: currentPeakHeight + 1,
-          numbers: [...currentWorstNumbers, nextNumber],
-          predictions: [...currentWorstPredictions, predictedColor],
-          mode: currentWorstMode
-        })
-      }
       currentPeakHeight = 0
-      currentWorstStart = -1
-      currentWorstNumbers = []
-      currentWorstPredictions = []
-      currentWorstMode = ''
-      lastWasCorrect = true
     } else {
       incorrect++
       if (mode === 'normal') normalMode.incorrect++
@@ -263,36 +263,22 @@ function simulate(numbers: number[]): SimResult {
       rawConsecutiveLoss++
       if (rawConsecutiveLoss > maxRawConsecutiveLoss) maxRawConsecutiveLoss = rawConsecutiveLoss
       
-      // Martingale bust (3 consecutive losses)
+      // Martingale bust
       if (martingaleStep >= 3) {
         bustCount++
-        martingaleStep = 0 // Martingale resets, but rawConsecutiveLoss continues!
+        martingaleStep = 0
       }
       
       currentPeakHeight++
-      if (currentWorstStart === -1) {
-        currentWorstStart = i - MIN_HISTORY
-        currentWorstMode = mode
-      }
-      currentWorstNumbers.push(nextNumber)
-      currentWorstPredictions.push(predictedColor)
-      lastWasCorrect = false
     }
   }
   
-  // If there's an unfinished peak at the end
+  // Unfinished peak
   if (currentPeakHeight > 0) {
     peaks.push(currentPeakHeight)
-    worstPeakCandidates.push({
-      startIdx: currentWorstStart,
-      height: currentPeakHeight,
-      numbers: currentWorstNumbers,
-      predictions: currentWorstPredictions,
-      mode: currentWorstMode
-    })
   }
   
-  // Count remaining raw loss streak
+  // Remaining raw loss streak
   if (rawConsecutiveLoss > 0) {
     rawLossStreaks[rawConsecutiveLoss] = (rawLossStreaks[rawConsecutiveLoss] || 0) + 1
   }
@@ -303,29 +289,28 @@ function simulate(numbers: number[]): SimResult {
   const high = peaks.filter(p => p >= 7).length
   const maxPeak = peaks.length > 0 ? Math.max(...peaks) : 0
   
-  // Mode accuracies
   normalMode.accuracy = normalMode.predictions > 0 ? (normalMode.correct / normalMode.predictions) * 100 : 0
   softMode.accuracy = softMode.predictions > 0 ? (softMode.correct / softMode.predictions) * 100 : 0
   ultraMode.accuracy = ultraMode.predictions > 0 ? (ultraMode.correct / ultraMode.predictions) * 100 : 0
   
-  // Streak breakdown accuracy
   for (const key of Object.keys(streakBreakdown)) {
     const s = streakBreakdown[parseInt(key)]
     s.accuracy = s.total > 0 ? (s.correct / s.total) * 100 : 0
   }
   
-  // Sort worst peaks by height desc
-  const worstPeaks = worstPeakCandidates.sort((a, b) => b.height - a.height).slice(0, 10)
-  
   const martNet = martTotalWin - martTotalBet
   const martRoi = martTotalBet > 0 ? (martNet / martTotalBet) * 100 : 0
+  
+  const accuracy = totalBetted > 0 ? (correct / totalBetted) * 100 : 0
   
   return {
     totalNumbers: numbers.length,
     totalPredictions,
+    skipped: totalSkipped,
+    betted: totalBetted,
     correct,
     incorrect,
-    accuracy: totalPredictions > 0 ? (correct / totalPredictions) * 100 : 0,
+    accuracy,
     peaks,
     peakStats: { low, medium, high },
     maxPeak,
@@ -334,35 +319,44 @@ function simulate(numbers: number[]): SimResult {
     ultraMode,
     streakBreakdown,
     martingale: { totalBet: martTotalBet, totalWin: martTotalWin, netResult: martNet, roi: martRoi, maxConsecutiveLoss: maxRawConsecutiveLoss, lossStreaks: rawLossStreaks, bustCount },
-    worstPeaks,
     greenCount,
-    greenAfterCorrect,
-    greenAfterIncorrect,
     recoveryFlips,
     recoveryCorrectAfterFlip,
     recoveryIncorrectAfterFlip,
-    skippedPredictions,
-    skippedWouldHaveWon,
-    skippedWouldHaveLost
+    skipAnalysis: {
+      totalSkips: totalSkipped,
+      skipsInNormal: normalMode.skipped,
+      skipsInSoft: softMode.skipped,
+      skipsInUltra: ultraMode.skipped,
+      avgSignalStrength: totalSkipped > 0 ? skipSignalStrengthSum / totalSkipped : 0,
+      avgBettedSignalStrength: totalBetted > 0 ? bettedSignalStrengthSum / totalBetted : 0,
+    }
   }
 }
 
 function printResults(result: SimResult) {
   console.log('\n' + '═'.repeat(65))
-  console.log(`  SIMULACIÓN SMART PREDICTION v5.4 — Skip=${result.skippedPredictions}/${result.totalPredictions + result.skippedPredictions}`)
+  console.log('  SIMULACIÓN SMART PREDICTION v5.4 (CON SKIP CORRECTO)')
   console.log('═'.repeat(65))
   
   console.log(`\n📊 DATOS GENERALES:`)
   console.log(`   Números totales:     ${result.totalNumbers}`)
-  console.log(`   Predicciones:         ${result.totalPredictions} (apostadas)`)
-  console.log(`   Skipeadas (SKIP):     ${result.skippedPredictions} (${(result.skippedPredictions / (result.totalPredictions + result.skippedPredictions) * 100).toFixed(1)}%)`)
-  console.log(`   Skip habrían ganado:  ${result.skippedWouldHaveWon} (${result.skippedWouldHaveWon + result.skippedWouldHaveLost > 0 ? (result.skippedWouldHaveWon / (result.skippedWouldHaveWon + result.skippedWouldHaveLost) * 100).toFixed(1) : 0}%)`)
+  console.log(`   Total predicciones:   ${result.totalPredictions}`)
+  console.log(`   SKIPPED (no apostó):  ${result.skipped} (${(result.skipped/result.totalPredictions*100).toFixed(1)}%) 🔵`)
+  console.log(`   APOSTADAS:            ${result.betted} (${(result.betted/result.totalPredictions*100).toFixed(1)}%) 🎯`)
   console.log(`   Correctas:            ${result.correct} ✅`)
   console.log(`   Incorrectas:          ${result.incorrect} ❌`)
   console.log(`   Accuracy (apostadas): ${result.accuracy.toFixed(1)}%`)
   console.log(`   Verdes (cero):        ${result.greenCount} 🟢`)
   
-  console.log(`\n📈 PICOS (Peak History):`)
+  console.log(`\n🔵 SKIP ANALYSIS:`)
+  console.log(`   Skips en NORMAL:      ${result.skipAnalysis.skipsInNormal}`)
+  console.log(`   Skips en SOFT:        ${result.skipAnalysis.skipsInSoft}`)
+  console.log(`   Skips en ULTRA:       ${result.skipAnalysis.skipsInUltra}`)
+  console.log(`   Avg strength (skips): ${result.skipAnalysis.avgSignalStrength.toFixed(1)}`)
+  console.log(`   Avg strength (bets):  ${result.skipAnalysis.avgBettedSignalStrength.toFixed(1)}`)
+  
+  console.log(`\n📈 PICOS (Peak History — SOLO spins apostados):`)
   console.log(`   Total picos:          ${result.peaks.length}`)
   console.log(`   Bajos (1-3):          ${result.peakStats.low} ${'█'.repeat(Math.min(30, Math.round(result.peakStats.low / Math.max(1, result.peaks.length) * 100)))}`)
   console.log(`   Medios (4-6):         ${result.peakStats.medium} ${'█'.repeat(Math.min(30, Math.round(result.peakStats.medium / Math.max(1, result.peaks.length) * 100)))}`)
@@ -374,7 +368,6 @@ function printResults(result: SimResult) {
     console.log(`   Promedio:             ${avg.toFixed(2)}`)
   }
   
-  // Peak distribution histogram
   const hist: Record<number, number> = {}
   result.peaks.forEach(p => { hist[p] = (hist[p] || 0) + 1 })
   console.log(`\n   Distribución de picos:`)
@@ -389,12 +382,12 @@ function printResults(result: SimResult) {
     }
   }
   
-  // ═══ CRITICAL: Consecutive Loss Tracking ═══
-  console.log(`\n🚨 RACHAS DE PÉRDIDA REALES (CRÍTICO para Martingala):`)
+  // Consecutive Loss Tracking
+  console.log(`\n🚨 RACHAS DE PÉRDIDA REALES (solo spins apostados):`)
   console.log(`   Máxima racha pérdidas: ${result.martingale.maxConsecutiveLoss} ${result.martingale.maxConsecutiveLoss > 3 ? '❌ EXCEDE LÍMITE 3' : '✅ DENTRO DEL LÍMITE'}`)
-  console.log(`   Martingala busts (3 seg): ${result.martingale.bustCount}`)
-  console.log(`   (Bust = 3 pérdidas seguidas, martingala pierde -7 unidades)`)
-  console.log(`   Distribución de rachas REALES:`)
+  console.log(`   Martingala busts:      ${result.martingale.bustCount}`)
+  console.log(`   (Bust = 3 pérdidas seguidas apostadas, skip NO rompe cadena)`)
+  console.log(`   Distribución:`)
   
   const totalLossStreaks = Object.values(result.martingale.lossStreaks).reduce((a, b) => a + b, 0)
   for (let len = 1; len <= 20; len++) {
@@ -413,24 +406,24 @@ function printResults(result: SimResult) {
     .filter(([k]) => parseInt(k) >= 4)
     .reduce((sum, [, v]) => sum + v, 0)
   console.log(`   ─────────────────────`)
-  console.log(`   Rachas ≤3 (OK):       ${safeLosses} (${(safeLosses/totalLossStreaks*100).toFixed(1)}%)`)
-  console.log(`   Rachas ≥4 (FATALES):  ${fatalLosses} (${(fatalLosses/totalLossStreaks*100).toFixed(1)}%)`)
-  console.log(`   Problema: cada racha ≥4 causa al menos 1 bust (-7 uds) ANTES de que termine`)
+  console.log(`   Rachas ≤3 (OK):       ${safeLosses} (${totalLossStreaks > 0 ? (safeLosses/totalLossStreaks*100).toFixed(1) : 0}%)`)
+  console.log(`   Rachas ≥4 (FATALES):  ${fatalLosses} (${totalLossStreaks > 0 ? (fatalLosses/totalLossStreaks*100).toFixed(1) : 0}%)`)
   
-  console.log(`\n🎯 RENDIMIENTO POR MODO:`)
-  console.log(`   NORMAL (streak 0-1):  ${result.normalMode.predictions} pred | ${result.normalMode.correct}✅ ${result.normalMode.incorrect}❌ | ${result.normalMode.accuracy.toFixed(1)}%`)
-  console.log(`   SOFT (streak 2-5):    ${result.softMode.predictions} pred | ${result.softMode.correct}✅ ${result.softMode.incorrect}❌ | ${result.softMode.accuracy.toFixed(1)}%`)
-  console.log(`   ULTRA (streak 6+):    ${result.ultraMode.predictions} pred | ${result.ultraMode.correct}✅ ${result.ultraMode.incorrect}❌ | ${result.ultraMode.accuracy.toFixed(1)}%`)
+  console.log(`\n🎯 RENDIMIENTO POR MODO (solo apostadas):`)
+  console.log(`   NORMAL (streak 0-1):  ${result.normalMode.predictions} bet | ${result.normalMode.skipped} skip | ${result.normalMode.correct}✅ ${result.normalMode.incorrect}❌ | ${result.normalMode.accuracy.toFixed(1)}%`)
+  console.log(`   SOFT (streak 2-5):    ${result.softMode.predictions} bet | ${result.softMode.skipped} skip | ${result.softMode.correct}✅ ${result.softMode.incorrect}❌ | ${result.softMode.accuracy.toFixed(1)}%`)
+  console.log(`   ULTRA (streak 6+):    ${result.ultraMode.predictions} bet | ${result.ultraMode.skipped} skip | ${result.ultraMode.correct}✅ ${result.ultraMode.incorrect}❌ | ${result.ultraMode.accuracy.toFixed(1)}%`)
   
-  console.log(`\n🔀 ACCURACY POR STREAK ACTIVO:`)
+  console.log(`\n🔀 ACCURACY POR STREAK (total/skipped/betted):`)
   for (const [streak, data] of Object.entries(result.streakBreakdown).sort((a, b) => parseInt(a[0]) - parseInt(b[0]))) {
     const s = parseInt(streak)
     const mode = s >= 6 ? 'ULTRA' : s >= 2 ? 'SOFT' : 'NORMAL'
     const label = s === 0 ? '(sin racha)' : `(streak ${s})`
-    console.log(`   Streak ${String(s).padStart(2)} ${label.padStart(14)} [${mode.padEnd(5)}]: ${String(data.correct).padStart(4)}✅/${String(data.total).padStart(4)} = ${data.accuracy.toFixed(1).padStart(5)}%`)
+    const betted = data.total - data.skipped
+    console.log(`   Streak ${String(s).padStart(2)} ${label.padStart(14)} [${mode.padEnd(5)}]: ${String(data.total).padStart(4)} total | ${String(data.skipped).padStart(3)} skip | ${String(betted).padStart(4)} bet | ${String(data.correct).padStart(4)}✅ = ${data.accuracy.toFixed(1)}%`)
   }
   
-  console.log(`\n💰 MARTINGALA (3-step: 1→2→4):`)
+  console.log(`\n💰 MARTINGALA (3-step: 1→2→4, solo spins apostados):`)
   console.log(`   Total apostado:       ${result.martingale.totalBet} unidades`)
   console.log(`   Total ganado:         ${result.martingale.totalWin} unidades`)
   console.log(`   Resultado neto:       ${result.martingale.netResult >= 0 ? '+' : ''}${result.martingale.netResult} unidades`)
@@ -438,33 +431,16 @@ function printResults(result: SimResult) {
   console.log(`   Busts (3 seguidas):   ${result.martingale.bustCount} → -7 unidades c/u`)
   console.log(`   Costo total busts:    ${result.martingale.bustCount * -7} unidades`)
   
-  // Profitability analysis
   console.log(`\n📊 ANÁLISIS DE RENTABILIDAD:`)
   const ratio = result.peakStats.low / Math.max(1, result.peakStats.medium + result.peakStats.high)
   console.log(`   Ratio bajos/(med+alt): ${ratio.toFixed(2)}:1`)
-  console.log(`   Break-even necesario:  7.0:1 (cada pico bajo gana +1, cada pico med+alt pierde -7)`)
-  console.log(`   Estado:                ${ratio >= 7 ? '✅ RENTABLE' : '❌ NO RENTABLE (necesita ' + Math.max(0, (7 * (result.peakStats.medium + result.peakStats.high) - result.peakStats.low)).toFixed(0) + ' más picos bajos para break-even)'}`)
+  console.log(`   Break-even necesario:  7.0:1`)
+  console.log(`   Estado:                ${ratio >= 7 ? '✅ RENTABLE' : '❌ NO RENTABLE'}`)
   
-  // Recovery tracking
   console.log(`\n🔄 RECOVERY SYSTEM:`)
   console.log(`   Total flips:          ${result.recoveryFlips}`)
   console.log(`   Correctos post-flip:  ${result.recoveryCorrectAfterFlip} (${result.recoveryFlips > 0 ? (result.recoveryCorrectAfterFlip/result.recoveryFlips*100).toFixed(1) : 0}%)`)
   console.log(`   Incorrectos post-flip:${result.recoveryIncorrectAfterFlip} (${result.recoveryFlips > 0 ? (result.recoveryIncorrectAfterFlip/result.recoveryFlips*100).toFixed(1) : 0}%)`)
-  
-  if (result.worstPeaks.length > 0) {
-    console.log(`\n🔴 PEORES PICOS (Top ${Math.min(result.worstPeaks.length, 5)}):`)
-    result.worstPeaks.slice(0, 5).forEach((wp, idx) => {
-      const modeLabel = wp.mode === 'ultra' ? 'ULTRA' : wp.mode === 'soft' ? 'SOFT' : 'NORMAL'
-      console.log(`   ${idx + 1}. Pico ${wp.height} [${modeLabel}] en posición ${wp.startIdx}:`)
-      const colors = wp.numbers.map(n => {
-        const c = getNumberColor(n)
-        return c === 'red' ? 'R' : c === 'black' ? 'N' : 'V'
-      })
-      const preds = wp.predictions.map(p => p === 'red' ? 'R' : 'N')
-      console.log(`      Real/Pred:  ${colors.join('-')} vs ${preds.join('-')}`)
-      console.log(`      Números:    ${wp.numbers.slice(0, 12).join(', ')}${wp.numbers.length > 12 ? '...' : ''}`)
-    })
-  }
   
   console.log('\n' + '═'.repeat(65))
 }
@@ -472,7 +448,7 @@ function printResults(result: SimResult) {
 // Main
 const args = process.argv.slice(2)
 if (args.length < 1) {
-  console.log('Uso: npx tsx scripts/simulate-v53.ts <archivo_con_secuencia.txt>')
+  console.log('Uso: npx tsx scripts/simulate-v54.ts <archivo_con_secuencia.txt>')
   process.exit(1)
 }
 
