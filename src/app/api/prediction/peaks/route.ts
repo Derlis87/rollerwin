@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { generateSmartPrediction } from '@/lib/smart-prediction-v4'
 
 // Predefined roulette numbers by color
 const RED_NUMBERS = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]
@@ -14,6 +15,7 @@ export interface PredictionResult {
   value: string
   confidence: number
   reasoning: string
+  shouldSkip: boolean
 }
 
 export interface PeakPrediction {
@@ -43,18 +45,25 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
-    // Calculate statistics
-    const stats = calculateStats(numbers)
+    // V6.0: Use Smart Prediction Engine
+    const smartResult = generateSmartPrediction(numbers, betType)
 
-    // Generate prediction based on bet type
-    const prediction = generatePrediction(stats, betType)
+    const prediction: PredictionResult = {
+      type: smartResult.type,
+      value: smartResult.bestValue,
+      confidence: smartResult.bestConfidence,
+      reasoning: smartResult.shouldSkip
+        ? 'V6.0: Señal débil — se recomienda SKIP'
+        : `V6.0: Consensus Markov, signal strength: ${smartResult.signalStrength || 'N/A'}`,
+      shouldSkip: smartResult.shouldSkip === true
+    }
 
     // Check if there's an active prediction for this session
     const activePrediction = activePredictions.get(sessionId)
     let currentPeak = 0
     let history: Array<{ number: number; color: 'red' | 'black' | 'green'; matched: boolean }> = []
 
-    if (activePrediction && activePrediction.isActive) {
+    if (activePrediction && activePrediction.isActive && !activePrediction.prediction.shouldSkip) {
       // Check the last number against the active prediction
       const lastNumber = numbers[numbers.length - 1]
       const lastColor = getNumberColor(lastNumber)
@@ -77,7 +86,7 @@ export async function POST(request: NextRequest) {
         ]
       }
     } else {
-      // Start new prediction
+      // Start new prediction (or was skip)
       currentPeak = 1
     }
 
@@ -91,8 +100,12 @@ export async function POST(request: NextRequest) {
     }
     activePredictions.set(sessionId, newPrediction)
 
+    // Calculate basic stats for response
+    const stats = calculateStats(numbers)
+
     return NextResponse.json({
       success: true,
+      engine: 'V6.0',
       prediction: {
         ...prediction,
         currentPeak,
@@ -123,6 +136,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     success: true,
+    engine: 'V6.0',
     activePrediction: activePrediction || null
   })
 }
@@ -186,109 +200,6 @@ function calculateStats(numbers: number[]) {
       col2: { count: column2, percentage: (column2 / nonZeroTotal) * 100 },
       col3: { count: column3, percentage: (column3 / nonZeroTotal) * 100 }
     }
-  }
-}
-
-function generatePrediction(stats: ReturnType<typeof calculateStats>, betType: string): PredictionResult {
-  switch (betType) {
-    case 'color': {
-      // Predict the opposite of the dominant color
-      const redPct = stats.colors.red.percentage
-      const blackPct = stats.colors.black.percentage
-      
-      if (redPct > blackPct + 5) {
-        return {
-          type: 'color',
-          value: 'black',
-          confidence: Math.min(85, 50 + (redPct - blackPct)),
-          reasoning: `El rojo ha salido ${redPct.toFixed(1)}%, tendencia hacia negro`
-        }
-      } else if (blackPct > redPct + 5) {
-        return {
-          type: 'color',
-          value: 'red',
-          confidence: Math.min(85, 50 + (blackPct - redPct)),
-          reasoning: `El negro ha salido ${blackPct.toFixed(1)}%, tendencia hacia rojo`
-        }
-      } else {
-        // Default to red if balanced
-        return {
-          type: 'color',
-          value: 'red',
-          confidence: 55,
-          reasoning: 'Colores equilibrados, predicción neutral hacia rojo'
-        }
-      }
-    }
-
-    case 'parity': {
-      const oddPct = stats.parity.odd.percentage
-      const evenPct = stats.parity.even.percentage
-      
-      if (oddPct > evenPct + 5) {
-        return {
-          type: 'parity',
-          value: 'even',
-          confidence: Math.min(85, 50 + (oddPct - evenPct)),
-          reasoning: `Impar ha salido ${oddPct.toFixed(1)}%, tendencia hacia par`
-        }
-      } else if (evenPct > oddPct + 5) {
-        return {
-          type: 'parity',
-          value: 'odd',
-          confidence: Math.min(85, 50 + (evenPct - oddPct)),
-          reasoning: `Par ha salido ${evenPct.toFixed(1)}%, tendencia hacia impar`
-        }
-      } else {
-        return {
-          type: 'parity',
-          value: 'odd',
-          confidence: 55,
-          reasoning: 'Paridad equilibrada, predicción neutral'
-        }
-      }
-    }
-
-    case 'dozen': {
-      const dozens = [
-        { name: '1-12', ...stats.dozens['1-12'] },
-        { name: '13-24', ...stats.dozens['13-24'] },
-        { name: '25-36', ...stats.dozens['25-36'] }
-      ].sort((a, b) => a.percentage - b.percentage)
-      
-      // Predict the dozen that appeared least
-      const leastFrequent = dozens[0]
-      return {
-        type: 'dozen',
-        value: leastFrequent.name,
-        confidence: Math.min(80, 50 + (33.3 - leastFrequent.percentage)),
-        reasoning: `Docena ${leastFrequent.name} ha salido menos (${leastFrequent.percentage.toFixed(1)}%)`
-      }
-    }
-
-    case 'column': {
-      const columns = [
-        { name: '1', ...stats.columns.col1 },
-        { name: '2', ...stats.columns.col2 },
-        { name: '3', ...stats.columns.col3 }
-      ].sort((a, b) => a.percentage - b.percentage)
-      
-      const leastFrequent = columns[0]
-      return {
-        type: 'column',
-        value: leastFrequent.name,
-        confidence: Math.min(80, 50 + (33.3 - leastFrequent.percentage)),
-        reasoning: `Columna ${leastFrequent.name} ha salido menos (${leastFrequent.percentage.toFixed(1)}%)`
-      }
-    }
-
-    default:
-      return {
-        type: 'color',
-        value: 'red',
-        confidence: 50,
-        reasoning: 'Tipo de apuesta no especificado'
-      }
   }
 }
 

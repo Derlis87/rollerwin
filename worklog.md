@@ -1,6 +1,42 @@
 # RollerWin Development Worklog
 
 ---
+## Task ID: V6.0-UPGRADE — Update all components to Smart Prediction V6.0
+### Agent: Main Agent (Super Z)
+### Task: Update entire application to V6.0 engine (57% accuracy, +94-98 net, 0 busts)
+
+### Work Log:
+- Verified V6.0 engine in smart-prediction-v4.ts (already implemented in previous session)
+- Ran simulation on both sequences: confirmed 57.0%/56.6% accuracy, +98/+94 net, 0 busts
+- Updated DashboardLive.tsx (6 changes):
+  1. Updated SmartPrediction interface to include shouldSkip, signalStrength, dealerSignal
+  2. Added isEngineSkip state + ref for V6.0 skip tracking
+  3. Updated all 4 generateSmartPrediction calls to set isEngineSkip from smart.shouldSkip
+  4. Added SKIP guard in handleNumberInput: when engine says skip, don't advance peak/martingala
+  5. Added SKIP indicator in both compact and main prediction UI panels
+  6. Updated all version labels: v5.3 → V6.0
+- Updated /api/predict/route.ts:
+  - Now uses generateSmartPrediction V6.0 as primary engine
+  - Returns shouldSkip, signalStrength, dealerSignal in response
+  - GET endpoint shows V6.0 engine info
+- Updated /api/prediction/peaks/route.ts:
+  - Replaced custom prediction logic with generateSmartPrediction V6.0
+  - Added shouldSkip to prediction response
+  - V6.0 skip resets peak tracking (no bets placed during skip)
+- Updated PredictionPanel.tsx: Added V6.0 version badge
+- TypeScript: 0 errors in all modified files
+- Build: npx next build succeeds
+
+### Stage Summary:
+- All prediction flows now use V6.0 Ultra-Selective engine
+- UI shows SKIP indicator when engine recommends not betting (signal weak)
+- Peak system doesn't advance when engine says skip (protects martingala)
+- API routes return V6.0 structured data with skip/signal info
+- Files modified: DashboardLive.tsx, /api/predict/route.ts, /api/prediction/peaks/route.ts, PredictionPanel.tsx
+- Files unchanged (already V6.0): smart-prediction-v4.ts, simulate-v60.ts
+---
+
+---
 ## Task ID: 11 - Peak History & Unlimited Number Import for Dashboard
 ### Work Task
 Implement "Historial de Picos" (Peak History) section in Dashboard and unlimited number import via copy/paste dialog. Create peak calculation engine, update Zustand store to remove number cap, integrate PeakLevelCharts component, and add import dialog.

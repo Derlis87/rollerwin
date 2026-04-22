@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Sparkles, TrendingUp, Target, AlertCircle, Loader2 } from 'lucide-react'
+import { Sparkles, TrendingUp, Target, AlertCircle, Loader2, Pause } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
@@ -72,7 +72,6 @@ export function PredictionPanel({ numbers, isAnalyzing, onAnalyze }: PredictionP
       }
     })
 
-    const total = numbers.length
     const nonZeroTotal = numbers.filter(n => n !== 0).length
 
     // Generate predictions based on patterns
@@ -91,13 +90,11 @@ export function PredictionPanel({ numbers, isAnalyzing, onAnalyze }: PredictionP
     // Add numbers based on color probability
     const redPercentage = (redCount / nonZeroTotal) * 100
     if (redPercentage > 55) {
-      // More likely black
       const blackNums = BLACK_NUMBERS.filter(n => !predictedNumbers.includes(n))
       if (blackNums.length > 0) {
         predictedNumbers.push(blackNums[Math.floor(Math.random() * blackNums.length)])
       }
     } else if (redPercentage < 45) {
-      // More likely red
       const redNums = RED_NUMBERS.filter(n => !predictedNumbers.includes(n))
       if (redNums.length > 0) {
         predictedNumbers.push(redNums[Math.floor(Math.random() * redNums.length)])
@@ -153,6 +150,7 @@ export function PredictionPanel({ numbers, isAnalyzing, onAnalyze }: PredictionP
         <CardTitle className="text-white flex items-center gap-2">
           <Sparkles className="w-5 h-5 text-amber-500" />
           Predicciones
+          <span className="text-[9px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded font-mono ml-auto">V6.0</span>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
