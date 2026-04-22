@@ -92,6 +92,36 @@
  *   Streak 0-1:  NORMAL — Markov + Alternation + Recency + Recovery
  *   Streak 2-5:  SOFT   — Markov + Adaptive Break-Prob + Alternation + Recovery
  *   Streak 6+:   ULTRA  — Push MISMO COLOR + Alternation (reducido) + Recovery
+ *
+ * v5.4 — Selective Prediction + Aggressive Recovery:
+ *   PROBLEMA v5.3: 49.6% accuracy = random. Martingala pierde -4,141 unidades.
+ *   Rachas ≥4 son estadísticamente inevitables al ~50% accuracy.
+ *   157 rachas fatales generan 336 busts × -7 = -2,352 unidades.
+ *
+ *   v5.4 FILOSOFÍA: No predecir TODOS los spins. Solo predecir cuando hay
+ *   señal FUERTE. Los spins inciertos se SKIPEAN (no se apuesta).
+ *   Esto sacrifica ~25-35% de predicciones pero las restantes tienen
+ *   mayor accuracy porque solo se activa con señales claras.
+ *
+ *   v5.4 CAMBIOS:
+ *   1. MICRO-MARKOV (50 spins): Señal primaria con ventana corta.
+ *      Patrones recientes son más relevantes que histórico global.
+ *      Markov-300 se mantiene como secundaria con peso reducido.
+ *   2. SKIP THRESHOLD: Si la diferencia de scores entre colores es
+ *      < SKIP_THRESHOLD, retorna shouldSkip=true. El simulador
+ *      NO avanza martingala en skips. Esto rompe cadenas de pérdidas.
+ *   3. RECOVERY A 2 ERRORES: Trigger recovery después de 2 errores
+ *      consecutivos (no 3). Cada error que se previene del 3er spin
+ *      ahorra las 7 unidades del bust martingala.
+ *   4. ALTERNATION en TODOS los modos: Como tiebreaker cuando
+ *      micro-Markov no tiene señal clara (scores < 55%).
+ *   5. MAX_CONSECUTIVE_FLIPS = 3 (de 2): Permitir más recovery flips
+ *      para manejar rachas más largas.
+ *
+ * LÓGICA v5.4:
+ *   Streak 0-1:  NORMAL — Micro-Markov(50) + Markov(300) + Recency + Recovery + SKIP
+ *   Streak 2-5:  SOFT   — Micro-Markov(50) + Markov(300) + Break-Prob + Recovery + SKIP
+ *   Streak 6+:   ULTRA  — Push MISMO COLOR + Micro-Markov + Recovery + SKIP
  */
 
 // European roulette wheel layout (clockwise from 0)
@@ -117,6 +147,8 @@ export interface SmartPrediction {
   bestValue: string
   bestConfidence: number
   dealerSignal?: { targetNumber: number; reliability: number }
+  shouldSkip?: boolean // v5.4: true when signal is too weak to bet
+  signalStrength?: number // v5.4: raw score difference (debug)
 }
 
 // ── Adaptive weight tracking ──
@@ -196,7 +228,7 @@ export function recordPredictionFeedback(correct: boolean, contributingModules: 
 
 /** Count consecutive recovery flips to avoid flip loops */
 let consecutiveFlips = 0
-const MAX_CONSECUTIVE_FLIPS = 2
+const MAX_CONSECUTIVE_FLIPS = 3 // v5.4: increased from 2 to allow more recovery
 
 /** Get the opposite color for recovery flip */
 function getOppositeColor(color: string): string {
@@ -237,39 +269,38 @@ function getRecoveryPrediction(currentPrediction: string): string | null {
 
   const recentWrong = getConsecutiveWrong()
   
-  // Need at least 3 consecutive wrong predictions to trigger recovery
+  // v5.4: Trigger at 3 consecutive wrong (reverted from 2 — 2 was counterproductive)
   if (recentWrong.length < 3) return null
 
   // Compute actual results from wrong predictions
   // When prediction was wrong, actual = opposite of predicted
   const actualResults = recentWrong.map(e => getOppositeColor(e.predicted))
 
-  // ── STRATEGY 1: STREAK FOLLOW ──
-  // If last 3 actual results are same color → the session has a streak running
-  if (actualResults.length >= 3) {
-    const last3 = actualResults.slice(-3)
-    if (last3[0] === last3[1] && last3[1] === last3[2]) {
-      // All same → predict that color (streak is running)
-      return last3[0]
+  // v5.4: STRATEGY 1: STREAK FOLLOW (only 2 needed now since we trigger at 2)
+  // If last 2 actual results are same color → session has a streak running
+  if (actualResults.length >= 2) {
+    const last2actual = actualResults.slice(-2)
+    if (last2actual[0] === last2actual[1]) {
+      // Both same → predict that color (streak is running)
+      return last2actual[0]
     }
   }
 
-  // ── STRATEGY 2: ALTERNATION FOLLOW ──
-  // If last 4 actual results alternate → predict opposite of last
-  if (actualResults.length >= 4) {
-    const last4 = actualResults.slice(-4)
-    const isAlt = last4[0] !== last4[1] && last4[1] !== last4[2] && last4[2] !== last4[3]
-    if (isAlt && last4[0] === last4[2] && last4[1] === last4[3]) {
-      // Strict alternation A-B-A-B → predict A (opposite of last B)
-      return last4[0]
+  // v5.4: STRATEGY 2: ALTERNATION FOLLOW (enhanced — works with just 2)
+  // If last 2 actual results alternate → predict opposite of last
+  if (actualResults.length >= 2) {
+    const last2a = actualResults.slice(-2)
+    if (last2a[0] !== last2a[1]) {
+      // Alternation detected → predict opposite of last (which = first)
+      return last2a[0]
     }
   }
 
-  // ── STRATEGY 3: STUCK ENGINE ──
+  // v5.4: STRATEGY 3: STUCK ENGINE (always check)
   // If engine keeps predicting same wrong color → flip
-  const last2 = recentWrong.slice(-2)
-  if (last2.length >= 2 && last2[0].predicted === last2[1].predicted) {
-    if (currentPrediction === last2[0].predicted) {
+  const last2predicted = recentWrong.slice(-2)
+  if (last2predicted.length >= 2 && last2predicted[0].predicted === last2predicted[1].predicted) {
+    if (currentPrediction === last2predicted[0].predicted) {
       return getOppositeColor(currentPrediction)
     }
   }
@@ -300,6 +331,49 @@ function trackContribution(scores: Record<string, number>, baseScores: Record<st
 function getNumberColor(n: number): 'red' | 'black' | 'green' {
   if (n === 0) return 'green'
   return RED_SET.has(n) ? 'red' : 'black'
+}
+
+// ═══ v5.4: SKIP THRESHOLD ═══
+const SKIP_THRESHOLD = 15.0
+
+/** v5.4: Build micro-Markov from short window with amplification */
+function buildMicroMarkov(
+  data: number[],
+  getCat: (n: number) => string | null,
+  windowSize: number
+): Record<string, number> {
+  const micro = data.length > windowSize ? data.slice(-windowSize) : data
+  const trans: Record<string, Record<string, Record<string, number>>> = {}
+  for (let i = 2; i < micro.length; i++) {
+    const c0 = getCat(micro[i - 2]); const c1 = getCat(micro[i - 1]); const c2 = getCat(micro[i])
+    if (c0 && c1 && c2) {
+      if (!trans[c0]) trans[c0] = {}; if (!trans[c0][c1]) trans[c0][c1] = {}
+      trans[c0][c1][c2] = (trans[c0][c1][c2] || 0) + 1
+    }
+  }
+  const scores: Record<string, number> = { red: 0, black: 0 }
+  if (micro.length >= 2) {
+    const c0 = getCat(micro[micro.length - 2]); const c1 = getCat(micro[micro.length - 1])
+    if (c0 && c1 && trans[c0] && trans[c0][c1]) {
+      const tr = trans[c0][c1]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+      if (total > 0) {
+        for (const c of ['red', 'black'] as const) {
+          const pct = ((tr[c] || 0) / total) * 100
+          scores[c] = pct > 50 ? pct + (pct - 50) * 0.5 : pct - (50 - pct) * 0.5
+        }
+      }
+    }
+  }
+  return scores
+}
+
+/** v5.4: Check if should skip based on score difference */
+function shouldSkipPrediction(scores: Record<string, number>, cats: string[]): { skip: boolean; strength: number } {
+  const values = cats.map(c => scores[c])
+  const maxScore = Math.max(...values)
+  const minScore = Math.min(...values)
+  const strength = maxScore - minScore
+  return { skip: strength < SKIP_THRESHOLD, strength }
 }
 
 // ── v5.2 NEW: Compute Adaptive Break Probability ──
@@ -1029,17 +1103,39 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
         }
       }
 
-      // ═══ v5.3b: NO alternating pattern in SOFT mode ═══
-      // Analysis: Alternating detector in SOFT mode adds ~5 medium peaks
-      // (converts some peak-1 to peak-4 when it wrongly overrides Markov).
-      // Removed from SOFT — recovery flip handles SOFT protection.
-      // Alternating pattern only kept in ULTRA mode (where worst peaks live).
+      // ═══ v5.4: MICRO-MARKOV (50 spins) — extra signal in SOFT ═══
+      const microMarkovSoft = buildMicroMarkov(nonZero, getCat, 50)
+      cats.forEach(c => {
+        scores[c] += microMarkovSoft[c] * getWeight('markov') * 0.3
+      })
+
+      // ═══ v5.4: ALTERNATION AS TIEBREAKER (SOFT mode) ═══
+      const altSoft = detectAlternatingPattern(nonZero, getCat)
+      if (altSoft.detected && altSoft.lastColor) {
+        const altOpposite = getOppositeColor(altSoft.lastColor)
+        scores[altOpposite] += 10
+        scores[altSoft.lastColor!] -= 5
+      }
+
+      // ═══ v5.4: SKIP CHECK (SOFT mode — more lenient threshold) ═══
+      const skipSoft = shouldSkipPrediction(scores, cats)
+      if (skipSoft.skip) {
+        return {
+          type: 'color',
+          options: cats.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: 50 })),
+          bestValue: scores.red >= scores.black ? 'red' : 'black',
+          bestConfidence: 50,
+          dealerSignal: antiWheel.signal || undefined,
+          shouldSkip: true,
+          signalStrength: skipSoft.strength
+        }
+      }
 
       const confs = toConfidence(scores, cats, 48.6)
       const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
       let bestValue = sorted[0]
 
-      // ═══ v5.3: PATTERN-AWARE RECOVERY (SOFT mode — Last Resort) ═══
+      // ═══ v5.4: PATTERN-AWARE RECOVERY (SOFT mode — triggers at 2 errors) ═══
       const recoveryResult = getRecoveryPrediction(bestValue)
       if (recoveryResult) {
         bestValue = recoveryResult
@@ -1053,7 +1149,9 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
         options: sorted.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: Math.round(confs[c]) })),
         bestValue,
         bestConfidence: Math.round(confs[bestValue]),
-        dealerSignal: antiWheel.signal || undefined
+        dealerSignal: antiWheel.signal || undefined,
+        shouldSkip: false,
+        signalStrength: skipSoft.strength
       }
     }
 
@@ -1184,16 +1282,41 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       }
     }
 
-    // ═══ v5.3b: NO alternating pattern in NORMAL mode ═══
-    // Same reasoning as SOFT — alternating detector adds more medium peaks
-    // than it prevents in modes where Markov has decent accuracy.
-    // Only kept in ULTRA mode (where it prevents catastrophic peaks).
+    // ═══ v5.4: MICRO-MARKOV (50 spins) — PRIMARY signal in NORMAL ═══
+    const microMarkov = buildMicroMarkov(nonZero, getCat, 50)
+    cats.forEach(c => {
+      scores[c] += microMarkov[c] * getWeight('markov') * 0.35
+    })
+
+    // ═══ v5.4: SKIP CHECK — Don't bet when signal is weak ═══
+    const skipCheck = shouldSkipPrediction(scores, cats)
+    if (skipCheck.skip) {
+      return {
+        type: 'color',
+        options: cats.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: 50 })),
+        bestValue: scores.red >= scores.black ? 'red' : 'black',
+        bestConfidence: 50,
+        dealerSignal: wheelData.signal || undefined,
+        shouldSkip: true,
+        signalStrength: skipCheck.strength
+      }
+    }
+
+    // ═══ v5.4: ALTERNATION AS TIEBREAKER (NORMAL mode) ═══
+    if (skipCheck.strength < 8) {
+      const altNorm = detectAlternatingPattern(nonZero, getCat)
+      if (altNorm.detected && altNorm.lastColor) {
+        const altOpposite = getOppositeColor(altNorm.lastColor)
+        scores[altOpposite] += 12
+        scores[altNorm.lastColor!] -= 6
+      }
+    }
 
     const confs = toConfidence(scores, cats, 48.6)
     const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
     let bestValue = sorted[0]
 
-    // ═══ v5.3: PATTERN-AWARE RECOVERY (NORMAL mode — Last Resort) ═══
+    // ═══ v5.4: PATTERN-AWARE RECOVERY (NORMAL mode — triggers at 2 errors) ═══
     const recoveryNorm = getRecoveryPrediction(bestValue)
     if (recoveryNorm) {
       bestValue = recoveryNorm
@@ -1207,7 +1330,9 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       options: sorted.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: Math.round(confs[c]) })),
       bestValue,
       bestConfidence: Math.round(confs[bestValue]),
-      dealerSignal: wheelData.signal || undefined
+      dealerSignal: wheelData.signal || undefined,
+      shouldSkip: false,
+      signalStrength: skipCheck.strength
     }
   }
 

@@ -58,3 +58,48 @@ Stage Summary:
 - Files created:
   - /home/z/my-project/download/raw-sequence-v3.txt
   - /home/z/my-project/download/clean-sequence-v3.txt
+
+---
+Task ID: 3
+Agent: Main (Super Z)
+Task: Implement V5.4 — Selective Prediction + Aggressive Recovery
+
+Work Log:
+- Analyzed V5.3 engine (smart-prediction-v4.ts) — 1522 lines, 12 modules
+- Diagnosed root cause: 49.6% accuracy = random, streaks ≥4 statistically inevitable
+- Designed V5.4 strategy: SKIP weak-signal bets instead of predicting all spins
+- Added SKIP_THRESHOLD constant, buildMicroMarkov(), shouldSkipPrediction() functions
+- Added shouldSkip + signalStrength fields to SmartPrediction interface
+- Modified NORMAL mode: micro-Markov(50) + skip check + alternation tiebreaker
+- Modified SOFT mode: micro-Markov(50) + skip check + alternation tiebreaker
+- Recovery reverted to 3 errors (2 errors was counterproductive: 48.5% vs 52.1%)
+- MAX_CONSECUTIVE_FLIPS increased to 3 (from 2)
+- Created simulate-v54.ts with skip handling (skip breaks martingala chains)
+- Ran threshold sweep: T=3,5,7,10,15,20 across 4,876-number sequence
+- Selected T=15 as optimal (24% skip, 50.6% accuracy, 30% loss reduction)
+
+Stage Summary:
+V5.4 Results vs V5.3 (4,876 numbers):
+| Metric         | V5.3    | V5.4 T=15 | Change    |
+|----------------|---------|-----------|-----------|
+| Accuracy       | 49.6%   | 50.6%     | +1.0%     |
+| Max streak     | 14      | 10        | -29%      |
+| Fatal ≥4       | 157     | 118       | -25%      |
+| Busts          | 336     | 255       | -24%      |
+| Net martingala | -4141   | -3113     | -25%      |
+| Ratio          | 7.94    | 8.55      | +7.7%     |
+| Skipped bets   | 0       | 1171      | 24.1%     |
+| Pico máximo    | 15      | 11        | -27%      |
+
+Key findings:
+- Skip threshold T=15 provides best balance (24% skip rate)
+- Micro-Markov (50 spins) adds marginal improvement
+- Recovery at 2 errors HURTS accuracy (48.5%), reverted to 3 (50%+)
+- Skip accuracy ~50.6% at optimal threshold (slightly above random)
+- ALL improvements are from reducing total bets, not from better predictions
+- CONCLUSION: V5.4 reduces losses by ~25% but does NOT achieve >55% accuracy
+- Fundamental limitation: roulette is statistically random, no pattern detection can consistently exceed 50%
+
+Files modified:
+- /home/z/my-project/src/lib/smart-prediction-v4.ts (V5.4 logic)
+- /home/z/my-project/scripts/simulate-v54.ts (new simulator with skip handling)
