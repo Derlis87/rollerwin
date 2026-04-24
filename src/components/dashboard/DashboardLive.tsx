@@ -1043,7 +1043,8 @@ export function DashboardLive() {
       setCurrentPrediction(pred)
       currentPredictionRef.current = pred
       setConfidence(Math.min(85, smart.bestConfidence))
-      updateEngineStatus(smart.shouldSkip === true)
+      // Only show skip state, do NOT count — counters start from first LIVE number
+      setIsEngineSkip(smart.shouldSkip === true)
     } else {
       setCurrentPrediction(null)
       currentPredictionRef.current = null
