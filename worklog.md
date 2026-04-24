@@ -1071,3 +1071,27 @@ Stage Summary:
 - Shows real-time count of signals vs skips with signal ratio percentage
 - Sound alert plays when transitioning from SKIP to active signal
 - File: /home/z/my-project/src/components/dashboard/DashboardLive.tsx
+
+---
+Task ID: 1
+Agent: Main
+Task: Analizar secuencia 4 (5,406 números) con V6.0 Puro para verificar rentabilidad
+
+Work Log:
+- Validated clean-sequence-4.txt: 5,406 valid numbers (0-36), all correct
+- Recreated simulate-v60.ts importing real generateSmartPrediction from smart-prediction-v4.ts
+- Fixed bugs: signalRate reference, longest streak tracking, peak recording
+- Ran full simulation on 5,406 numbers
+
+Stage Summary:
+- V6.0 PURO IS PROFITABLE on this sequence
+- Results: +319 units net, 55.6% accuracy, 576 signals, 4825 skips
+- ROI: 23.65%, Net per 100 spins: +5.9 units
+- 0 BUSTS (never lost 7+ consecutive), max peak: 5
+- Peak distribution: 92.7% low (1-3), 7.3% medium (4-6), 0% high (7+)
+- Ratio bajos/(med+alt): 12.73:1 (well above 7:1 break-even)
+- Most common peak: 1 (89x out of 151 total peaks)
+- Longest win streak: 11, longest lose streak: 5
+- Martingala cycles recovered: 150
+
+Worklog: /home/z/my-project/download/clean-sequence-4.txt, /home/z/my-project/simulate-v60.ts
