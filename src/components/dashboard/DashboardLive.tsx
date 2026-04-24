@@ -1456,13 +1456,11 @@ export function DashboardLive() {
         {currentPrediction && numbers.length >= 5 && (
           <div className="p-3 border-b border-zinc-700">
             {/* V6.0: Signal/Skip Counter (compact) */}
-            <div className="flex items-center gap-3 mb-2 text-xs">
-              <span className={`${!isEngineSkip ? 'text-green-400' : 'text-zinc-500'} font-bold`}>
-                🎯 {totalSignals}
-              </span>
-              <span className={`${isEngineSkip ? 'text-zinc-400' : 'text-zinc-600'} font-bold`}>
-                ⏸ {totalSkips}
-              </span>
+            <div className="text-xs text-zinc-500 mb-1.5">
+              Señales: <span className="text-green-400 font-bold">{totalSignals}</span> | Skips: <span className="text-zinc-300 font-bold">{totalSkips}</span>
+              {(totalSignals + totalSkips) > 0 && (
+                <span className="ml-1.5 text-zinc-600">{Math.round((totalSignals / (totalSignals + totalSkips)) * 100)}%</span>
+              )}
             </div>
             {/* V6.0: Skip indicator */}
             {isEngineSkip && (
@@ -1867,21 +1865,11 @@ export function DashboardLive() {
                   <Card className={`bg-gradient-to-r from-zinc-900 to-zinc-800 ${isEngineSkip ? 'border-zinc-600' : 'border-amber-500/30'}`}>
                     <CardContent className="py-4 space-y-3">
                       {/* V6.0: Signal/Skip Counter */}
-                      <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-800/50 border border-zinc-700 rounded-lg">
-                        <div className="flex items-center gap-4">
-                          <span className={`text-xs font-bold ${!isEngineSkip ? 'text-green-400' : 'text-zinc-500'}`}>
-                            🎯 Señales: <span className="text-white">{totalSignals}</span>
-                          </span>
-                          <span className={`text-xs font-bold ${isEngineSkip ? 'text-zinc-400' : 'text-zinc-500'}`}>
-                            ⏸ Skips: <span className="text-white">{totalSkips}</span>
-                          </span>
-                        </div>
-                        <span className="text-xs text-zinc-600">
-                          {(totalSignals + totalSkips) > 0
-                            ? `Ratio: ${Math.round((totalSignals / (totalSignals + totalSkips)) * 100)}% señal`
-                            : '—'
-                          }
-                        </span>
+                      <div className="text-xs text-zinc-500">
+                        Señales: <span className="text-green-400 font-bold">{totalSignals}</span> | Skips: <span className="text-zinc-300 font-bold">{totalSkips}</span>
+                        {(totalSignals + totalSkips) > 0 && (
+                          <span className="ml-2 text-zinc-600">Ratio: {Math.round((totalSignals / (totalSignals + totalSkips)) * 100)}%</span>
+                        )}
                       </div>
                       {/* V6.0: SKIP indicator */}
                       {isEngineSkip && (
