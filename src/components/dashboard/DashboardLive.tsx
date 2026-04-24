@@ -88,9 +88,29 @@ const PEAK_COLORS = [
 ]
 
 // Sound effects
-const playSound = (type: 'success' | 'fail' | 'click') => {
+const playSound = (type: 'success' | 'fail' | 'click' | 'signal') => {
   if (typeof window === 'undefined') return
-  
+
+  // 'signal' = 3 ascending tones (SKIP → SEÑAL alert)
+  if (type === 'signal') {
+    try {
+      const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)()
+      const freqs = [660, 880, 1100]
+      freqs.forEach((freq, i) => {
+        const osc = ctx.createOscillator()
+        const gain = ctx.createGain()
+        osc.connect(gain)
+        gain.connect(ctx.destination)
+        osc.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.12)
+        gain.gain.setValueAtTime(0.1, ctx.currentTime + i * 0.12)
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + i * 0.12 + 0.15)
+        osc.start(ctx.currentTime + i * 0.12)
+        osc.stop(ctx.currentTime + i * 0.12 + 0.15)
+      })
+    } catch (e) { /* audio not available */ }
+    return
+  }
+
   try {
     const audioContext = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)()
     const oscillator = audioContext.createOscillator()
@@ -215,6 +235,29 @@ export function DashboardLive() {
   const [isEngineSkip, setIsEngineSkip] = useState(false)
   const isEngineSkipRef = useRef(false)
   useEffect(() => { isEngineSkipRef.current = isEngineSkip }, [isEngineSkip])
+
+  // V6.0: Signal/Skip counter
+  const [totalSignals, setTotalSignals] = useState(0)
+  const [totalSkips, setTotalSkips] = useState(0)
+  const totalSignalsRef = useRef(0)
+  const totalSkipsRef = useRef(0)
+
+  // V6.0: Helper - update engine skip status + counters + sound alert
+  const updateEngineStatus = useCallback((shouldSkip: boolean) => {
+    const wasSkip = isEngineSkipRef.current
+    setIsEngineSkip(shouldSkip)
+    if (shouldSkip) {
+      totalSkipsRef.current++
+      setTotalSkips(totalSkipsRef.current)
+    } else {
+      totalSignalsRef.current++
+      setTotalSignals(totalSignalsRef.current)
+      // Play ascending tone alert when transitioning from SKIP → SEÑAL
+      if (wasSkip && soundEnabledRef.current) {
+        playSound('signal')
+      }
+    }
+  }, [])
   
   // Demo mode
   const [isDemoMode, setIsDemoMode] = useState(false)
@@ -574,7 +617,7 @@ export function DashboardLive() {
       // Generate smart prediction — V6.0 single source of truth
       const smart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
       setSmartPrediction(smart)
-      setIsEngineSkip(smart.shouldSkip === true)
+      updateEngineStatus(smart.shouldSkip === true)
       prediction = { type: smart.type, value: smart.bestValue }
       setCurrentPrediction(prediction)
       setConfidence(Math.min(85, smart.bestConfidence))
@@ -588,7 +631,7 @@ export function DashboardLive() {
         if (newNumbers.length >= 5) {
           const newSmart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
           setSmartPrediction(newSmart)
-          setIsEngineSkip(newSmart.shouldSkip === true)
+          updateEngineStatus(newSmart.shouldSkip === true)
           setCurrentPrediction({ type: newSmart.type, value: newSmart.bestValue })
           setConfidence(Math.min(85, newSmart.bestConfidence))
         }
@@ -717,7 +760,7 @@ export function DashboardLive() {
         if (newNumbers.length >= 5) {
           const newSmart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
           setSmartPrediction(newSmart)
-          setIsEngineSkip(newSmart.shouldSkip === true)
+          updateEngineStatus(newSmart.shouldSkip === true)
           setCurrentPrediction({ type: newSmart.type, value: newSmart.bestValue })
           setConfidence(Math.min(85, newSmart.bestConfidence))
         }
@@ -835,7 +878,7 @@ export function DashboardLive() {
         if (newNumbers.length >= 5) {
           const newSmart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
           setSmartPrediction(newSmart)
-          setIsEngineSkip(newSmart.shouldSkip === true)
+          updateEngineStatus(newSmart.shouldSkip === true)
           setCurrentPrediction({ type: newSmart.type, value: newSmart.bestValue })
           setConfidence(Math.min(85, newSmart.bestConfidence))
         }
@@ -933,6 +976,11 @@ export function DashboardLive() {
     setBacktestResults(null)
     setIsEngineSkip(false)
     isEngineSkipRef.current = false
+    // Reset signal/skip counters on clear
+    totalSignalsRef.current = 0
+    totalSkipsRef.current = 0
+    setTotalSignals(0)
+    setTotalSkips(0)
     setSmartPrediction(null)
   }, [])
 
@@ -1407,6 +1455,15 @@ export function DashboardLive() {
         {/* Prediction with confidence */}
         {currentPrediction && numbers.length >= 5 && (
           <div className="p-3 border-b border-zinc-700">
+            {/* V6.0: Signal/Skip Counter (compact) */}
+            <div className="flex items-center gap-3 mb-2 text-xs">
+              <span className={`${!isEngineSkip ? 'text-green-400' : 'text-zinc-500'} font-bold`}>
+                🎯 {totalSignals}
+              </span>
+              <span className={`${isEngineSkip ? 'text-zinc-400' : 'text-zinc-600'} font-bold`}>
+                ⏸ {totalSkips}
+              </span>
+            </div>
             {/* V6.0: Skip indicator */}
             {isEngineSkip && (
               <div className="text-xs font-bold text-zinc-500 mb-1.5 flex items-center gap-1.5">
@@ -1809,6 +1866,23 @@ export function DashboardLive() {
                 {currentPrediction && numbers.length >= 5 ? (
                   <Card className={`bg-gradient-to-r from-zinc-900 to-zinc-800 ${isEngineSkip ? 'border-zinc-600' : 'border-amber-500/30'}`}>
                     <CardContent className="py-4 space-y-3">
+                      {/* V6.0: Signal/Skip Counter */}
+                      <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-800/50 border border-zinc-700 rounded-lg">
+                        <div className="flex items-center gap-4">
+                          <span className={`text-xs font-bold ${!isEngineSkip ? 'text-green-400' : 'text-zinc-500'}`}>
+                            🎯 Señales: <span className="text-white">{totalSignals}</span>
+                          </span>
+                          <span className={`text-xs font-bold ${isEngineSkip ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                            ⏸ Skips: <span className="text-white">{totalSkips}</span>
+                          </span>
+                        </div>
+                        <span className="text-xs text-zinc-600">
+                          {(totalSignals + totalSkips) > 0
+                            ? `Ratio: ${Math.round((totalSignals / (totalSignals + totalSkips)) * 100)}% señal`
+                            : '—'
+                          }
+                        </span>
+                      </div>
                       {/* V6.0: SKIP indicator */}
                       {isEngineSkip && (
                         <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800 border border-zinc-600 rounded-lg">

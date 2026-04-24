@@ -1048,3 +1048,26 @@ Stage Summary:
 - Key improvements: Recovery reduces peak-6 by 33%, eliminates peak-11s
 - Ratio maintained above 7:1 break-even (8.00:1)
 - 3 bugs fixed: all recovery/detection functions now properly connected
+
+---
+Task ID: 1
+Agent: main
+Task: Fix missing Señales/Skips counter in DashboardLive.tsx
+
+Work Log:
+- Analyzed screenshot showing no signal/skip counter visible
+- Found that totalSignals and totalSkips state variables were missing from code
+- Added state variables: totalSignals, totalSkips with refs
+- Created updateEngineStatus() helper that: sets isEngineSkip, increments correct counter, plays 3-tone ascending sound on SKIP→SEÑAL transition
+- Replaced all 4 setIsEngineSkip() calls in handleNumberInput with updateEngineStatus()
+- Added counter reset in handleClearHistory
+- Added 'signal' sound type to playSound() function (3 ascending tones: 660→880→1100Hz)
+- Added UI display in main prediction card: 🎯 Señales: X / ⏸ Skips: Y with ratio percentage
+- Added compact counter in mobile side panel prediction area
+- Build verified successfully
+
+Stage Summary:
+- Counter is now visible in both desktop and mobile views
+- Shows real-time count of signals vs skips with signal ratio percentage
+- Sound alert plays when transitioning from SKIP to active signal
+- File: /home/z/my-project/src/components/dashboard/DashboardLive.tsx
