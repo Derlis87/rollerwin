@@ -1095,3 +1095,19 @@ Stage Summary:
 - Martingala cycles recovered: 150
 
 Worklog: /home/z/my-project/download/clean-sequence-4.txt, /home/z/my-project/simulate-v60.ts
+
+---
+Task ID: 2
+Agent: Main
+Task: Guardar contexto importante + crear backup recuperable
+
+Work Log:
+- CONTEXT SAVED: The user's sequence is ONE SINGLE growing sequence, NOT multiple independent datasets
+- Each time user pastes "new" data, it's the SAME sequence updated with MORE numbers appended at the end
+- Example: seq-3 (5,236 nums) → seq-4 (5,406 nums) = same sequence + 170 new numbers
+- When analyzing, always treat the latest sequence as THE complete dataset, never combine multiple sequences as independent samples
+- User adds numbers session by session, continuing from where they left off (waits for last recorded number to appear)
+
+Stage Summary:
+- Important context permanently recorded in worklog
+- Backup created for disaster recovery
