@@ -1030,23 +1030,11 @@ export function DashboardLive() {
     currentPredictionRef.current = null
     setConfidence(0)
     setBacktestResults(null)
-    
-    // Calculate ALL historical peaks from imported numbers — based on current bet type
-    if (newNumbers.length >= 6) {
-      const peakOpts = getPeakCalcOptions(selectedBetTypeRef.current, calcDozenModeRef.current)
-      const historicalPeaks = calculatePeakHistory(newNumbers, peakOpts)
-      setPeakHistory(historicalPeaks)
-      const currentP = getCurrentPeak(newNumbers, peakOpts)
-      // If peak is 0 (last peak was resolved), start new cycle at 1
-      const displayPeak = Math.max(1, currentP)
-      setCurrentPeak(displayPeak)
-      currentPeakRef.current = displayPeak
-      console.log('[DashboardLive] Import: calculated', historicalPeaks.length, 'peaks from', newNumbers.length, 'numbers, current peak:', currentP, 'display:', displayPeak)
-    } else {
-      setPeakHistory([])
-      setCurrentPeak(1)
-      currentPeakRef.current = 1
-    }
+    setPeakHistory([])
+
+    // Import sets peak to 1 — historical numbers are only for engine context (Markov),
+    // NOT for tracking live play peaks. Peak tracking starts fresh from the first live number.
+    console.log('[DashboardLive] Import:', newNumbers.length, 'numbers loaded for engine context. Peak reset to 1.')
     
     if (newNumbers.length >= 5) {
       const smart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
@@ -1055,6 +1043,7 @@ export function DashboardLive() {
       setCurrentPrediction(pred)
       currentPredictionRef.current = pred
       setConfidence(Math.min(85, smart.bestConfidence))
+      updateEngineStatus(smart.shouldSkip === true)
     } else {
       setCurrentPrediction(null)
       currentPredictionRef.current = null
