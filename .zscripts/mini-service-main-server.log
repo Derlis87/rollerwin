@@ -2,7 +2,7 @@
 bun install v1.3.10 (30e609e0)
 No packages! Deleted empty lockfile
 
-[17.00ms] done
+[11.00ms] done
 [main-server] Running bun run dev...
 $ node /home/z/my-project/.next/standalone/server.js -p 3000
 node:internal/modules/cjs/loader:1459

@@ -1,21 +1,2 @@
 [roulette-capturer] Installing dependencies...
 bun install v1.3.10 (30e609e0)
-
-+ express@4.22.1
-+ puppeteer@21.11.0
-+ socket.io@4.8.3
-+ tesseract.js@5.1.1
-
-198 packages installed [611.35s]
-[roulette-capturer] Running bun run dev...
-$ bun --hot index.ts
-Roulette Capturer Service running on port 3004
-
-Roulette Capturer Service Started
-=====================================
-WebSocket: port 3004
-REST API: port 3005
-
-Supported casinos: betfury, evolution, pinnacle, bet365, betway, 888casino
-
-Roulette Capturer REST API running on port 3005
