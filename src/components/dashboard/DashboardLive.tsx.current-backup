@@ -209,6 +209,12 @@ export function DashboardLive() {
   const [peakHistory, setPeakHistory] = useState<EnginePeakRecord[]>([])
   const [confidence, setConfidence] = useState(0)
   const [peakDozenMode, setPeakDozenMode] = useState<BtDozenMode>('single') // tracks single/double for peak recalc
+
+  // Signal-only peak tracking (V6.0) — independent from general peak history
+  // This ONLY records peaks when the engine gives an actual SEÑAL (not SKIP)
+  const [signalPeak, setSignalPeak] = useState(1)
+  const [signalPeakHistory, setSignalPeakHistory] = useState<EnginePeakRecord[]>([])
+  const signalPeakRef = useRef(1)
   
   // UI state
   const [copiedUrl, setCopiedUrl] = useState(false)
@@ -403,6 +409,10 @@ export function DashboardLive() {
   useEffect(() => {
     currentPeakRef.current = currentPeak
   }, [currentPeak])
+
+  useEffect(() => {
+    signalPeakRef.current = signalPeak
+  }, [signalPeak])
   
   useEffect(() => {
     selectedBetTypeRef.current = selectedBetType
@@ -661,8 +671,23 @@ export function DashboardLive() {
           timestamp: new Date()
         }
         
-        // Add to history
+        // Add to general history
         setPeakHistory(prev => [...prev, peakRecord])
+
+        // === SIGNAL-ONLY PEAK TRACKING (V6.0) ===
+        // This code only runs when engine is NOT in SKIP mode (line 637 returns early if skip)
+        const signalPeakValue = signalPeakRef.current
+        const signalPeakRecord: EnginePeakRecord = {
+          id: `sig-${Date.now().toString()}`,
+          height: signalPeakValue,
+          prediction: { type: prediction.type, value: prediction.value },
+          resultNumber: num,
+          resultColor: getNumberColor(num),
+          timestamp: new Date()
+        }
+        setSignalPeakHistory(prev => [...prev, signalPeakRecord])
+        setSignalPeak(1)
+        signalPeakRef.current = 1
         
         // === CALCULATOR TRACKING ===
         if (calcIsActiveRef.current) {
@@ -770,6 +795,11 @@ export function DashboardLive() {
         
         const newPeak = currentPeakValue + 1
         setCurrentPeak(newPeak)
+
+        // === SIGNAL-ONLY PEAK TRACKING (V6.0) ===
+        const newSignalPeak = signalPeakRef.current + 1
+        setSignalPeak(newSignalPeak)
+        signalPeakRef.current = newSignalPeak
 
         // === CALCULATOR TRACKING ===
         if (calcIsActiveRef.current) {
@@ -970,6 +1000,10 @@ export function DashboardLive() {
     setPeakHistory([])
     setCurrentPeak(1)
     currentPeakRef.current = 1
+    // Reset signal-only peak tracking
+    setSignalPeakHistory([])
+    setSignalPeak(1)
+    signalPeakRef.current = 1
     setCurrentPrediction(null)
     currentPredictionRef.current = null
     setConfidence(0)
@@ -1026,25 +1060,38 @@ export function DashboardLive() {
     numbersRef.current = newNumbers
     setCurrentPeak(1)
     currentPeakRef.current = 1
+    // Reset signal-only peak tracking on import (signals are live-only)
+    setSignalPeakHistory([])
+    setSignalPeak(1)
+    signalPeakRef.current = 1
     setCurrentPrediction(null)
     currentPredictionRef.current = null
     setConfidence(0)
     setBacktestResults(null)
-    setPeakHistory([])
 
-    // Import sets peak to 1 — historical numbers are only for engine context (Markov),
-    // NOT for tracking live play peaks. Peak tracking starts fresh from the first live number.
-    console.log('[DashboardLive] Import:', newNumbers.length, 'numbers loaded for engine context. Peak reset to 1.')
+    // Recalculate general peak history from ALL imported numbers (includes SKIP peaks)
+    if (newNumbers.length >= 6) {
+      const peakOpts = getPeakCalcOptions(selectedBetTypeRef.current, calcDozenModeRef.current)
+      const historicalPeaks = calculatePeakHistory(newNumbers, peakOpts)
+      setPeakHistory(historicalPeaks)
+    } else {
+      setPeakHistory([])
+    }
+
+    console.log('[DashboardLive] Import:', newNumbers.length, 'numbers loaded. General peaks recalculated.')
     
     if (newNumbers.length >= 5) {
       const smart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
       setSmartPrediction(smart)
       const pred = { type: smart.type, value: smart.bestValue }
-      setCurrentPrediction(pred)
-      currentPredictionRef.current = pred
+      setCurrentPrediction(pred)  // Visual display only
+      // DO NOT set currentPredictionRef.current — import prediction must NOT
+      // be used for live peak tracking (causes phantom peaks without signal count)
       setConfidence(Math.min(85, smart.bestConfidence))
       // Only show skip state, do NOT count — counters start from first LIVE number
       setIsEngineSkip(smart.shouldSkip === true)
+      // Also sync the ref directly to avoid timing gap with useEffect
+      isEngineSkipRef.current = smart.shouldSkip === true
     } else {
       setCurrentPrediction(null)
       currentPredictionRef.current = null
@@ -1065,6 +1112,10 @@ export function DashboardLive() {
       // Reset current peak and prediction when bet type changes
       setCurrentPeak(1)
       currentPeakRef.current = 1
+      // Also reset signal-only peak tracking
+      setSignalPeakHistory([])
+      setSignalPeak(1)
+      signalPeakRef.current = 1
       setCurrentPrediction(null)
       currentPredictionRef.current = null
       setConfidence(0)
@@ -2259,6 +2310,130 @@ export function DashboardLive() {
                       ))
                     )}
                   </div>
+                </CardContent>
+              </Card>
+
+              {/* Historial de Picos de Señales V6.0 — Solo registros de señales reales */}
+              <Card className="bg-zinc-900 border border-cyan-800/50 mt-4">
+                <CardHeader className="py-2 px-4">
+                  <CardTitle className="text-white flex items-center justify-between text-sm">
+                    <span className="flex items-center gap-2">
+                      <Activity className="w-4 h-4 text-cyan-400" />
+                      <span>Picos de Señales</span>
+                      <span className="text-[10px] bg-cyan-500/20 text-cyan-400 px-1.5 py-0.5 rounded-full font-normal">V6.0 Solo Señales</span>
+                    </span>
+                    <span className="text-xs font-normal text-zinc-500">{signalPeakHistory.length} registros</span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="px-4 pb-4 space-y-3">
+                  {/* Pico actual de señales */}
+                  <div className="flex items-center gap-3 bg-zinc-800/50 rounded-lg p-3">
+                    <div className="text-xs text-zinc-400">Pico Señal Actual</div>
+                    <div className="flex-1" />
+                    <span className={`text-2xl font-bold ${signalPeak >= 5 ? 'text-red-500' : signalPeak >= 3 ? 'text-amber-500' : 'text-green-500'}`}>
+                      {signalPeak}
+                    </span>
+                  </div>
+
+                  {/* Barras visuales de picos de señales */}
+                  {signalPeakHistory.length > 0 && (
+                    <>
+                      <div className="relative h-32 bg-zinc-800/30 rounded-lg overflow-hidden">
+                        {/* Líneas guía horizontales */}
+                        <div className="absolute inset-0 flex flex-col justify-between py-2 px-2 pointer-events-none">
+                          {[15, 12, 9, 6, 3, 1].map((val) => (
+                            <div key={val} className="relative flex items-center">
+                              <span className="text-[10px] text-zinc-600 w-5 text-right">{val}</span>
+                              <div className="flex-1 border-t border-zinc-700/20" />
+                            </div>
+                          ))}
+                        </div>
+                        {/* Barras */}
+                        <div className="absolute left-7 right-2 bottom-2 top-2 flex items-end gap-[2px]">
+                          {[...signalPeakHistory].reverse().slice(0, 30).map((peak, i) => (
+                            <motion.div
+                              key={peak.id}
+                              initial={{ height: 0 }}
+                              animate={{ height: `${Math.max(4, ((peak.height - 1) / 14) * 100)}%` }}
+                              transition={{ duration: 0.3, delay: i * 0.02 }}
+                              className={`flex-1 rounded-t relative cursor-pointer min-w-[6px] ${
+                                peak.height <= 3 ? 'bg-cyan-400/80 hover:bg-cyan-300' :
+                                peak.height <= 6 ? 'bg-amber-500/80 hover:bg-amber-400' :
+                                'bg-red-500/80 hover:bg-red-400'
+                              }`}
+                              title={`Pico Señal ${peak.height} → #${peak.resultNumber}`}
+                            >
+                              {peak.height >= 4 && (
+                                <span className="absolute -top-4 left-1/2 -translate-x-1/2 text-[8px] font-bold text-zinc-400 whitespace-nowrap">
+                                  {peak.height}
+                                </span>
+                              )}
+                            </motion.div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Estadísticas de señales */}
+                      <div className="grid grid-cols-4 gap-2">
+                        <div className="bg-zinc-800/50 rounded-lg p-2 text-center">
+                          <div className="text-sm font-bold text-cyan-400">{signalPeakHistory.length}</div>
+                          <div className="text-[10px] text-zinc-500">Señales</div>
+                        </div>
+                        <div className="bg-zinc-800/50 rounded-lg p-2 text-center">
+                          <div className="text-sm font-bold text-cyan-400">
+                            {signalPeakHistory.length > 0
+                              ? (signalPeakHistory.reduce((s, p) => s + p.height, 0) / signalPeakHistory.length).toFixed(1)
+                              : '0'}
+                          </div>
+                          <div className="text-[10px] text-zinc-500">Promedio</div>
+                        </div>
+                        <div className="bg-zinc-800/50 rounded-lg p-2 text-center">
+                          <div className="text-sm font-bold text-green-400">{signalPeakHistory.filter(p => p.height <= 3).length}</div>
+                          <div className="text-[10px] text-zinc-500">Bajos</div>
+                        </div>
+                        <div className="bg-zinc-800/50 rounded-lg p-2 text-center">
+                          <div className="text-sm font-bold text-amber-400">{signalPeakHistory.filter(p => p.height >= 4).length}</div>
+                          <div className="text-[10px] text-zinc-500">Medios/Altos</div>
+                        </div>
+                      </div>
+
+                      {/* Lista detallada de picos de señales */}
+                      <div className="max-h-48 overflow-y-auto space-y-1 pr-1">
+                        {[...signalPeakHistory].reverse().slice(0, 50).map((peak) => (
+                          <div key={peak.id} className={`flex items-center justify-between p-2 rounded text-xs ${
+                            peak.height <= 3 ? 'bg-cyan-500/10 border border-cyan-500/20' :
+                            peak.height <= 6 ? 'bg-amber-500/10 border border-amber-500/20' :
+                            'bg-red-500/10 border border-red-500/20'
+                          }`}>
+                            <div className="flex items-center gap-2">
+                              <span className={`font-bold ${
+                                peak.height <= 3 ? 'text-cyan-400' :
+                                peak.height <= 6 ? 'text-amber-400' : 'text-red-400'
+                              }`}>
+                                Pico {peak.height}
+                              </span>
+                              <span className="text-zinc-500">→</span>
+                              <span className={`font-bold ${
+                                peak.resultColor === 'red' ? 'text-red-400' :
+                                peak.resultColor === 'black' ? 'text-zinc-300' : 'text-green-400'
+                              }`}>
+                                {peak.resultNumber}
+                              </span>
+                            </div>
+                            <span className="text-zinc-600">
+                              {peak.timestamp.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+
+                  {signalPeakHistory.length === 0 && (
+                    <p className="text-zinc-600 text-xs text-center py-4">
+                      Sin picos de señales registrados aún — solo registra cuando el motor V6.0 da SEÑAL
+                    </p>
+                  )}
                 </CardContent>
               </Card>
             </div>
