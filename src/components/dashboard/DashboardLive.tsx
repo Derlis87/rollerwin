@@ -1060,7 +1060,7 @@ export function DashboardLive() {
     numbersRef.current = newNumbers
     setCurrentPeak(1)
     currentPeakRef.current = 1
-    // Reset signal-only peak tracking on import
+    // Reset signal-only peak tracking on import (signals are live-only)
     setSignalPeakHistory([])
     setSignalPeak(1)
     signalPeakRef.current = 1
@@ -1068,11 +1068,17 @@ export function DashboardLive() {
     currentPredictionRef.current = null
     setConfidence(0)
     setBacktestResults(null)
-    setPeakHistory([])
 
-    // Import sets peak to 1 — historical numbers are only for engine context (Markov),
-    // NOT for tracking live play peaks. Peak tracking starts fresh from the first live number.
-    console.log('[DashboardLive] Import:', newNumbers.length, 'numbers loaded for engine context. Peak reset to 1.')
+    // Recalculate general peak history from ALL imported numbers (includes SKIP peaks)
+    if (newNumbers.length >= 6) {
+      const peakOpts = getPeakCalcOptions(selectedBetTypeRef.current, calcDozenModeRef.current)
+      const historicalPeaks = calculatePeakHistory(newNumbers, peakOpts)
+      setPeakHistory(historicalPeaks)
+    } else {
+      setPeakHistory([])
+    }
+
+    console.log('[DashboardLive] Import:', newNumbers.length, 'numbers loaded. General peaks recalculated.')
     
     if (newNumbers.length >= 5) {
       const smart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
@@ -1096,12 +1102,14 @@ export function DashboardLive() {
     setImportPreview(null)
   }, [importPreview, generatePrediction, calculateStats, getPeakCalcOptions])
 
-  // Reset peaks when bet type or dozen mode changes — live play only, NO recalculation from imported numbers
+  // Recalculate peaks when bet type or dozen mode changes (keeps peak history consistent)
   useEffect(() => {
     const nums = numbersRef.current
     if (nums.length >= 6) {
-      // Clear peak histories — only live play builds peaks, NOT imported numbers
-      setPeakHistory([])
+      const peakOpts = getPeakCalcOptions(selectedBetTypeRef.current, calcDozenModeRef.current)
+      const historicalPeaks = calculatePeakHistory(nums, peakOpts)
+      setPeakHistory(historicalPeaks)
+      // Reset current peak and prediction when bet type changes
       setCurrentPeak(1)
       currentPeakRef.current = 1
       // Also reset signal-only peak tracking
