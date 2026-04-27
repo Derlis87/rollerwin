@@ -1152,3 +1152,113 @@ Stage Summary:
 - Ubicado debajo del historial completo de picos general
 - No se ve afectado por importación de números ni recálculos
 - Build exitoso sin errores
+
+---
+## Task ID: STATE-SNAPSHOT-20260427 — Estado completo del proyecto (snapshot para restauración)
+
+### Agent: Main Agent (Super Z)
+### Date: 2026-04-27
+### Purpose: Snapshot completo para restauración si se pierde el servidor
+
+---
+
+### 📌 VERSIÓN ACTUAL DEL SOFTWARE: V6.0 Ultra-Selective (restaurada desde backup)
+
+### BACKUP PRINCIPAL:
+- **Archivo**: `/home/z/my-project/download/rollerwin-v6.0-fix-dashboard-20260424-b.tar.gz` (764KB)
+- **Contenido**: DashboardLive.tsx + todos los archivos fuente de la versión V6.0 estable
+- **RESTAURACIÓN**: `tar xzf download/rollerwin-v6.0-fix-dashboard-20260424-b.tar.gz`
+
+### ARCHIVOS CLAVE DEL PROYECTO:
+
+| Archivo | Descripción | Versión |
+|---------|------------|---------|
+| `src/lib/smart-prediction-v4.ts` | Motor principal de predicción V6.0 | NO TOCAR nombre |
+| `src/components/dashboard/DashboardLive.tsx` | Dashboard principal (2,574 líneas) | V6.0 |
+| `src/store/app-store.ts` | Estado global Zustand | V6.0 |
+| `simulate-v60.ts` | Simulador V6.0 Puro (raíz del proyecto) | V6.0 |
+| `scripts/simulate-v60.ts` | Simulador V6.0 (scripts/) | V6.0 |
+
+### ⚠️ RESTRICCIONES (NO MODIFICAR):
+- PRO-ENGINE V5
+- Statistical Inference Engine
+- Señales Sniper
+- **NO renombrar `smart-prediction-v4.ts`**
+
+### CONFIGURACIÓN DEL MOTOR V6.0:
+- SKIP ZONE: rachas 3-6 (no apuesta)
+- Consensus Markov: ventanas 2/3
+- Threshold: 38
+- Signal rate: ~10-11%
+- Martingala: 1,2,4,8,16,32,64 (max 7 niveles, bust = -127)
+
+---
+
+### 📊 RESULTADOS DE SIMULACIÓN CONFIRMADOS (2026-04-27):
+
+Lectura de secuencia: **FILA POR FILA, DE IZQUIERDA A DERECHA** (continua como block de notas)
+- El block de notas va llenando filas automáticamente, el simulador lee todo como una línea continua
+- No hay ruptura entre filas, es una sola tira secuencial de números
+
+| Secuencia | Archivo | Números | Señales | Accuracy | Neto | Busts | Pico Max | ROI | Neto/100spins |
+|-----------|---------|---------|---------|----------|------|-------|----------|-----|---------------|
+| **Seq 4** | clean-sequence-4.txt | 5,406 | 576 | 55.6% | +319 | 0 | 5 | 21.1% | +5.9 |
+| **Seq 5** | clean-sequence-5.txt | 5,646 | 594 | 55.4% | +329 | 0 | 5 | 22.0% | +5.8 |
+| **Seq 6/7** | clean-sequence-6.txt | 5,846 | 635 | 55.0% | +334 | 0 | 5 | 22.0% | +5.7 |
+
+**Secuencias guardadas en**: `/home/z/my-project/download/clean-sequence-{4,5,6,7}.txt`
+- Secuencia 6 y 7 son IDÉNTICAS (5,846 números)
+- Todas empiezan con: 9, 36, 25, 28, 23
+- Todas terminan con: ..., 10, 8, 10, 7, 31, 36, 15
+
+**Características consistentes:**
+- 0 BUSTS en todas las secuencias
+- Pico máximo nunca supera 5 (martingala nivel 4 = 8u max bet)
+- Accuracy estable ~55% (edge de +5% sobre random 50%)
+- Rentabilidad creciente con más datos
+- Ratio bajos/(med+alt): ~12:1
+
+### HISTORIAL DE SECANCIAS DEL USUARIO:
+- El usuario anota números de ruleta en un block de notas
+- Cada "secuencia" es la MISMA secuencia creciente (cada pegado reemplaza al anterior con más números)
+- Seq 4 (5,406) → Seq 5 (5,646) → Seq 6/7 (5,846) = misma base + ~200-440 números nuevos
+
+---
+
+### 🔧 CÓMO EJECUTAR SIMULACIÓN:
+```bash
+cd /home/z/my-project
+npx tsx simulate-v60.ts download/clean-sequence-6.txt
+```
+
+### 🔧 CÓMO LIMPIAR UNA SECUENCIA PEGADA:
+```python
+import re
+raw = """<secuencia pegada>"""
+parts = re.findall(r'\d+', raw)
+nums = [int(n) for n in parts if 0 <= int(n) <= 36]
+with open('download/clean-sequence-N.txt', 'w') as f:
+    f.write(','.join(map(str, nums)))
+```
+
+---
+
+### 📋 CONTEXTO DE LA CONVERSACIÓN ACTUAL:
+
+1. Usuario restauró backup `rollerwin-v6.0-fix-dashboard-20260424-b.tar.gz`
+2. Usuario pegó secuencia 6 (5,846 números) para análisis
+3. Se descubrió que resultados anteriores de la sesión previa (+40, +38, +61) eran INCORRECTOS
+   - Causa: el motor usado en esa sesión era diferente (versión intermedia)
+   - Con el motor actual restaurado del backup, los resultados reales son +319, +329, +334
+4. Secuencia 7 pegada = idéntica a secuencia 6 (mismos 5,846 números)
+5. Confirmado: lectura es FILA POR FILA, IZQUIERDA A DERECHA, continua (como block de notas)
+
+---
+
+### NOTAS IMPORTANTES:
+- `updateEngineStatus(skip: boolean)` es el helper centralizado en el dashboard
+- Import muestra estado visual pero NO incrementa contadores de señal/skip
+- Peak en dashboard empieza en 1
+- El simulador `simulate-v60.ts` usa el motor real `generateSmartPrediction` de smart-prediction-v4.ts
+- Registro de feedback: `recordPredictionFeedback(hit, [], predictedColor)` por cada señal
+
