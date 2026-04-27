@@ -1096,14 +1096,12 @@ export function DashboardLive() {
     setImportPreview(null)
   }, [importPreview, generatePrediction, calculateStats, getPeakCalcOptions])
 
-  // Recalculate peaks when bet type or dozen mode changes (keeps peak history consistent)
+  // Reset peaks when bet type or dozen mode changes — live play only, NO recalculation from imported numbers
   useEffect(() => {
     const nums = numbersRef.current
     if (nums.length >= 6) {
-      const peakOpts = getPeakCalcOptions(selectedBetTypeRef.current, calcDozenModeRef.current)
-      const historicalPeaks = calculatePeakHistory(nums, peakOpts)
-      setPeakHistory(historicalPeaks)
-      // Reset current peak and prediction when bet type changes
+      // Clear peak histories — only live play builds peaks, NOT imported numbers
+      setPeakHistory([])
       setCurrentPeak(1)
       currentPeakRef.current = 1
       // Also reset signal-only peak tracking
