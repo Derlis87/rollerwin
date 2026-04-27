@@ -1040,11 +1040,14 @@ export function DashboardLive() {
       const smart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
       setSmartPrediction(smart)
       const pred = { type: smart.type, value: smart.bestValue }
-      setCurrentPrediction(pred)
-      currentPredictionRef.current = pred
+      setCurrentPrediction(pred)  // Visual display only
+      // DO NOT set currentPredictionRef.current — import prediction must NOT
+      // be used for live peak tracking (causes phantom peaks without signal count)
       setConfidence(Math.min(85, smart.bestConfidence))
       // Only show skip state, do NOT count — counters start from first LIVE number
       setIsEngineSkip(smart.shouldSkip === true)
+      // Also sync the ref directly to avoid timing gap with useEffect
+      isEngineSkipRef.current = smart.shouldSkip === true
     } else {
       setCurrentPrediction(null)
       currentPredictionRef.current = null

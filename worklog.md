@@ -1111,3 +1111,22 @@ Work Log:
 Stage Summary:
 - Important context permanently recorded in worklog
 - Backup created for disaster recovery
+
+---
+Task ID: 3
+Agent: Main
+Task: Fix phantom peaks bug — import prediction counted as live peak without signal
+
+Work Log:
+- User reported: 1 signal but 2 peaks recorded in history
+- Root cause: handleApplyImport set currentPredictionRef.current = pred (line 1044)
+- When first live number entered, the import prediction was checked for peak tracking
+- If it matched, a peak was recorded WITHOUT incrementing signal counter
+- Also fixed: isEngineSkipRef.current was not synced during import (timing gap with useEffect)
+
+Stage Summary:
+- REMOVED currentPredictionRef.current = pred from handleApplyImport
+- ADDED isEngineSkipRef.current sync during import to avoid useEffect timing gap
+- Visual prediction (setCurrentPrediction) still shows import prediction for display
+- But peak tracking no longer uses import prediction — peaks only from live-generated predictions
+- File: /home/z/my-project/src/components/dashboard/DashboardLive.tsx
