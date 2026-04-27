@@ -1130,3 +1130,25 @@ Stage Summary:
 - Visual prediction (setCurrentPrediction) still shows import prediction for display
 - But peak tracking no longer uses import prediction — peaks only from live-generated predictions
 - File: /home/z/my-project/src/components/dashboard/DashboardLive.tsx
+
+---
+Task ID: 1
+Agent: Main Agent
+Task: Crear historial de picos independiente solo para señales V6.0
+
+Work Log:
+- Investigó la lógica completa de peak/peakHistory en DashboardLive.tsx
+- Identificó el bug: peakHistory se recalcula desde TODOS los números importados vía useEffect (line 1100-1122), causando picos fantasma
+- Creó nuevo estado signalPeakHistory y signalPeak con ref signalPeakRef
+- Agregó sync effect para signalPeakRef
+- Modificó handleNumberInput: en MATCHED registra en signalPeakHistory y resetea signalPeak; en FAILED incrementa signalPeak
+- NOTA CLAVE: el código de señal solo se ejecuta cuando engine NO está en SKIP (line 637 return early), por lo que es seguro
+- Agregó limpieza de signalPeakHistory/signalPeak en handleClear, handleApplyImport, y useEffect de recálculo
+- Creó sección UI completa con: pico actual, barras visuales, estadísticas (señales/promedio/bajos/medios-altos), y lista detallada
+- Estilo visual diferenciado: borde cyan, badge "V6.0 Solo Señales", picos bajos en cyan
+
+Stage Summary:
+- Nuevo historial de picos independiente (signalPeakHistory) que SOLO registra cuando el motor V6.0 da SEÑAL
+- Ubicado debajo del historial completo de picos general
+- No se ve afectado por importación de números ni recálculos
+- Build exitoso sin errores
