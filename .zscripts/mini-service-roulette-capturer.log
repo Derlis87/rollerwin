@@ -19,3 +19,4 @@ REST API: port 3005
 Supported casinos: betfury, evolution, pinnacle, bet365, betway, 888casino
 
 Roulette Capturer REST API running on port 3005
+error: script "dev" was terminated by signal SIGKILL (Forced quit)

@@ -9,3 +9,4 @@ bun install v1.3.10 (30e609e0)
 $ bun --hot index.ts
 🎰 Casino Connector Service running on port 3002
 🌐 Casino REST API running on port 3003
+error: script "dev" was terminated by signal SIGKILL (Forced quit)
