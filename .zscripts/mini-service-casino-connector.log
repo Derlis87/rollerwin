@@ -4,9 +4,8 @@ bun install v1.3.10 (30e609e0)
 + express@4.22.1
 + socket.io@4.8.3
 
-83 packages installed [179.00ms]
+83 packages installed [235.00ms]
 [casino-connector] Running bun run dev...
 $ bun --hot index.ts
 🎰 Casino Connector Service running on port 3002
 🌐 Casino REST API running on port 3003
-error: script "dev" was terminated by signal SIGKILL (Forced quit)
