@@ -22,10 +22,6 @@ RUN mkdir -p db
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
-COPY --from=builder /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3
+COPY --from=builder /app/db ./db
 EXPOSE 10000
-CMD ["sh", "-c", "npx prisma db push --skip-generate 2>/dev/null && node server.js"]
+CMD ["node", "server.js"]
