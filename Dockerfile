@@ -3,10 +3,13 @@ WORKDIR /app
 RUN mkdir -p db
 COPY package.json package-lock.json ./
 COPY prisma ./prisma/
+COPY tsconfig.json postcss.config.mjs tailwind.config.ts components.json next.config.ts ./
 ENV DATABASE_URL="file:/app/db/custom.db"
 RUN npm install
 RUN npx prisma generate
-COPY . .
+COPY src ./src
+COPY public ./public
+RUN npx next build
 
 FROM node:20-slim AS runner
 WORKDIR /app
@@ -17,5 +20,6 @@ ENV HOSTNAME="0.0.0.0"
 RUN mkdir -p db
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
 EXPOSE 10000
 CMD ["node", "server.js"]
