@@ -44,6 +44,30 @@ export async function POST(request: NextRequest) {
     // Get client IP
     const clientIP = getClientIP(request)
 
+    // Auto-seed admin user if DB is empty (fresh Render deploy)
+    const userCount = await db.user.count()
+    if (userCount === 0) {
+      const hashedPassword = hashPassword('Carlos123@')
+      await db.user.create({
+        data: {
+          name: 'Carlos',
+          email: 'derlisg3212@gmail.com',
+          password: hashedPassword,
+          registeredIP: 'admin-seed',
+          lastLoginIP: 'admin-seed',
+          isActive: true,
+          subscription: {
+            create: {
+              plan: 'monthly',
+              status: 'active',
+              startDate: new Date(),
+              endDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+            }
+          }
+        }
+      })
+    }
+
     // Find user
     const user = await db.user.findUnique({
       where: { email: email.toLowerCase() },
