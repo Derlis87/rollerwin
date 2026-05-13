@@ -15,9 +15,16 @@ export async function GET(request: NextRequest) {
 
   const fileBuffer = fs.readFileSync(filePath);
   
+  // Determine content type
+  let contentType = 'application/octet-stream';
+  if (filename.endsWith('.pdf')) contentType = 'application/pdf';
+  if (filename.endsWith('.zip')) contentType = 'application/zip';
+  if (filename.endsWith('.tar.gz') || filename.endsWith('.tgz')) contentType = 'application/gzip';
+  if (filename.endsWith('.txt')) contentType = 'text/plain';
+  
   return new NextResponse(fileBuffer, {
     headers: {
-      'Content-Type': 'application/pdf',
+      'Content-Type': contentType,
       'Content-Disposition': `attachment; filename="${filename}"`,
       'Content-Length': fileBuffer.length.toString(),
     },
