@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
-    "build:render": "prisma generate && next build",
+    "build:render": "next build",
     "postinstall": "prisma generate",
     "start": "node .next/standalone/server.js",
     "lint": "eslint .",
