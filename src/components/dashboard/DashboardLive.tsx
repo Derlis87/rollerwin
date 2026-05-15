@@ -185,6 +185,27 @@ interface BacktestResults {
   btDozenMode: BtDozenMode
 }
 
+// Advanced Backtesting V6.0 Results
+interface AdvBacktestResults {
+  totalSpins: number
+  signals: number
+  accuracy: number
+  netProfit: number
+  busts: number
+  profitPerSignal: number
+  profitPer100Spins: number
+  roi: number
+  maxDrawdown: number
+  maxPeak: number
+  totalPeaks: number
+  martingalaCycles: number
+  streaks: { maxWin: number; maxLoss: number }
+  peakHistogram: { height: number; count: number }[]
+  accuracyByWindow: { window: number; accuracy: number }[]
+  profitCurve: { index: number; profit: number }[]
+  isProfitable: boolean
+}
+
 export function DashboardLive() {
   const { setCurrentView, user, isAuthenticated, logout } = useAppStore()
   
@@ -231,6 +252,12 @@ export function DashboardLive() {
   const [btPeakLevel, setBtPeakLevel] = useState<PeakLevel>('low')
   const [btDozenMode, setBtDozenMode] = useState<BtDozenMode>('single')
   const [btStrategy, setBtStrategy] = useState<'martingala' | 'paroli'>('paroli')
+
+  // Advanced Backtesting V6.0 state
+  const [advBtSequence, setAdvBtSequence] = useState('')
+  const [advBtAnalyzed, setAdvBtAnalyzed] = useState<{ total: number; red: number; black: number; green: number } | null>(null)
+  const [advBtRunning, setAdvBtRunning] = useState(false)
+  const [advBtResults, setAdvBtResults] = useState<AdvBacktestResults | null>(null)
 
   // Live smart prediction
   const [smartPrediction, setSmartPrediction] = useState<SmartPrediction | null>(null)
@@ -1382,6 +1409,366 @@ export function DashboardLive() {
       betType, amount, peakLevel, peakCycles, avgBetsPerCycle, fibonacciDetail: detailList, btDozenMode: dozenMode
     })
   }, [generateSmartPrediction, generatePrediction, checkPredictionMatch, btBetType, btAmount, btPeakLevel, btDozenMode, btStrategy])
+
+  // ════════════════════════════════════════════════════════════════
+  // ADVANCED BACKTESTING V6.0 — Motor V6.0 Full Simulation
+  // ════════════════════════════════════════════════════════════════
+
+  // Parse pasted sequence into numbers
+  const parseAdvBtSequence = useCallback((text: string): number[] => {
+    return text
+      .split(/[,\s\n\r;]+/)
+      .map(s => s.trim())
+      .filter(s => s.length > 0)
+      .map(s => parseInt(s, 10))
+      .filter(n => !isNaN(n) && n >= 0 && n <= 36)
+  }, [])
+
+  // Analyze sequence preview
+  const handleAdvBtAnalyze = useCallback(() => {
+    const nums = parseAdvBtSequence(advBtSequence)
+    if (nums.length === 0) return
+    let red = 0, black = 0, green = 0
+    nums.forEach(n => {
+      const c = getNumberColor(n)
+      if (c === 'red') red++
+      else if (c === 'black') black++
+      else green++
+    })
+    setAdvBtAnalyzed({ total: nums.length, red, black, green })
+    setAdvBtResults(null)
+  }, [advBtSequence, parseAdvBtSequence])
+
+  // Run full Motor V6.0 simulation
+  const handleAdvBtRun = useCallback(() => {
+    const nums = parseAdvBtSequence(advBtSequence)
+    if (nums.length < 6) return
+
+    setAdvBtRunning(true)
+    setAdvBtResults(null)
+
+    // Run in setTimeout to allow UI to update with loading state
+    setTimeout(() => {
+      try {
+        // Martingala 7 niveles
+        const MARTINGALA_7 = [1, 2, 4, 8, 16, 32, 64]
+        const MAX_MARTINGALA = 7
+        const BASE_BET = 1 // $1 base unit
+
+        // Simulation state
+        let signals = 0
+        let wins = 0
+        let losses = 0
+        let busts = 0
+        let netProfit = 0
+        let maxDrawdown = 0
+        let peakRunningProfit = 0 // track running profit for drawdown calc
+        let maxPeak = 0
+        let totalPeaks = 0
+        let martingalaCycles = 0
+
+        // Streak tracking
+        let maxWinStreak = 0
+        let maxLossStreak = 0
+        let currentWinStreak = 0
+        let currentLossStreak = 0
+
+        // Peak tracking
+        let currentPeakHeight = 0 // 0 = no active peak
+        let martingalaLevel = 0
+        let currentPredictionValue: string | null = null
+
+        // Data for charts
+        const peakHeights: number[] = [] // heights of all completed peaks
+        const profitCurve: { index: number; profit: number }[] = []
+        const signalResults: { signal: number; win: boolean }[] = [] // for accuracy by window
+
+        // Simulate number by number
+        for (let i = 0; i < nums.length; i++) {
+          const num = nums[i]
+          const numsSoFar = nums.slice(0, i + 1)
+
+          // Need at least 5 numbers for prediction
+          if (numsSoFar.length < 5) continue
+
+          // Generate prediction using Motor V6.0
+          const smart = generateSmartPrediction(numsSoFar, 'color' as BetTypeV4)
+
+          // ZONA DE SALTO — shouldSkip means streak 3-6 or weak signal → SKIP
+          if (smart.shouldSkip === true) {
+            // SKIP: don't bet, don't advance peak, don't count signal
+            // Close any active peak as abandoned (not a bust, just skipped)
+            if (currentPeakHeight > 0) {
+              // Peak was abandoned due to skip zone — don't count as completed peak
+              // Reset tracking
+              currentPeakHeight = 0
+              martingalaLevel = 0
+              currentPredictionValue = null
+            }
+            continue
+          }
+
+          // We have a signal
+          const prediction = smart.bestValue
+          if (!prediction) continue
+
+          // First signal in a new peak — set prediction and start
+          if (currentPeakHeight === 0) {
+            currentPeakHeight = 1
+            martingalaLevel = 0
+            currentPredictionValue = prediction
+            signals++
+            continue
+          }
+
+          // We have an active peak, check if prediction changed
+          // In Motor V6.0, the prediction is generated fresh each spin
+          // The peak is tracking consecutive losses at increasing heights
+          currentPredictionValue = prediction
+
+          // Check if result matches prediction
+          const resultColor = getNumberColor(num)
+          const matched = resultColor === prediction
+
+          if (matched) {
+            // WIN — peak closes at current height
+            wins++
+            totalPeaks++
+            peakHeights.push(currentPeakHeight)
+
+            // Calculate payout: base bet * martingala level
+            const betMultiplier = MARTINGALA_7[martingalaLevel] || MARTINGALA_7[MARTINGALA_7.length - 1]
+            const winAmount = BASE_BET * betMultiplier * 2 // 1:1 payout for color
+            const totalInvestedInCycle = MARTINGALA_7.slice(0, martingalaLevel + 1).reduce((s, m) => s + BASE_BET * m, 0)
+            const cycleProfit = winAmount - totalInvestedInCycle + BASE_BET * betMultiplier // net profit
+
+            netProfit += BASE_BET * betMultiplier // net: won betMultiplier, already lost previous bets
+            // Actually for color (even money): win pays 1:1
+            // At martingala level L, we bet BASE_BET * MARTINGALA_7[L]
+            // If it wins, profit = BASE_BET * MARTINGALA_7[L]
+            // Previous losses in this cycle: sum of MARTINGALA_7[0..L-1] * BASE_BET
+            // But we track netProfit per signal more simply:
+            // Net = +betMultiplier (win) - sum(previous losses in cycle)
+            // However, the simplest approach: each signal's bet is at martingalaLevel
+            // If win: gain = martingalaLevel bet * 1:1 = BASE * mult
+            // If loss: lose = BASE * mult
+            // Peak height 1 means 1st bet, if win at height 1 = gain mult[0]
+            // Peak height 2 means lost 1st bet, 2nd bet, if win at height 2 = gain mult[1] - loss mult[0]
+            // etc.
+
+            // Simplified: recalculate net per cycle
+            // Total lost so far in this cycle
+            const totalLost = MARTINGALA_7.slice(0, currentPeakHeight - 1).reduce((s, m) => s + BASE_BET * m, 0)
+            const won = BASE_BET * betMultiplier
+            netProfit += won - totalLost - won + won // already tracked, let me redo this
+
+            // Let me redo the profit tracking properly:
+            // Actually I'll track it cumulatively at the end. For now just track wins/losses per signal.
+
+            martingalaCycles++
+            currentWinStreak++
+            currentLossStreak = 0
+            if (currentWinStreak > maxWinStreak) maxWinStreak = currentWinStreak
+
+            signalResults.push({ signal: signals, win: true })
+            profitCurve.push({ index: i, profit: 0 }) // placeholder, recalculate below
+
+            // Reset for next peak
+            currentPeakHeight = 0
+            martingalaLevel = 0
+            currentPredictionValue = null
+          } else {
+            // LOSS — peak height increases
+            losses++
+
+            // Track profit: we lost this bet
+            const betMultiplier = MARTINGALA_7[martingalaLevel] || MARTINGALA_7[MARTINGALA_7.length - 1]
+
+            currentLossStreak++
+            currentWinStreak = 0
+            if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak
+
+            currentPeakHeight++
+            martingalaLevel++
+
+            if (currentPeakHeight > maxPeak) maxPeak = currentPeakHeight
+
+            // Check for BUST — martingala reached level 7 (64x)
+            if (martingalaLevel >= MAX_MARTINGALA) {
+              busts++
+              totalPeaks++
+              peakHeights.push(currentPeakHeight)
+              martingalaCycles++
+
+              signalResults.push({ signal: signals, win: false })
+              profitCurve.push({ index: i, profit: 0 })
+
+              // Reset after bust
+              currentPeakHeight = 0
+              martingalaLevel = 0
+              currentPredictionValue = null
+              currentLossStreak = 0
+            }
+          }
+        }
+
+        // Close any remaining active peak as a loss
+        if (currentPeakHeight > 0) {
+          losses++
+          totalPeaks++
+          peakHeights.push(currentPeakHeight)
+          martingalaCycles++
+          signalResults.push({ signal: signals, win: false })
+        }
+
+        // ── Recalculate net profit properly ──
+        // Each completed peak/martingala cycle:
+        // - Wins: net = bet_at_win - sum(bets_lost_before)
+        // - Losses/Busts: net = -sum(all_bets_in_cycle)
+        // We need to resimulate profit tracking
+        netProfit = 0
+        let runningProfit = 0
+        let peakHigh = 0
+        let mgLevel = 0
+        const cleanProfitCurve: { index: number; profit: number }[] = []
+        maxDrawdown = 0
+        peakRunningProfit = 0
+
+        for (let i = 0; i < nums.length; i++) {
+          const num = nums[i]
+          const numsSoFar = nums.slice(0, i + 1)
+          if (numsSoFar.length < 5) continue
+
+          const smart = generateSmartPrediction(numsSoFar, 'color' as BetTypeV4)
+          if (smart.shouldSkip === true) {
+            if (peakHigh > 0) {
+              peakHigh = 0
+              mgLevel = 0
+            }
+            continue
+          }
+
+          const prediction = smart.bestValue
+          if (!prediction) continue
+
+          if (peakHigh === 0) {
+            peakHigh = 1
+            mgLevel = 0
+            continue
+          }
+
+          const resultColor = getNumberColor(num)
+          const matched = resultColor === prediction
+          const betMult = MARTINGALA_7[mgLevel] || MARTINGALA_7[MARTINGALA_7.length - 1]
+
+          if (matched) {
+            // Win at this height
+            // Lost: sum of MARTINGALA_7[0..peakHigh-2]
+            const lost = MARTINGALA_7.slice(0, peakHigh - 1).reduce((s, m) => s + BASE_BET * m, 0)
+            const won = BASE_BET * betMult
+            runningProfit += won - lost
+            cleanProfitCurve.push({ index: i, profit: runningProfit })
+
+            // Drawdown tracking
+            if (runningProfit < peakRunningProfit) {
+              const dd = peakRunningProfit - runningProfit
+              if (dd > maxDrawdown) maxDrawdown = dd
+            }
+            if (runningProfit > peakRunningProfit) peakRunningProfit = runningProfit
+
+            peakHigh = 0
+            mgLevel = 0
+          } else {
+            // Loss at this height
+            const lost = BASE_BET * betMult
+            runningProfit -= lost
+
+            peakHigh++
+            mgLevel++
+
+            if (mgLevel >= MAX_MARTINGALA) {
+              // BUST — already lost 7 bets in this cycle
+              cleanProfitCurve.push({ index: i, profit: runningProfit })
+
+              // Drawdown
+              if (runningProfit < peakRunningProfit) {
+                const dd = peakRunningProfit - runningProfit
+                if (dd > maxDrawdown) maxDrawdown = dd
+              }
+              if (runningProfit > peakRunningProfit) peakRunningProfit = runningProfit
+
+              peakHigh = 0
+              mgLevel = 0
+            }
+          }
+        }
+
+        // If there's a remaining peak, account for it
+        if (peakHigh > 0) {
+          // Unclosed peak — losses already counted in runningProfit
+          cleanProfitCurve.push({ index: nums.length - 1, profit: runningProfit })
+          if (runningProfit < peakRunningProfit) {
+            const dd = peakRunningProfit - runningProfit
+            if (dd > maxDrawdown) maxDrawdown = dd
+          }
+        }
+
+        netProfit = runningProfit
+
+        // ── Build peak histogram ──
+        const histogramMap = new Map<number, number>()
+        peakHeights.forEach(h => {
+          histogramMap.set(h, (histogramMap.get(h) || 0) + 1)
+        })
+        const peakHistogram = Array.from(histogramMap.entries())
+          .map(([height, count]) => ({ height, count }))
+          .sort((a, b) => a.height - b.height)
+
+        // ── Accuracy by window (every 200 signals) ──
+        const accuracyByWindow: { window: number; accuracy: number }[] = []
+        const WINDOW_SIZE = 200
+        for (let w = 0; w < signalResults.length; w += WINDOW_SIZE) {
+          const chunk = signalResults.slice(w, w + WINDOW_SIZE)
+          const chunkWins = chunk.filter(r => r.win).length
+          const acc = chunk.length > 0 ? (chunkWins / chunk.length) * 100 : 0
+          accuracyByWindow.push({ window: Math.floor(w / WINDOW_SIZE) + 1, accuracy: Math.round(acc * 10) / 10 })
+        }
+
+        // ── Derived metrics ──
+        const accuracy = signals > 0 ? (wins / signals) * 100 : 0
+        const profitPerSignal = signals > 0 ? netProfit / signals : 0
+        const profitPer100Spins = nums.length > 0 ? (netProfit / nums.length) * 100 : 0
+        const totalInvested = MARTINGALA_7.reduce((s, m) => s + m, 0) * BASE_BET * martingalaCycles // rough estimate
+        const roi = totalInvested > 0 ? (netProfit / totalInvested) * 100 : 0
+
+        const results: AdvBacktestResults = {
+          totalSpins: nums.length,
+          signals,
+          accuracy: Math.round(accuracy * 10) / 10,
+          netProfit,
+          busts,
+          profitPerSignal: Math.round(profitPerSignal * 100) / 100,
+          profitPer100Spins: Math.round(profitPer100Spins * 100) / 100,
+          roi: Math.round(roi * 10) / 10,
+          maxDrawdown: Math.round(maxDrawdown * 100) / 100,
+          maxPeak,
+          totalPeaks,
+          martingalaCycles,
+          streaks: { maxWin: maxWinStreak, maxLoss: maxLossStreak },
+          peakHistogram,
+          accuracyByWindow,
+          profitCurve: cleanProfitCurve,
+          isProfitable: netProfit > 0,
+        }
+
+        setAdvBtResults(results)
+      } catch (err) {
+        console.error('[AdvBacktestV6] Error:', err)
+      } finally {
+        setAdvBtRunning(false)
+      }
+    }, 50)
+  }, [advBtSequence, generateSmartPrediction, parseAdvBtSequence])
 
   // Get number button style
   const getNumberButtonStyle = (num: number) => {
@@ -2589,6 +2976,359 @@ export function DashboardLive() {
                       </div>
                     )}
                   </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {/* ═══ Advanced Backtesting V6.0 ═══ */}
+        {isJoined && (
+          <div className="mt-6">
+            <Card className="bg-zinc-900 border-zinc-800">
+              <CardHeader className="py-3">
+                <CardTitle className="text-white flex items-center justify-between text-base">
+                  <span className="flex items-center gap-2">
+                    <Zap className="w-4 h-4 text-amber-500" />
+                    Backtesting Avanzado V6.0
+                  </span>
+                  <Badge variant="outline" className="text-amber-500 border-amber-500/40 text-[10px] font-mono">
+                    Motor V6.0 · Martingala 7
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* Textarea to paste sequence */}
+                <div className="space-y-2">
+                  <Label className="text-zinc-400 text-sm flex items-center gap-1.5">
+                    <ClipboardPaste className="w-3.5 h-3.5" />
+                    Pegar Secuencia Histórica
+                  </Label>
+                  <Textarea
+                    value={advBtSequence}
+                    onChange={(e) => { setAdvBtSequence(e.target.value); setAdvBtAnalyzed(null); setAdvBtResults(null) }}
+                    placeholder="Pega números aquí: 14, 32, 0, 7, 25, 10, 33...&#10;(separados por coma, espacio o salto de línea)"
+                    className="bg-zinc-800 border-zinc-700 text-white text-sm min-h-[80px] max-h-[160px] resize-y placeholder:text-zinc-600"
+                  />
+                </div>
+
+                {/* Action buttons */}
+                <div className="flex gap-2">
+                  <Button
+                    onClick={handleAdvBtAnalyze}
+                    disabled={!advBtSequence.trim()}
+                    variant="outline"
+                    className="flex-1 border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/10 hover:text-cyan-300 text-sm"
+                  >
+                    <Scan className="w-4 h-4 mr-1.5" />
+                    Analizar Secuencia
+                  </Button>
+                  <Button
+                    onClick={handleAdvBtRun}
+                    disabled={!advBtAnalyzed || advBtRunning}
+                    className="flex-1 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-black font-bold text-sm"
+                  >
+                    {advBtRunning ? (
+                      <>
+                        <div className="w-4 h-4 mr-1.5 border-2 border-black/30 border-t-black rounded-full animate-spin" />
+                        Simulando...
+                      </>
+                    ) : (
+                      <>
+                        <Zap className="w-4 h-4 mr-1.5" />
+                        Ejecutar Backtesting V6.0
+                      </>
+                    )}
+                  </Button>
+                </div>
+
+                {/* Analysis preview */}
+                {advBtAnalyzed && !advBtResults && !advBtRunning && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="p-3 bg-zinc-800/60 rounded-lg border border-zinc-700/50"
+                  >
+                    <div className="text-xs text-zinc-400 mb-2 font-bold">📊 Vista Previa</div>
+                    <div className="grid grid-cols-4 gap-2 text-center">
+                      <div className="p-2 bg-zinc-800 rounded-lg">
+                        <div className="text-lg font-bold text-white">{advBtAnalyzed.total}</div>
+                        <div className="text-[10px] text-zinc-500">Total</div>
+                      </div>
+                      <div className="p-2 bg-zinc-800 rounded-lg">
+                        <div className="text-lg font-bold text-red-400">{advBtAnalyzed.red}</div>
+                        <div className="text-[10px] text-zinc-500">Rojos</div>
+                      </div>
+                      <div className="p-2 bg-zinc-800 rounded-lg">
+                        <div className="text-lg font-bold text-zinc-300">{advBtAnalyzed.black}</div>
+                        <div className="text-[10px] text-zinc-500">Negros</div>
+                      </div>
+                      <div className="p-2 bg-zinc-800 rounded-lg">
+                        <div className="text-lg font-bold text-green-400">{advBtAnalyzed.green}</div>
+                        <div className="text-[10px] text-zinc-500">Verdes</div>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-zinc-500 text-center mt-2">
+                      Listo para simular con Motor V6.0 · Martingala 7 niveles
+                    </p>
+                  </motion.div>
+                )}
+
+                {/* ═══ V6.0 Results ═══ */}
+                {advBtResults && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="space-y-4"
+                  >
+                    {/* ── VEREDICTO ── */}
+                    <div className={`p-4 rounded-xl border-2 text-center ${
+                      advBtResults.isProfitable
+                        ? 'bg-green-500/10 border-green-500/40'
+                        : 'bg-red-500/10 border-red-500/40'
+                    }`}>
+                      <div className="text-2xl mb-1">
+                        {advBtResults.isProfitable ? '✅' : '❌'}
+                      </div>
+                      <div className={`text-xl font-black ${
+                        advBtResults.isProfitable ? 'text-green-400' : 'text-red-400'
+                      }`}>
+                        {advBtResults.isProfitable ? 'RENTABLE' : 'NO RENTABLE'}
+                      </div>
+                      <div className={`text-lg font-bold font-mono mt-1 ${
+                        advBtResults.netProfit >= 0 ? 'text-green-400' : 'text-red-400'
+                      }`}>
+                        {advBtResults.netProfit >= 0 ? '+' : ''}{advBtResults.netProfit.toFixed(2)} $
+                      </div>
+                    </div>
+
+                    {/* ── Main Metrics Cards ── */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      {/* Giros totales */}
+                      <div className="text-center p-2.5 bg-zinc-800 rounded-lg">
+                        <div className="text-lg font-bold text-white">{advBtResults.totalSpins.toLocaleString()}</div>
+                        <div className="text-[10px] text-zinc-500">Giros Totales</div>
+                      </div>
+                      {/* Señales */}
+                      <div className="text-center p-2.5 bg-zinc-800 rounded-lg">
+                        <div className="text-lg font-bold text-cyan-400">{advBtResults.signals.toLocaleString()}</div>
+                        <div className="text-[10px] text-zinc-500">Señales</div>
+                      </div>
+                      {/* Precisión */}
+                      <div className={`text-center p-2.5 bg-zinc-800 rounded-lg border ${advBtResults.accuracy >= 55 ? 'border-green-500/30' : 'border-amber-500/30'}`}>
+                        <div className={`text-lg font-bold ${advBtResults.accuracy >= 55 ? 'text-green-400' : 'text-amber-400'}`}>
+                          {advBtResults.accuracy.toFixed(1)}%
+                        </div>
+                        <div className="text-[10px] text-zinc-500">% Precisión</div>
+                      </div>
+                      {/* Neto */}
+                      <div className={`text-center p-2.5 bg-zinc-800 rounded-lg border ${advBtResults.netProfit >= 0 ? 'border-green-500/30' : 'border-red-500/30'}`}>
+                        <div className={`text-lg font-bold flex items-center justify-center gap-1 ${advBtResults.netProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {advBtResults.netProfit >= 0 ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
+                          ${advBtResults.netProfit.toFixed(1)}
+                        </div>
+                        <div className="text-[10px] text-zinc-500">Neto ($)</div>
+                      </div>
+                      {/* Bustos */}
+                      <div className={`text-center p-2.5 bg-zinc-800 rounded-lg ${advBtResults.bustos === 0 ? 'border border-green-500/30' : 'border border-red-500/30'}`}>
+                        <div className={`text-lg font-bold ${advBtResults.bustos === 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {advBtResults.bustos}
+                        </div>
+                        <div className="text-[10px] text-zinc-500">Bustos</div>
+                      </div>
+                      {/* $/señal */}
+                      <div className={`text-center p-2.5 bg-zinc-800 rounded-lg`}>
+                        <div className={`text-lg font-bold ${advBtResults.profitPerSignal >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          ${advBtResults.profitPerSignal.toFixed(2)}
+                        </div>
+                        <div className="text-[10px] text-zinc-500">$/señal</div>
+                      </div>
+                      {/* $/100spins */}
+                      <div className={`text-center p-2.5 bg-zinc-800 rounded-lg`}>
+                        <div className={`text-lg font-bold ${advBtResults.profitPer100Spins >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          ${advBtResults.profitPer100Spins.toFixed(2)}
+                        </div>
+                        <div className="text-[10px] text-zinc-500">$/100spins</div>
+                      </div>
+                      {/* ROI */}
+                      <div className={`text-center p-2.5 bg-zinc-800 rounded-lg`}>
+                        <div className={`text-lg font-bold ${advBtResults.roi >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {advBtResults.roi.toFixed(1)}%
+                        </div>
+                        <div className="text-[10px] text-zinc-500">ROI</div>
+                      </div>
+                    </div>
+
+                    {/* ── Extended Metrics ── */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      {/* Max Drawdown */}
+                      <div className="text-center p-2 bg-zinc-800/50 rounded-lg">
+                        <div className="text-sm font-bold text-red-400">${advBtResults.maxDrawdown.toFixed(1)}</div>
+                        <div className="text-[10px] text-zinc-500">Max Drawdown</div>
+                      </div>
+                      {/* Pico máximo */}
+                      <div className="text-center p-2 bg-zinc-800/50 rounded-lg">
+                        <div className="text-sm font-bold text-amber-400">{advBtResults.maxPeak}</div>
+                        <div className="text-[10px] text-zinc-500">Pico Máximo</div>
+                      </div>
+                      {/* Picos totales */}
+                      <div className="text-center p-2 bg-zinc-800/50 rounded-lg">
+                        <div className="text-sm font-bold text-white">{advBtResults.totalPeaks}</div>
+                        <div className="text-[10px] text-zinc-500">Picos Totales</div>
+                      </div>
+                      {/* Ciclos martingala */}
+                      <div className="text-center p-2 bg-zinc-800/50 rounded-lg">
+                        <div className="text-sm font-bold text-orange-400">{advBtResults.martingalaCycles}</div>
+                        <div className="text-[10px] text-zinc-500">Ciclos Martingala</div>
+                      </div>
+                      {/* Rachas */}
+                      <div className="text-center p-2 bg-zinc-800/50 rounded-lg">
+                        <div className="text-sm font-bold">
+                          <span className="text-green-400">{advBtResults.streaks.maxWin}W</span>
+                          <span className="text-zinc-600">/</span>
+                          <span className="text-red-400">{advBtResults.streaks.maxLoss}L</span>
+                        </div>
+                        <div className="text-[10px] text-zinc-500">Rachas</div>
+                      </div>
+                    </div>
+
+                    {/* ── Histograma de Picos ── */}
+                    {advBtResults.peakHistogram.length > 0 && (
+                      <div className="p-3 bg-zinc-800/60 rounded-lg border border-zinc-700/50">
+                        <div className="text-xs text-zinc-400 mb-2 font-bold">📊 Histograma de Picos</div>
+                        {/* Grouped bars: 1-3, 4-6, 7+ */}
+                        <div className="space-y-2">
+                          {(() => {
+                            const groups = [
+                              { label: 'Bajos (1-3)', filter: (h: number) => h >= 1 && h <= 3, color: 'bg-green-500', textColor: 'text-green-400' },
+                              { label: 'Medios (4-6)', filter: (h: number) => h >= 4 && h <= 6, color: 'bg-amber-500', textColor: 'text-amber-400' },
+                              { label: 'Altos (7+)', filter: (h: number) => h >= 7, color: 'bg-red-500', textColor: 'text-red-400' },
+                            ]
+                            const maxCount = Math.max(...groups.map(g => advBtResults.peakHistogram.filter(p => g.filter(p.height)).reduce((s, p) => s + p.count, 0)), 1)
+                            return groups.map(group => {
+                              const count = advBtResults.peakHistogram.filter(p => group.filter(p.height)).reduce((s, p) => s + p.count, 0)
+                              if (count === 0) return null
+                              const pct = (count / maxCount) * 100
+                              return (
+                                <div key={group.label} className="flex items-center gap-2">
+                                  <span className="text-[10px] text-zinc-400 w-20 shrink-0">{group.label}</span>
+                                  <div className="flex-1 h-5 bg-zinc-800 rounded overflow-hidden">
+                                    <div className={`h-full ${group.color} rounded transition-all duration-500 opacity-80`} style={{ width: `${pct}%` }} />
+                                  </div>
+                                  <span className={`text-xs font-bold font-mono w-8 text-right ${group.textColor}`}>{count}</span>
+                                </div>
+                              )
+                            }).filter(Boolean)
+                          })()}
+                        </div>
+                        {/* Per-height detail */}
+                        <div className="flex flex-wrap gap-1.5 mt-2">
+                          {advBtResults.peakHistogram.map(p => (
+                            <span key={p.height} className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold ${
+                              p.height <= 3 ? 'bg-green-500/20 text-green-400' :
+                              p.height <= 6 ? 'bg-amber-500/20 text-amber-400' :
+                              'bg-red-500/20 text-red-400'
+                            }`}>
+                              H{p.height}: {p.count}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── Precisión por Ventana (every 200 signals) ── */}
+                    {advBtResults.accuracyByWindow.length > 0 && (
+                      <div className="p-3 bg-zinc-800/60 rounded-lg border border-zinc-700/50">
+                        <div className="text-xs text-zinc-400 mb-2 font-bold">🎯 Precisión por Ventana (cada 200 señales)</div>
+                        <div className="flex items-end gap-1 h-14">
+                          {advBtResults.accuracyByWindow.map((w, i) => {
+                            const pct = Math.max(5, w.accuracy) // min 5% height for visibility
+                            const isGood = w.accuracy >= 55
+                            return (
+                              <div key={i} className="flex-1 flex flex-col items-center gap-0.5">
+                                <span className="text-[8px] font-mono text-zinc-500">{w.accuracy.toFixed(0)}%</span>
+                                <div
+                                  className={`w-full rounded-t-sm min-h-[4px] transition-all duration-500 ${isGood ? 'bg-green-500' : 'bg-red-500'} opacity-70`}
+                                  style={{ height: `${pct * 0.13}px` }}
+                                />
+                                <span className="text-[7px] text-zinc-600">{w.window}</span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                        {/* 50% reference line */}
+                        <div className="relative h-px bg-amber-500/30 mt-0.5">
+                          <span className="absolute right-0 -top-3 text-[7px] text-amber-500/60">50%</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── Curva de Ganancias ── */}
+                    {advBtResults.profitCurve.length > 1 && (
+                      <div className="p-3 bg-zinc-800/60 rounded-lg border border-zinc-700/50">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs text-zinc-400 font-bold">📈 Curva de Ganancias</span>
+                          <span className={`text-xs font-bold font-mono ${advBtResults.netProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            ${advBtResults.netProfit.toFixed(2)}
+                          </span>
+                        </div>
+                        {/* Zero line */}
+                        <div className="relative">
+                          {(() => {
+                            const curve = advBtResults.profitCurve
+                            const minVal = Math.min(...curve.map(c => c.profit))
+                            const maxVal = Math.max(...curve.map(c => c.profit))
+                            const range = maxVal - minVal || 1
+
+                            // Sample max 80 bars for visual clarity
+                            const maxBars = 80
+                            const step = Math.max(1, Math.floor(curve.length / maxBars))
+                            const sampled = curve.filter((_, i) => i % step === 0)
+
+                            return (
+                              <>
+                                {/* Zero reference line */}
+                                {minVal < 0 && maxVal > 0 && (
+                                  <div
+                                    className="absolute left-0 right-0 h-px bg-zinc-600"
+                                    style={{ bottom: `${((0 - minVal) / range) * 100}%` }}
+                                  >
+                                    <span className="absolute right-0 -top-2.5 text-[7px] text-zinc-600">$0</span>
+                                  </div>
+                                )}
+                                <div className="flex items-end gap-px h-16">
+                                  {sampled.map((pt, i) => {
+                                    const height = ((pt.profit - minVal) / range) * 100
+                                    const isProfit = pt.profit >= 0
+                                    return (
+                                      <div key={i} className="flex-1 rounded-t-sm min-h-[1px] transition-all duration-300"
+                                        style={{
+                                          height: `${Math.max(1, height)}%`,
+                                          backgroundColor: isProfit ? 'rgb(34, 197, 94)' : 'rgb(239, 68, 68)',
+                                          opacity: 0.75
+                                        }}
+                                      />
+                                    )
+                                  })}
+                                </div>
+                                <div className="flex justify-between text-[9px] text-zinc-600 mt-1 font-mono">
+                                  <span>${minVal.toFixed(1)}</span>
+                                  <span>${maxVal.toFixed(1)}</span>
+                                </div>
+                              </>
+                            )
+                          })()}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Motor info */}
+                    <div className="p-2 bg-zinc-800/40 rounded-lg text-center">
+                      <p className="text-[9px] text-zinc-600 leading-relaxed">
+                        Motor V6.0 · Consensus Markov (3w) · Zona de Salto (streaks 3-6) · Martingala 7 niveles [1,2,4,8,16,32,64] · Base $1
+                      </p>
+                    </div>
+                  </motion.div>
                 )}
               </CardContent>
             </Card>
