@@ -171,6 +171,8 @@ interface AdvBacktestResults {
   accuracy: number
   netProfit: number
   busts: number
+  skips: number
+  skipRate: number
   profitPerSignal: number
   profitPer100Spins: number
   roi: number
@@ -1167,8 +1169,8 @@ export function DashboardLive() {
         resetRecoveryHistory()
 
         const MIN_HISTORY = 10
-        const MARTINGALA = [1, 2, 4, 8, 16, 32, 64]
-        const MAX_MART = MARTINGALA.length // 7
+        const MARTINGALA = [1, 2, 4]
+        const MAX_MART = MARTINGALA.length // 3
         const BASE_BET = 1
         const COOLDOWN_AFTER_LOSS = 1
         const COOLDOWN_AFTER_BUST = 3
@@ -1180,6 +1182,8 @@ export function DashboardLive() {
         let losses = 0
         let busts = 0
         let greenCount = 0
+        let totalSkips = 0
+        let totalProcessed = 0
 
         // Profit tracking
         let runningProfit = 0
@@ -1214,10 +1218,12 @@ export function DashboardLive() {
         for (let i = MIN_HISTORY; i < nums.length; i++) {
           const history = nums.slice(0, i)     // numbers before the result
           const nextNumber = nums[i]            // the actual spin result
+          totalProcessed++
 
           // 1. Check cooldown first (priority over engine skip)
           if (cooldownRemaining > 0) {
             cooldownRemaining--
+            totalSkips++
             // Cooldown does NOT reset martingala, does NOT advance peak
             continue
           }
@@ -1228,6 +1234,7 @@ export function DashboardLive() {
 
           // 3. Check engine SKIP ZONE
           if (pred.shouldSkip === true) {
+            totalSkips++
             // Engine SKIP: resets martingala, does NOT advance peak, does NOT count as signal
             martingalaStep = 0
             // Note: currentPeakHeight is NOT reset on skip (per simulate-v60.ts)
@@ -1393,9 +1400,8 @@ export function DashboardLive() {
         const accuracy = totalBets > 0 ? (wins / totalBets) * 100 : 0
         const profitPerSignal = signals > 0 ? runningProfit / signals : 0
         const profitPer100Spins = nums.length > 0 ? (runningProfit / nums.length) * 100 : 0
-        // Total invested = sum of all bets placed
-        const totalInvested = runningProfit < 0 ? Math.abs(runningProfit) + (runningProfit > 0 ? 0 : 0) : 0
         const roi = signalResults.length > 0 ? (runningProfit / (signalResults.length * BASE_BET)) * 100 : 0
+        const skipRate = totalProcessed > 0 ? (totalSkips / totalProcessed) * 100 : 0
 
         const results: AdvBacktestResults = {
           totalSpins: nums.length,
@@ -1403,6 +1409,8 @@ export function DashboardLive() {
           accuracy: Math.round(accuracy * 10) / 10,
           netProfit: Math.round(runningProfit * 100) / 100,
           busts,
+          skips: totalSkips,
+          skipRate: Math.round(skipRate * 10) / 10,
           profitPerSignal: Math.round(profitPerSignal * 100) / 100,
           profitPer100Spins: Math.round(profitPer100Spins * 100) / 100,
           roi: Math.round(roi * 10) / 10,
@@ -2345,7 +2353,7 @@ export function DashboardLive() {
                     Backtesting Avanzado V6.0
                   </span>
                   <Badge variant="outline" className="text-amber-500 border-amber-500/40 text-[10px] font-mono">
-                    Motor V6.0 · Martingala 7
+                    Motor V6.0 · Martingala 3
                   </Badge>
                 </CardTitle>
               </CardHeader>
@@ -2422,7 +2430,7 @@ export function DashboardLive() {
                       </div>
                     </div>
                     <p className="text-[10px] text-zinc-500 text-center mt-2">
-                      Listo para simular con Motor V6.0 · Martingala 7 niveles
+                      Listo para simular con Motor V6.0 · Martingala 3 niveles
                     </p>
                   </motion.div>
                 )}
@@ -2513,11 +2521,16 @@ export function DashboardLive() {
                     </div>
 
                     {/* ── Extended Metrics ── */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    <div className="grid grid-cols-3 md:grid-cols-5 gap-2">
                       {/* Max Drawdown */}
                       <div className="text-center p-2 bg-zinc-800/50 rounded-lg">
                         <div className="text-sm font-bold text-red-400">${advBtResults.maxDrawdown.toFixed(1)}</div>
                         <div className="text-[10px] text-zinc-500">Max Drawdown</div>
+                      </div>
+                      {/* Skips */}
+                      <div className="text-center p-2 bg-zinc-800/50 rounded-lg">
+                        <div className="text-sm font-bold text-zinc-300">{advBtResults.skips.toLocaleString()} <span className="text-[9px] text-zinc-500">({advBtResults.skipRate.toFixed(1)}%)</span></div>
+                        <div className="text-[10px] text-zinc-500">Skips</div>
                       </div>
                       {/* Pico máximo */}
                       <div className="text-center p-2 bg-zinc-800/50 rounded-lg">
@@ -2678,7 +2691,7 @@ export function DashboardLive() {
                     {/* Motor info */}
                     <div className="p-2 bg-zinc-800/40 rounded-lg text-center">
                       <p className="text-[9px] text-zinc-600 leading-relaxed">
-                        Motor V6.0 · Consensus Markov (3w) · Zona de Salto (streaks 3-6) · Martingala 7 niveles [1,2,4,8,16,32,64] · Base $1
+                        Motor V6.0 · Consensus Markov (3w) · Zona de Salto (streaks 3-6) · Martingala 3 niveles [1,2,4] · Cooldown · Base $1
                       </p>
                     </div>
                   </motion.div>
