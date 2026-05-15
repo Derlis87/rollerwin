@@ -50,17 +50,9 @@ mini-services/
 # upload files
 upload/
 
-# scripts/simulations (not for render)
-scripts/
-
-# python files
-*.py
-
 # temp/root files
 analyze-images.ts
 check-users.ts
-simulate-*.ts
-simulate-*.js
 Caddyfile
 daemon.sh
 keep-alive.sh
@@ -69,9 +61,6 @@ start-server.js
 start-server.sh
 start.sh
 watchdog.sh
-
-# worklogs
-worklog*.md
 
 # download folder (not for render)
 download/
@@ -88,3 +77,6 @@ examples/
 
 # misc root files
 bun.lock
+
+# archive (tracked — analysis/backtesting history)
+!archive/
