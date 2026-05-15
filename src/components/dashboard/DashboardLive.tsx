@@ -1285,10 +1285,10 @@ export function DashboardLive() {
           if (predictedColor === actualColor) {
             wins++
 
-            // Profit: win this bet, recover previous losses in cycle
-            // Net for cycle = betMult - sum(MARTINGALA[0..martingalaStep-1])
-            const lostInCycle = MARTINGALA.slice(0, martingalaStep).reduce((s, m) => s + BASE_BET * m, 0)
-            runningProfit += BASE_BET * betMult - lostInCycle
+            // Profit: for color (even money 1:1), win profit = bet amount
+            // Losses were ALREADY subtracted individually in the loss branch.
+            // Just add the win payout — do NOT re-subtract losses.
+            runningProfit += BASE_BET * betMult
 
             // Peak closes: record height (losses before this win + the win)
             const peakHeight = currentPeakHeight + 1
