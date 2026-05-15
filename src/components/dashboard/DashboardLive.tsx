@@ -54,7 +54,7 @@ import { CASINO_CONFIGS, openCasino, getTableUrl } from '@/lib/casino-urls'
 
 import { calculatePeakHistory, getCurrentPeak, parseNumberText, type PeakRecord as EnginePeakRecord } from '@/lib/peak-engine'
 import { useRouletteCapturer } from '@/hooks/useRouletteCapturer'
-import { generateSmartPrediction as generateSmartPredictionV4, recordPredictionFeedback, type SmartPrediction as SmartPredictionV4, type BetType as BetTypeV4 } from '@/lib/smart-prediction-v4'
+import { generateSmartPrediction as generateSmartPredictionV4, recordPredictionFeedback, resetRecoveryHistory, type SmartPrediction as SmartPredictionV4, type BetType as BetTypeV4 } from '@/lib/smart-prediction-v4'
 
 const BET_TYPE_OPTIONS = [
   { id: 'color', name: 'Colores (Rojo/Negro)', icon: '🎨' },
@@ -1150,30 +1150,51 @@ export function DashboardLive() {
     setAdvBtResults(null)
   }, [advBtSequence, parseAdvBtSequence])
 
-  // Run full Motor V6.0 simulation
+  // ════════════════════════════════════════════════════════════════
+  // ADVANCED BACKTESTING V6.0 — Motor V6.0 Full Simulation
+  // Faithfully replicates simulate-v60.ts logic inline in React
+  // ════════════════════════════════════════════════════════════════
   const handleAdvBtRun = useCallback(() => {
     const nums = parseAdvBtSequence(advBtSequence)
-    if (nums.length < 6) return
+    if (nums.length < 10) return
 
     setAdvBtRunning(true)
     setAdvBtResults(null)
 
-    // Run in setTimeout to allow UI to update with loading state
     setTimeout(() => {
       try {
-        // Martingala 7 niveles
-        const MARTINGALA_7 = [1, 2, 4, 8, 16, 32, 64]
-        const MAX_MARTINGALA = 7
-        const BASE_BET = 1 // $1 base unit
+        // Reset engine state so predictions are clean
+        resetRecoveryHistory()
 
-        // Simulation state
+        const MIN_HISTORY = 10
+        const MARTINGALA = [1, 2, 4, 8, 16, 32, 64]
+        const MAX_MART = MARTINGALA.length // 7
+        const BASE_BET = 1
+        const COOLDOWN_AFTER_LOSS = 1
+        const COOLDOWN_AFTER_BUST = 3
+        const COOLDOWN_AFTER_GREEN = 1
+
+        // Simulation counters
         let signals = 0
         let wins = 0
         let losses = 0
         let busts = 0
-        let netProfit = 0
+        let greenCount = 0
+
+        // Profit tracking
+        let runningProfit = 0
+        let peakRunningProfit = 0
         let maxDrawdown = 0
-        let peakRunningProfit = 0 // track running profit for drawdown calc
+
+        // Martingala state
+        let martingalaStep = 0
+
+        // Cooldown
+        let cooldownRemaining = 0
+
+        // Peak tracking (only on SIGNAL bets, not SKIP)
+        let currentPeakHeight = 0
+        const peakHeights: number[] = []
         let maxPeak = 0
         let totalPeaks = 0
         let martingalaCycles = 0
@@ -1184,249 +1205,171 @@ export function DashboardLive() {
         let currentWinStreak = 0
         let currentLossStreak = 0
 
-        // Peak tracking
-        let currentPeakHeight = 0 // 0 = no active peak
-        let martingalaLevel = 0
-        let currentPredictionValue: string | null = null
-
         // Data for charts
-        const peakHeights: number[] = [] // heights of all completed peaks
         const profitCurve: { index: number; profit: number }[] = []
-        const signalResults: { signal: number; win: boolean }[] = [] // for accuracy by window
+        const signalResults: { signal: number; win: boolean }[] = []
 
-        // Simulate number by number
-        for (let i = 0; i < nums.length; i++) {
-          const num = nums[i]
-          const numsSoFar = nums.slice(0, i + 1)
+        // ═══ SINGLE PASS SIMULATION ═══
+        // At each step i: use nums[0..i-1] as history, nums[i] is the actual result
+        for (let i = MIN_HISTORY; i < nums.length; i++) {
+          const history = nums.slice(0, i)     // numbers before the result
+          const nextNumber = nums[i]            // the actual spin result
 
-          // Need at least 5 numbers for prediction
-          if (numsSoFar.length < 5) continue
+          // 1. Check cooldown first (priority over engine skip)
+          if (cooldownRemaining > 0) {
+            cooldownRemaining--
+            // Cooldown does NOT reset martingala, does NOT advance peak
+            continue
+          }
 
-          // Generate prediction using Motor V6.0
-          const smart = generateSmartPrediction(numsSoFar, 'color' as BetTypeV4)
+          // 2. Generate prediction using Motor V6.0
+          const pred = generateSmartPrediction(history, 'color' as BetTypeV4)
+          if (!pred.bestValue) continue
 
-          // ZONA DE SALTO — shouldSkip means streak 3-6 or weak signal → SKIP
-          if (smart.shouldSkip === true) {
-            // SKIP: don't bet, don't advance peak, don't count signal
-            // Close any active peak as abandoned (not a bust, just skipped)
-            if (currentPeakHeight > 0) {
-              // Peak was abandoned due to skip zone — don't count as completed peak
-              // Reset tracking
+          // 3. Check engine SKIP ZONE
+          if (pred.shouldSkip === true) {
+            // Engine SKIP: resets martingala, does NOT advance peak, does NOT count as signal
+            martingalaStep = 0
+            // Note: currentPeakHeight is NOT reset on skip (per simulate-v60.ts)
+            continue
+          }
+
+          // ═══ THIS IS A SIGNAL — we bet ═══
+          signals++
+          const predictedColor = pred.bestValue
+          const actualColor = getNumberColor(nextNumber)
+          const betMult = MARTINGALA[Math.min(martingalaStep, MAX_MART - 1)]
+
+          // 4. Handle GREEN (0) — special loss
+          if (actualColor === 'green') {
+            greenCount++
+            runningProfit -= BASE_BET * betMult
+            martingalaStep++
+            currentPeakHeight++
+
+            if (currentPeakHeight > maxPeak) maxPeak = currentPeakHeight
+
+            // Green = loss for streaks
+            currentLossStreak++
+            currentWinStreak = 0
+            if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak
+
+            // Check bust
+            if (martingalaStep >= MAX_MART) {
+              busts++
+              totalPeaks++
+              peakHeights.push(currentPeakHeight)
+              martingalaCycles++
+              signalResults.push({ signal: signals, win: false })
+              profitCurve.push({ index: i, profit: runningProfit })
+              martingalaStep = 0
               currentPeakHeight = 0
-              martingalaLevel = 0
-              currentPredictionValue = null
+              currentLossStreak = 0
+              cooldownRemaining = COOLDOWN_AFTER_BUST
+            } else {
+              cooldownRemaining = COOLDOWN_AFTER_GREEN
             }
+
+            // Drawdown check
+            if (runningProfit < peakRunningProfit) {
+              const dd = peakRunningProfit - runningProfit
+              if (dd > maxDrawdown) maxDrawdown = dd
+            }
+
+            // Feedback to engine
+            recordPredictionFeedback(false, ['markov'], predictedColor)
             continue
           }
 
-          // We have a signal
-          const prediction = smart.bestValue
-          if (!prediction) continue
-
-          // First signal in a new peak — set prediction and start
-          if (currentPeakHeight === 0) {
-            currentPeakHeight = 1
-            martingalaLevel = 0
-            currentPredictionValue = prediction
-            signals++
-            continue
-          }
-
-          // We have an active peak, check if prediction changed
-          // In Motor V6.0, the prediction is generated fresh each spin
-          // The peak is tracking consecutive losses at increasing heights
-          currentPredictionValue = prediction
-
-          // Check if result matches prediction
-          const resultColor = getNumberColor(num)
-          const matched = resultColor === prediction
-
-          if (matched) {
-            // WIN — peak closes at current height
+          // 5. Check WIN (predicted color matches actual)
+          if (predictedColor === actualColor) {
             wins++
+
+            // Profit: win this bet, recover previous losses in cycle
+            // Net for cycle = betMult - sum(MARTINGALA[0..martingalaStep-1])
+            const lostInCycle = MARTINGALA.slice(0, martingalaStep).reduce((s, m) => s + BASE_BET * m, 0)
+            runningProfit += BASE_BET * betMult - lostInCycle
+
+            // Peak closes: record height (losses before this win + the win)
+            const peakHeight = currentPeakHeight + 1
+            peakHeights.push(peakHeight)
             totalPeaks++
-            peakHeights.push(currentPeakHeight)
-
-            // Calculate payout: base bet * martingala level
-            const betMultiplier = MARTINGALA_7[martingalaLevel] || MARTINGALA_7[MARTINGALA_7.length - 1]
-            const winAmount = BASE_BET * betMultiplier * 2 // 1:1 payout for color
-            const totalInvestedInCycle = MARTINGALA_7.slice(0, martingalaLevel + 1).reduce((s, m) => s + BASE_BET * m, 0)
-            const cycleProfit = winAmount - totalInvestedInCycle + BASE_BET * betMultiplier // net profit
-
-            netProfit += BASE_BET * betMultiplier // net: won betMultiplier, already lost previous bets
-            // Actually for color (even money): win pays 1:1
-            // At martingala level L, we bet BASE_BET * MARTINGALA_7[L]
-            // If it wins, profit = BASE_BET * MARTINGALA_7[L]
-            // Previous losses in this cycle: sum of MARTINGALA_7[0..L-1] * BASE_BET
-            // But we track netProfit per signal more simply:
-            // Net = +betMultiplier (win) - sum(previous losses in cycle)
-            // However, the simplest approach: each signal's bet is at martingalaLevel
-            // If win: gain = martingalaLevel bet * 1:1 = BASE * mult
-            // If loss: lose = BASE * mult
-            // Peak height 1 means 1st bet, if win at height 1 = gain mult[0]
-            // Peak height 2 means lost 1st bet, 2nd bet, if win at height 2 = gain mult[1] - loss mult[0]
-            // etc.
-
-            // Simplified: recalculate net per cycle
-            // Total lost so far in this cycle
-            const totalLost = MARTINGALA_7.slice(0, currentPeakHeight - 1).reduce((s, m) => s + BASE_BET * m, 0)
-            const won = BASE_BET * betMultiplier
-            netProfit += won - totalLost - won + won // already tracked, let me redo this
-
-            // Let me redo the profit tracking properly:
-            // Actually I'll track it cumulatively at the end. For now just track wins/losses per signal.
-
             martingalaCycles++
+            if (peakHeight > maxPeak) maxPeak = peakHeight
+
+            signalResults.push({ signal: signals, win: true })
+            profitCurve.push({ index: i, profit: runningProfit })
+
+            // Streaks
             currentWinStreak++
             currentLossStreak = 0
             if (currentWinStreak > maxWinStreak) maxWinStreak = currentWinStreak
 
-            signalResults.push({ signal: signals, win: true })
-            profitCurve.push({ index: i, profit: 0 }) // placeholder, recalculate below
-
-            // Reset for next peak
+            // Reset for next cycle
+            martingalaStep = 0
             currentPeakHeight = 0
-            martingalaLevel = 0
-            currentPredictionValue = null
-          } else {
-            // LOSS — peak height increases
-            losses++
 
-            // Track profit: we lost this bet
-            const betMultiplier = MARTINGALA_7[martingalaLevel] || MARTINGALA_7[MARTINGALA_7.length - 1]
+            // Drawdown / peak profit tracking
+            if (runningProfit > peakRunningProfit) peakRunningProfit = runningProfit
+          } else {
+            // 6. LOSS
+            losses++
+            runningProfit -= BASE_BET * betMult
 
             currentLossStreak++
             currentWinStreak = 0
             if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak
 
             currentPeakHeight++
-            martingalaLevel++
+            martingalaStep++
 
             if (currentPeakHeight > maxPeak) maxPeak = currentPeakHeight
 
-            // Check for BUST — martingala reached level 7 (64x)
-            if (martingalaLevel >= MAX_MARTINGALA) {
+            // Check bust
+            if (martingalaStep >= MAX_MART) {
               busts++
               totalPeaks++
               peakHeights.push(currentPeakHeight)
               martingalaCycles++
-
               signalResults.push({ signal: signals, win: false })
-              profitCurve.push({ index: i, profit: 0 })
+              profitCurve.push({ index: i, profit: runningProfit })
 
-              // Reset after bust
+              martingalaStep = 0
               currentPeakHeight = 0
-              martingalaLevel = 0
-              currentPredictionValue = null
               currentLossStreak = 0
+              cooldownRemaining = COOLDOWN_AFTER_BUST
+            } else {
+              cooldownRemaining = COOLDOWN_AFTER_LOSS
             }
-          }
-        }
 
-        // Close any remaining active peak as a loss
-        if (currentPeakHeight > 0) {
-          losses++
-          totalPeaks++
-          peakHeights.push(currentPeakHeight)
-          martingalaCycles++
-          signalResults.push({ signal: signals, win: false })
-        }
-
-        // ── Recalculate net profit properly ──
-        // Each completed peak/martingala cycle:
-        // - Wins: net = bet_at_win - sum(bets_lost_before)
-        // - Losses/Busts: net = -sum(all_bets_in_cycle)
-        // We need to resimulate profit tracking
-        netProfit = 0
-        let runningProfit = 0
-        let peakHigh = 0
-        let mgLevel = 0
-        const cleanProfitCurve: { index: number; profit: number }[] = []
-        maxDrawdown = 0
-        peakRunningProfit = 0
-
-        for (let i = 0; i < nums.length; i++) {
-          const num = nums[i]
-          const numsSoFar = nums.slice(0, i + 1)
-          if (numsSoFar.length < 5) continue
-
-          const smart = generateSmartPrediction(numsSoFar, 'color' as BetTypeV4)
-          if (smart.shouldSkip === true) {
-            if (peakHigh > 0) {
-              peakHigh = 0
-              mgLevel = 0
-            }
-            continue
-          }
-
-          const prediction = smart.bestValue
-          if (!prediction) continue
-
-          if (peakHigh === 0) {
-            peakHigh = 1
-            mgLevel = 0
-            continue
-          }
-
-          const resultColor = getNumberColor(num)
-          const matched = resultColor === prediction
-          const betMult = MARTINGALA_7[mgLevel] || MARTINGALA_7[MARTINGALA_7.length - 1]
-
-          if (matched) {
-            // Win at this height
-            // Lost: sum of MARTINGALA_7[0..peakHigh-2]
-            const lost = MARTINGALA_7.slice(0, peakHigh - 1).reduce((s, m) => s + BASE_BET * m, 0)
-            const won = BASE_BET * betMult
-            runningProfit += won - lost
-            cleanProfitCurve.push({ index: i, profit: runningProfit })
-
-            // Drawdown tracking
+            // Drawdown check
             if (runningProfit < peakRunningProfit) {
               const dd = peakRunningProfit - runningProfit
               if (dd > maxDrawdown) maxDrawdown = dd
             }
-            if (runningProfit > peakRunningProfit) peakRunningProfit = runningProfit
-
-            peakHigh = 0
-            mgLevel = 0
-          } else {
-            // Loss at this height
-            const lost = BASE_BET * betMult
-            runningProfit -= lost
-
-            peakHigh++
-            mgLevel++
-
-            if (mgLevel >= MAX_MARTINGALA) {
-              // BUST — already lost 7 bets in this cycle
-              cleanProfitCurve.push({ index: i, profit: runningProfit })
-
-              // Drawdown
-              if (runningProfit < peakRunningProfit) {
-                const dd = peakRunningProfit - runningProfit
-                if (dd > maxDrawdown) maxDrawdown = dd
-              }
-              if (runningProfit > peakRunningProfit) peakRunningProfit = runningProfit
-
-              peakHigh = 0
-              mgLevel = 0
-            }
           }
+
+          // Feedback to engine (for both win and loss)
+          recordPredictionFeedback(predictedColor === actualColor, ['markov'], predictedColor)
         }
 
-        // If there's a remaining peak, account for it
-        if (peakHigh > 0) {
-          // Unclosed peak — losses already counted in runningProfit
-          cleanProfitCurve.push({ index: nums.length - 1, profit: runningProfit })
+        // Close unfinished peak at end of data
+        if (currentPeakHeight > 0) {
+          totalPeaks++
+          peakHeights.push(currentPeakHeight)
+          losses++
+          martingalaCycles++
+          signalResults.push({ signal: signals, win: false })
+          profitCurve.push({ index: nums.length - 1, profit: runningProfit })
           if (runningProfit < peakRunningProfit) {
             const dd = peakRunningProfit - runningProfit
             if (dd > maxDrawdown) maxDrawdown = dd
           }
         }
 
-        netProfit = runningProfit
+        // ═══ BUILD RESULTS ═══
 
-        // ── Build peak histogram ──
+        // Peak histogram
         const histogramMap = new Map<number, number>()
         peakHeights.forEach(h => {
           histogramMap.set(h, (histogramMap.get(h) || 0) + 1)
@@ -1435,7 +1378,7 @@ export function DashboardLive() {
           .map(([height, count]) => ({ height, count }))
           .sort((a, b) => a.height - b.height)
 
-        // ── Accuracy by window (every 200 signals) ──
+        // Accuracy by window (every 200 signals)
         const accuracyByWindow: { window: number; accuracy: number }[] = []
         const WINDOW_SIZE = 200
         for (let w = 0; w < signalResults.length; w += WINDOW_SIZE) {
@@ -1445,18 +1388,20 @@ export function DashboardLive() {
           accuracyByWindow.push({ window: Math.floor(w / WINDOW_SIZE) + 1, accuracy: Math.round(acc * 10) / 10 })
         }
 
-        // ── Derived metrics ──
-        const accuracy = signals > 0 ? (wins / signals) * 100 : 0
-        const profitPerSignal = signals > 0 ? netProfit / signals : 0
-        const profitPer100Spins = nums.length > 0 ? (netProfit / nums.length) * 100 : 0
-        const totalInvested = MARTINGALA_7.reduce((s, m) => s + m, 0) * BASE_BET * martingalaCycles // rough estimate
-        const roi = totalInvested > 0 ? (netProfit / totalInvested) * 100 : 0
+        // Derived metrics
+        const totalBets = wins + losses + greenCount
+        const accuracy = totalBets > 0 ? (wins / totalBets) * 100 : 0
+        const profitPerSignal = signals > 0 ? runningProfit / signals : 0
+        const profitPer100Spins = nums.length > 0 ? (runningProfit / nums.length) * 100 : 0
+        // Total invested = sum of all bets placed
+        const totalInvested = runningProfit < 0 ? Math.abs(runningProfit) + (runningProfit > 0 ? 0 : 0) : 0
+        const roi = signalResults.length > 0 ? (runningProfit / (signalResults.length * BASE_BET)) * 100 : 0
 
         const results: AdvBacktestResults = {
           totalSpins: nums.length,
           signals,
           accuracy: Math.round(accuracy * 10) / 10,
-          netProfit,
+          netProfit: Math.round(runningProfit * 100) / 100,
           busts,
           profitPerSignal: Math.round(profitPerSignal * 100) / 100,
           profitPer100Spins: Math.round(profitPer100Spins * 100) / 100,
@@ -1468,8 +1413,8 @@ export function DashboardLive() {
           streaks: { maxWin: maxWinStreak, maxLoss: maxLossStreak },
           peakHistogram,
           accuracyByWindow,
-          profitCurve: cleanProfitCurve,
-          isProfitable: netProfit > 0,
+          profitCurve,
+          isProfitable: runningProfit > 0,
         }
 
         setAdvBtResults(results)
@@ -1479,7 +1424,7 @@ export function DashboardLive() {
         setAdvBtRunning(false)
       }
     }, 50)
-  }, [advBtSequence, generateSmartPrediction, parseAdvBtSequence])
+  }, [advBtSequence, parseAdvBtSequence])
 
   // Get number button style
   const getNumberButtonStyle = (num: number) => {
@@ -2432,8 +2377,9 @@ export function DashboardLive() {
                   </Button>
                   <Button
                     onClick={handleAdvBtRun}
-                    disabled={!advBtAnalyzed || advBtRunning}
+                    disabled={!advBtAnalyzed || advBtRunning || (advBtAnalyzed?.total ?? 0) < 10}
                     className="flex-1 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-black font-bold text-sm"
+                    title={advBtAnalyzed && advBtAnalyzed.total < 10 ? 'Se necesitan al menos 10 números' : ''}
                   >
                     {advBtRunning ? (
                       <>
@@ -2537,9 +2483,9 @@ export function DashboardLive() {
                         <div className="text-[10px] text-zinc-500">Neto ($)</div>
                       </div>
                       {/* Bustos */}
-                      <div className={`text-center p-2.5 bg-zinc-800 rounded-lg ${advBtResults.bustos === 0 ? 'border border-green-500/30' : 'border border-red-500/30'}`}>
-                        <div className={`text-lg font-bold ${advBtResults.bustos === 0 ? 'text-green-400' : 'text-red-400'}`}>
-                          {advBtResults.bustos}
+                      <div className={`text-center p-2.5 bg-zinc-800 rounded-lg ${advBtResults.busts === 0 ? 'border border-green-500/30' : 'border border-red-500/30'}`}>
+                        <div className={`text-lg font-bold ${advBtResults.busts === 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {advBtResults.busts}
                         </div>
                         <div className="text-[10px] text-zinc-500">Bustos</div>
                       </div>
