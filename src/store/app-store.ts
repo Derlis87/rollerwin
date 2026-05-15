@@ -51,7 +51,7 @@ interface AppState {
   isAuthenticated: boolean
   
   // UI State
-  currentView: 'landing' | 'dashboard' | 'dashboard-live' | 'cartillas' | 'graficas'
+  currentView: 'landing' | 'dashboard' | 'dashboard-live' | 'backtesting' | 'cartillas' | 'graficas'
   isMenuOpen: boolean
   activeTab: 'analisis' | 'historial' | 'predicciones' | 'live'
   
@@ -72,7 +72,7 @@ interface AppState {
   logout: () => void
   
   // Actions - UI
-  setCurrentView: (view: 'landing' | 'dashboard' | 'dashboard-live' | 'cartillas' | 'graficas') => void
+  setCurrentView: (view: 'landing' | 'dashboard' | 'dashboard-live' | 'backtesting' | 'cartillas' | 'graficas') => void
   setMenuOpen: (open: boolean) => void
   setActiveTab: (tab: 'analisis' | 'historial' | 'predicciones' | 'live') => void
   setInputNumbers: (numbers: number[]) => void

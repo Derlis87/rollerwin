@@ -1816,6 +1816,18 @@ export function DashboardLive() {
                       ))}
                     </div>
 
+                    {/* Backtesting Avanzado Button */}
+                    <div className="mb-4">
+                      <Button
+                        variant="outline"
+                        className="w-full border-amber-500/50 text-amber-400 hover:bg-amber-500/10"
+                        onClick={() => setCurrentView('backtesting')}
+                      >
+                        <BarChart3 className="w-4 h-4 mr-2" />
+                        Backtesting Avanzado V6.0
+                      </Button>
+                    </div>
+
                     {/* Import Numbers Button & Dialog */}
                     <div className="mb-4">
                       <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
