@@ -51,7 +51,7 @@ interface AppState {
   isAuthenticated: boolean
   
   // UI State
-  currentView: 'landing' | 'dashboard' | 'dashboard-live' | 'backtesting' | 'cartillas' | 'graficas'
+  currentView: 'landing' | 'dashboard' | 'dashboard-live' | 'cartillas' | 'graficas'
   isMenuOpen: boolean
   activeTab: 'analisis' | 'historial' | 'predicciones' | 'live'
   
