@@ -51,10 +51,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { useAppStore, getNumberColor } from '@/store/app-store'
 import { CASINO_CONFIGS, openCasino, getTableUrl } from '@/lib/casino-urls'
-import { ColorParityChart } from './charts/ColorParityChart'
-import { PeakLevelCharts } from './charts/PeakLevelCharts'
-import { UltimateSignals } from './charts/UltimateSignals'
-import ProfessionalRouletteEngine from './charts/ProfessionalRouletteEngine'
+
 import { calculatePeakHistory, getCurrentPeak, parseNumberText, type PeakRecord as EnginePeakRecord } from '@/lib/peak-engine'
 import { useRouletteCapturer } from '@/hooks/useRouletteCapturer'
 import { generateSmartPrediction as generateSmartPredictionV4, recordPredictionFeedback, type SmartPrediction as SmartPredictionV4, type BetType as BetTypeV4 } from '@/lib/smart-prediction-v4'
@@ -1992,18 +1989,7 @@ export function DashboardLive() {
                   </Card>
                 ) : null}
 
-                {/* Charts */}
-                {numbers.length >= 5 && <ColorParityChart numbers={numbers} />}
 
-                {/* Peak Level Charts - inside main panel to avoid gap */}
-                {numbers.length >= 5 && (
-                  <PeakLevelCharts
-                    peakHistory={peakHistory}
-                    currentPeak={currentPeak}
-                    inputNumbers={numbers}
-                    betTypeLabel={getPeakBetTypeLabel(selectedBetType, calcDozenModeRef.current)}
-                  />
-                )}
               </>
             )}
           </div>
@@ -2025,15 +2011,6 @@ export function DashboardLive() {
                   </div>
                 </CardContent>
               </Card>
-
-              {/* Professional Roulette Engine - Side Panel */}
-              {numbers.length >= 10 && (
-                <Card className="bg-zinc-900 border-zinc-800 mt-4 overflow-hidden">
-                  <CardContent className="p-4">
-                    <ProfessionalRouletteEngine inputNumbers={numbers} />
-                  </CardContent>
-                </Card>
-              )}
 
               {/* Bankroll Calculator - Side Panel */}
               <Card className="bg-gradient-to-br from-zinc-900 to-zinc-800 border-emerald-500/30 mt-4">
