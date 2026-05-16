@@ -2070,8 +2070,7 @@ export function DashboardLive() {
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-1.5">
                             <Activity className="w-3.5 h-3.5 text-green-500" />
-                            <span className="text-xs font-bold text-zinc-300">Señales Pro-Engine</span>
-                            <span className="text-[9px] bg-green-500/15 text-green-400 px-1.5 py-0.5 rounded-full">V6.0</span>
+                            <span className="text-xs font-bold text-white">Señales V6.0</span>
                           </div>
                           <div className="flex items-center gap-3 text-[10px]">
                             <span className="text-zinc-500">Señales: <span className="text-white font-bold">{signalPeakHistory.length}</span></span>
@@ -2085,14 +2084,14 @@ export function DashboardLive() {
                               {[...signalPeakHistory].reverse().map((peak, i) => (
                                 <div key={peak.id} className="flex flex-col items-center relative" style={{ minWidth: '12px' }}>
                                   {/* Peak height number above bar */}
-                                  <span className="text-[8px] font-bold leading-none mb-0.5 text-black">
+                                  <span className="text-[8px] font-bold leading-none mb-0.5 text-white">
                                     {peak.height}
                                   </span>
                                   <motion.div
                                     initial={{ height: 0 }}
                                     animate={{ height: `${Math.max(3, ((peak.height - 1) / 9) * 100)}%` }}
                                     transition={{ duration: 0.15 }}
-                                    className="w-2 rounded-t min-h-[3px] cursor-pointer bg-green-500 border border-black hover:bg-green-400"
+                                    className="w-2 rounded-t min-h-[3px] cursor-pointer bg-green-500 hover:bg-green-400"
                                     title={`Pico ${peak.height} → #${peak.resultNumber} (${peak.resultColor})`}
                                   />
                                 </div>
@@ -2119,13 +2118,13 @@ export function DashboardLive() {
                           {[...signalPeakHistory].reverse().slice(0, 30).map((peak) => (
                             <div key={peak.id} className="flex items-center justify-between px-2 py-1 rounded text-[10px] bg-green-500/8 border border-green-500/15">
                               <div className="flex items-center gap-1.5">
-                                <span className="font-bold text-black">
+                                <span className="font-bold text-white">
                                   Pico {peak.height}
                                 </span>
                                 <span className="text-zinc-600">→</span>
                                 <span className={`font-bold px-1 py-0 rounded text-[9px] ${
-                                  peak.resultColor === 'red' ? 'bg-red-500/20 text-black' :
-                                  peak.resultColor === 'black' ? 'bg-zinc-500/30 text-black' : 'bg-green-500/20 text-black'
+                                  peak.resultColor === 'red' ? 'bg-red-500/20 text-red-300' :
+                                  peak.resultColor === 'black' ? 'bg-zinc-500/30 text-zinc-300' : 'bg-green-500/20 text-green-300'
                                 }`}>
                                   {peak.resultNumber}
                                 </span>
@@ -2413,8 +2412,7 @@ export function DashboardLive() {
                   <CardTitle className="text-white flex items-center justify-between text-sm">
                     <span className="flex items-center gap-2">
                       <Activity className="w-4 h-4 text-green-500" />
-                      <span>Señales Pro-Engine</span>
-                      <span className="text-[10px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded-full font-normal">V6.0 Solo Señales</span>
+                      <span>Señales V6.0</span>
                     </span>
                     <span className="text-xs font-normal text-zinc-500">{signalPeakHistory.length} registros</span>
                   </CardTitle>
@@ -2424,7 +2422,7 @@ export function DashboardLive() {
                   <div className="flex items-center gap-3 bg-zinc-800/50 rounded-lg p-3">
                     <div className="text-xs text-zinc-400">Pico Señal Actual</div>
                     <div className="flex-1" />
-                    <span className="text-2xl font-bold text-black bg-green-500 rounded-lg px-3 py-1 border border-black">
+                    <span className="text-2xl font-bold text-white bg-green-500/20 rounded-lg px-3 py-1">
                       {signalPeak}
                     </span>
                   </div>
@@ -2437,7 +2435,7 @@ export function DashboardLive() {
                           <div className="flex items-end gap-[2px] h-24" style={{ minWidth: `${signalPeakHistory.length * 16}px` }}>
                             {[...signalPeakHistory].reverse().map((peak, i) => (
                               <div key={peak.id} className="flex flex-col items-center relative" style={{ minWidth: '14px' }}>
-                                <span className="text-[9px] font-bold leading-none mb-0.5 text-black">
+                                <span className="text-[9px] font-bold leading-none mb-0.5 text-white">
                                   {peak.height}
                                 </span>
                                 <motion.div
@@ -2445,7 +2443,7 @@ export function DashboardLive() {
                                   initial={{ height: 0 }}
                                   animate={{ height: `${Math.max(4, ((peak.height - 1) / 9) * 100)}%` }}
                                   transition={{ duration: 0.15 }}
-                                  className="w-3 rounded-t min-h-[4px] cursor-pointer bg-green-500 border border-black hover:bg-green-400"
+                                  className="w-3 rounded-t min-h-[4px] cursor-pointer bg-green-500 hover:bg-green-400"
                                   title={`Pico ${peak.height} → #${peak.resultNumber} (${peak.resultColor})`}
                                 />
                               </div>
@@ -2483,13 +2481,13 @@ export function DashboardLive() {
                         {[...signalPeakHistory].reverse().slice(0, 50).map((peak) => (
                           <div key={peak.id} className="flex items-center justify-between p-2 rounded text-xs bg-green-500/8 border border-green-500/15">
                             <div className="flex items-center gap-2">
-                              <span className="font-bold text-black">
+                              <span className="font-bold text-white">
                                 Pico {peak.height}
                               </span>
                               <span className="text-zinc-600">→</span>
                               <span className={`font-bold px-1 py-0 rounded text-[9px] ${
-                                peak.resultColor === 'red' ? 'bg-red-500/20 text-black' :
-                                peak.resultColor === 'black' ? 'bg-zinc-500/30 text-black' : 'bg-green-500/20 text-black'
+                                peak.resultColor === 'red' ? 'bg-red-500/20 text-red-300' :
+                                peak.resultColor === 'black' ? 'bg-zinc-500/30 text-zinc-300' : 'bg-green-500/20 text-green-300'
                               }`}>
                                 {peak.resultNumber}
                               </span>
