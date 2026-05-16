@@ -1928,6 +1928,55 @@ export function DashboardLive() {
                         {numbers.length === 0 && <p className="text-zinc-600 text-xs">{isDemoMode ? 'El modo demo generará números automáticamente...' : 'Ingresa números haciendo clic o usando el teclado...'}</p>}
                       </div>
                     </div>
+
+                    {/* ═══ V6.0 Signal Peak Indicator ═══ */}
+                    {signalPeakHistory.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-zinc-800">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-1.5">
+                            <Activity className="w-3.5 h-3.5 text-cyan-400" />
+                            <span className="text-xs font-bold text-zinc-300">Picos de Señales</span>
+                            <span className="text-[9px] bg-cyan-500/15 text-cyan-400 px-1.5 py-0.5 rounded-full">V6.0</span>
+                          </div>
+                          <div className="flex items-center gap-3 text-[10px]">
+                            <span className="text-zinc-500">Señales: <span className="text-white font-bold">{signalPeakHistory.length}</span></span>
+                            <span className="text-zinc-500">Prom: <span className="text-cyan-400 font-bold">{signalPeakHistory.length > 0 ? (signalPeakHistory.reduce((s, p) => s + p.height, 0) / signalPeakHistory.length).toFixed(1) : '0'}</span></span>
+                            <span className="text-zinc-500">Actual: <span className={`font-bold ${signalPeak >= 5 ? 'text-red-400' : signalPeak >= 3 ? 'text-amber-400' : 'text-green-400'}`}>{signalPeak}</span></span>
+                          </div>
+                        </div>
+                        {/* Horizontal bars */}
+                        <div className="flex items-end gap-[2px] h-10 bg-zinc-800/30 rounded-lg px-2 py-1.5">
+                          {[...signalPeakHistory].reverse().slice(0, 40).map((peak, i) => (
+                            <motion.div
+                              key={peak.id}
+                              initial={{ height: 0 }}
+                              animate={{ height: `${Math.max(3, ((peak.height - 1) / 9) * 100)}%` }}
+                              transition={{ duration: 0.2, delay: i * 0.01 }}
+                              className={`flex-1 rounded-t min-w-[3px] ${
+                                peak.height <= 3 ? 'bg-green-500/70 hover:bg-green-400' :
+                                peak.height <= 6 ? 'bg-amber-500/70 hover:bg-amber-400' :
+                                'bg-red-500/70 hover:bg-red-400'
+                              }`}
+                              title={`Pico ${peak.height} → #${peak.resultNumber}`}
+                            />
+                          ))}
+                        </div>
+                        {/* Quick stats row */}
+                        <div className="flex items-center gap-4 mt-1.5 text-[9px]">
+                          <span className="text-green-400">
+                            Bajos (1-3): {signalPeakHistory.filter(p => p.height <= 3).length}
+                          </span>
+                          <span className="text-amber-400">
+                            Medios (4-6): {signalPeakHistory.filter(p => p.height >= 4 && p.height <= 6).length}
+                          </span>
+                          {signalPeakHistory.filter(p => p.height >= 7).length > 0 && (
+                            <span className="text-red-400">
+                              Altos (7+): {signalPeakHistory.filter(p => p.height >= 7).length}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
 
@@ -2427,8 +2476,8 @@ export function DashboardLive() {
                     {/* ── VEREDICTO ── */}
                     <div className={`p-4 rounded-xl border-2 text-center ${
                       advBtResults.isProfitable
-                        ? 'bg-green-500/10 border-green-500/40'
-                        : 'bg-red-500/10 border-red-500/40'
+                        ? 'bg-green-500/15 border-green-500/40'
+                        : 'bg-red-500/15 border-red-500/40'
                     }`}>
                       <div className="text-2xl mb-1">
                         {advBtResults.isProfitable ? '✅' : '❌'}
@@ -2441,7 +2490,10 @@ export function DashboardLive() {
                       <div className={`text-lg font-bold font-mono mt-1 ${
                         advBtResults.netProfit >= 0 ? 'text-green-400' : 'text-red-400'
                       }`}>
-                        {advBtResults.netProfit >= 0 ? '+' : ''}{advBtResults.netProfit.toFixed(2)} $
+                        {advBtResults.netProfit >= 0 ? '+' : ''}{advBtResults.netProfit.toFixed(2)} u
+                      </div>
+                      <div className="text-[10px] text-zinc-400 mt-2 leading-relaxed">
+                        {advBtResults.totalSpins.toLocaleString()} spins | {advBtResults.accuracy.toFixed(1)}% accuracy | {advBtResults.signals.toLocaleString()} señales | {advBtResults.busts} busts | Proyección: {advBtResults.profitPer100Spins >= 0 ? '+' : ''}{advBtResults.profitPer100Spins.toFixed(1)} u/100spins
                       </div>
                     </div>
 
@@ -2540,46 +2592,35 @@ export function DashboardLive() {
                       </div>
                     </div>
 
-                    {/* ── Histograma de Picos ── */}
+                    {/* ── Distribución de Picos ── */}
                     {advBtResults.peakHistogram.length > 0 && (
                       <div className="p-3 bg-zinc-800/60 rounded-lg border border-zinc-700/50">
-                        <div className="text-xs text-zinc-400 mb-2 font-bold">📊 Histograma de Picos</div>
-                        {/* Grouped bars: 1-3, 4-6, 7+ */}
-                        <div className="space-y-2">
+                        <div className="text-xs text-zinc-400 mb-2 font-bold">📊 Distribución de Picos</div>
+                        {/* Individual bars per peak height */}
+                        <div className="space-y-1.5">
                           {(() => {
-                            const groups = [
-                              { label: 'Bajos (1-3)', filter: (h: number) => h >= 1 && h <= 3, color: 'bg-green-500', textColor: 'text-green-400' },
-                              { label: 'Medios (4-6)', filter: (h: number) => h >= 4 && h <= 6, color: 'bg-amber-500', textColor: 'text-amber-400' },
-                              { label: 'Altos (7+)', filter: (h: number) => h >= 7, color: 'bg-red-500', textColor: 'text-red-400' },
-                            ]
-                            const maxCount = Math.max(...groups.map(g => advBtResults.peakHistogram.filter(p => g.filter(p.height)).reduce((s, p) => s + p.count, 0)), 1)
-                            return groups.map(group => {
-                              const count = advBtResults.peakHistogram.filter(p => group.filter(p.height)).reduce((s, p) => s + p.count, 0)
-                              if (count === 0) return null
-                              const pct = (count / maxCount) * 100
+                            const maxCount = Math.max(...advBtResults.peakHistogram.map(p => p.count), 1)
+                            return advBtResults.peakHistogram.map(p => {
+                              const pct = (p.count / maxCount) * 100
+                              const isLow = p.height <= 3
+                              const barColor = isLow ? 'bg-green-500' : 'bg-orange-500'
+                              const textColor = isLow ? 'text-green-400' : 'text-orange-400'
                               return (
-                                <div key={group.label} className="flex items-center gap-2">
-                                  <span className="text-[10px] text-zinc-400 w-20 shrink-0">{group.label}</span>
-                                  <div className="flex-1 h-5 bg-zinc-800 rounded overflow-hidden">
-                                    <div className={`h-full ${group.color} rounded transition-all duration-500 opacity-80`} style={{ width: `${pct}%` }} />
+                                <div key={p.height} className="flex items-center gap-2">
+                                  <span className="text-[10px] text-zinc-400 w-14 shrink-0">Pico {p.height}</span>
+                                  <div className="flex-1 h-4 bg-zinc-800 rounded overflow-hidden">
+                                    <motion.div
+                                      initial={{ width: 0 }}
+                                      animate={{ width: `${pct}%` }}
+                                      transition={{ duration: 0.6, ease: 'easeOut' }}
+                                      className={`h-full ${barColor} rounded opacity-80`}
+                                    />
                                   </div>
-                                  <span className={`text-xs font-bold font-mono w-8 text-right ${group.textColor}`}>{count}</span>
+                                  <span className={`text-xs font-bold font-mono w-8 text-right ${textColor}`}>{p.count}</span>
                                 </div>
                               )
-                            }).filter(Boolean)
+                            })
                           })()}
-                        </div>
-                        {/* Per-height detail */}
-                        <div className="flex flex-wrap gap-1.5 mt-2">
-                          {advBtResults.peakHistogram.map(p => (
-                            <span key={p.height} className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold ${
-                              p.height <= 3 ? 'bg-green-500/20 text-green-400' :
-                              p.height <= 6 ? 'bg-amber-500/20 text-amber-400' :
-                              'bg-red-500/20 text-red-400'
-                            }`}>
-                              H{p.height}: {p.count}
-                            </span>
-                          ))}
                         </div>
                       </div>
                     )}

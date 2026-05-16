@@ -60,3 +60,21 @@ Stage Summary:
 - This is a DIFFERENT (longer) sequence, so results are expected to differ
 - 6 critical fixes applied in commit 623e3ba to match simulate-v60.ts exactly
 - Deploy dep-d846av8g4nts73etkq1g triggered on Render
+---
+Task ID: 1
+Agent: main
+Task: Implement backtesting model + V6.0 signal peak indicator
+
+Work Log:
+- Analyzed uploaded images (modelo del backtesting.png and pasted_image_1778942613789.png) with VLM
+- Read full DashboardLive.tsx (2688 lines) to understand current state
+- Identified 3 differences vs model: verdict subtext missing, grouped histogram vs individual bars, no peak indicator below sequence
+- Updated verdict section: added subtext stats line (spins, accuracy, signals, busts, projection u/100spins), changed " $" to " u"
+- Replaced grouped histogram (Bajos 1-3, Medios 4-6, Altos 7+) with individual per-height bars (Pico 1, Pico 2, etc.) with green/orange colors matching the model
+- Added compact V6.0 signal peak indicator below "Secuencia actual" panel with: header (Activity icon, label, V6.0 badge), quick stats (Señales, Prom, Actual), horizontal animated bars (40 peaks, color-coded), category counts (Bajos, Medios, Altos)
+- Build passed successfully (Next.js 16.2.6, Turbopack)
+
+Stage Summary:
+- File modified: src/components/dashboard/DashboardLive.tsx
+- 3 changes applied: verdict subtext, individual histogram bars, signal peak indicator
+- Build: SUCCESS
