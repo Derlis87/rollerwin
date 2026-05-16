@@ -2076,25 +2076,35 @@ export function DashboardLive() {
                           <div className="flex items-center gap-3 text-[10px]">
                             <span className="text-zinc-500">Señales: <span className="text-white font-bold">{signalPeakHistory.length}</span></span>
                             <span className="text-zinc-500">Prom: <span className="text-cyan-400 font-bold">{signalPeakHistory.length > 0 ? (signalPeakHistory.reduce((s, p) => s + p.height, 0) / signalPeakHistory.length).toFixed(1) : '0'}</span></span>
-                            <span className="text-zinc-500">Actual: <span className={`font-bold ${signalPeak >= 5 ? 'text-red-400' : signalPeak >= 3 ? 'text-amber-400' : 'text-green-400'}`}>{signalPeak}</span></span>
                           </div>
                         </div>
-                        {/* Horizontal bars */}
-                        <div className="flex items-end gap-[2px] h-10 bg-zinc-800/30 rounded-lg px-2 py-1.5">
-                          {[...signalPeakHistory].reverse().slice(0, 40).map((peak, i) => (
-                            <motion.div
-                              key={peak.id}
-                              initial={{ height: 0 }}
-                              animate={{ height: `${Math.max(3, ((peak.height - 1) / 9) * 100)}%` }}
-                              transition={{ duration: 0.2, delay: i * 0.01 }}
-                              className={`flex-1 rounded-t min-w-[3px] ${
-                                peak.height <= 3 ? 'bg-green-500/70 hover:bg-green-400' :
-                                peak.height <= 6 ? 'bg-amber-500/70 hover:bg-amber-400' :
-                                'bg-red-500/70 hover:bg-red-400'
-                              }`}
-                              title={`Pico ${peak.height} → #${peak.resultNumber}`}
-                            />
-                          ))}
+                        {/* Horizontal bars with peak height numbers */}
+                        <div className="relative bg-zinc-800/30 rounded-lg px-2 pt-5 pb-1.5">
+                          <div className="flex items-end gap-[2px] h-10">
+                            {[...signalPeakHistory].reverse().slice(0, 40).map((peak, i) => (
+                              <div key={peak.id} className="flex-1 flex flex-col items-center relative min-w-[10px]">
+                                {/* Peak height number above bar */}
+                                <span className={`text-[8px] font-bold leading-none mb-0.5 ${
+                                  peak.height <= 3 ? 'text-green-400' :
+                                  peak.height <= 6 ? 'text-amber-400' :
+                                  'text-red-400'
+                                }`}>
+                                  {peak.height}
+                                </span>
+                                <motion.div
+                                  initial={{ height: 0 }}
+                                  animate={{ height: `${Math.max(3, ((peak.height - 1) / 9) * 100)}%` }}
+                                  transition={{ duration: 0.2, delay: i * 0.01 }}
+                                  className={`w-full rounded-t min-h-[3px] cursor-pointer ${
+                                    peak.height <= 3 ? 'bg-green-500/70 hover:bg-green-400' :
+                                    peak.height <= 6 ? 'bg-amber-500/70 hover:bg-amber-400' :
+                                    'bg-red-500/70 hover:bg-red-400'
+                                  }`}
+                                  title={`Pico ${peak.height} → #${peak.resultNumber} (${peak.resultColor})`}
+                                />
+                              </div>
+                            ))}
+                          </div>
                         </div>
                         {/* Quick stats row */}
                         <div className="flex items-center gap-4 mt-1.5 text-[9px]">
@@ -2109,6 +2119,35 @@ export function DashboardLive() {
                               Altos (7+): {signalPeakHistory.filter(p => p.height >= 7).length}
                             </span>
                           )}
+                        </div>
+                        {/* Detailed peak list */}
+                        <div className="mt-2 max-h-28 overflow-y-auto space-y-0.5 custom-scrollbar-y pr-1">
+                          {[...signalPeakHistory].reverse().slice(0, 30).map((peak) => (
+                            <div key={peak.id} className={`flex items-center justify-between px-2 py-1 rounded text-[10px] ${
+                              peak.height <= 3 ? 'bg-green-500/8 border border-green-500/15' :
+                              peak.height <= 6 ? 'bg-amber-500/8 border border-amber-500/15' :
+                              'bg-red-500/8 border border-red-500/15'
+                            }`}>
+                              <div className="flex items-center gap-1.5">
+                                <span className={`font-bold ${
+                                  peak.height <= 3 ? 'text-green-400' :
+                                  peak.height <= 6 ? 'text-amber-400' : 'text-red-400'
+                                }`}>
+                                  Pico {peak.height}
+                                </span>
+                                <span className="text-zinc-600">→</span>
+                                <span className={`font-bold px-1 py-0 rounded text-[9px] ${
+                                  peak.resultColor === 'red' ? 'bg-red-500/20 text-red-400' :
+                                  peak.resultColor === 'black' ? 'bg-zinc-600/40 text-zinc-300' : 'bg-green-500/20 text-green-400'
+                                }`}>
+                                  {peak.resultNumber}
+                                </span>
+                              </div>
+                              <span className="text-zinc-600 text-[9px]">
+                                {peak.timestamp.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                              </span>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     )}
