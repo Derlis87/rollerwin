@@ -2069,41 +2069,35 @@ export function DashboardLive() {
                       <div className="mt-3 pt-3 border-t border-zinc-800">
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-1.5">
-                            <Activity className="w-3.5 h-3.5 text-cyan-400" />
-                            <span className="text-xs font-bold text-zinc-300">Picos de Señales</span>
-                            <span className="text-[9px] bg-cyan-500/15 text-cyan-400 px-1.5 py-0.5 rounded-full">V6.0</span>
+                            <Activity className="w-3.5 h-3.5 text-green-500" />
+                            <span className="text-xs font-bold text-zinc-300">Señales Pro-Engine</span>
+                            <span className="text-[9px] bg-green-500/15 text-green-400 px-1.5 py-0.5 rounded-full">V6.0</span>
                           </div>
                           <div className="flex items-center gap-3 text-[10px]">
                             <span className="text-zinc-500">Señales: <span className="text-white font-bold">{signalPeakHistory.length}</span></span>
-                            <span className="text-zinc-500">Prom: <span className="text-cyan-400 font-bold">{signalPeakHistory.length > 0 ? (signalPeakHistory.reduce((s, p) => s + p.height, 0) / signalPeakHistory.length).toFixed(1) : '0'}</span></span>
+                            <span className="text-zinc-500">Prom: <span className="text-zinc-300 font-bold">{signalPeakHistory.length > 0 ? (signalPeakHistory.reduce((s, p) => s + p.height, 0) / signalPeakHistory.length).toFixed(1) : '0'}</span></span>
                           </div>
                         </div>
-                        {/* Horizontal bars with peak height numbers */}
-                        <div className="relative bg-zinc-800/30 rounded-lg px-2 pt-5 pb-1.5">
-                          <div className="flex items-end gap-[2px] h-10">
-                            {[...signalPeakHistory].reverse().slice(0, 40).map((peak, i) => (
-                              <div key={peak.id} className="flex-1 flex flex-col items-center relative min-w-[10px]">
-                                {/* Peak height number above bar */}
-                                <span className={`text-[8px] font-bold leading-none mb-0.5 ${
-                                  peak.height <= 3 ? 'text-green-400' :
-                                  peak.height <= 6 ? 'text-amber-400' :
-                                  'text-red-400'
-                                }`}>
-                                  {peak.height}
-                                </span>
-                                <motion.div
-                                  initial={{ height: 0 }}
-                                  animate={{ height: `${Math.max(3, ((peak.height - 1) / 9) * 100)}%` }}
-                                  transition={{ duration: 0.2, delay: i * 0.01 }}
-                                  className={`w-full rounded-t min-h-[3px] cursor-pointer ${
-                                    peak.height <= 3 ? 'bg-green-500/70 hover:bg-green-400' :
-                                    peak.height <= 6 ? 'bg-amber-500/70 hover:bg-amber-400' :
-                                    'bg-red-500/70 hover:bg-red-400'
-                                  }`}
-                                  title={`Pico ${peak.height} → #${peak.resultNumber} (${peak.resultColor})`}
-                                />
-                              </div>
-                            ))}
+                        {/* Horizontal bars with scrollbar — all peaks visible */}
+                        <div className="relative bg-zinc-800/30 rounded-lg px-2 pt-5 pb-1">
+                          <div className="overflow-x-auto custom-scrollbar-x">
+                            <div className="flex items-end gap-[2px] h-10" style={{ minWidth: `${signalPeakHistory.length * 14}px` }}>
+                              {[...signalPeakHistory].reverse().map((peak, i) => (
+                                <div key={peak.id} className="flex flex-col items-center relative" style={{ minWidth: '12px' }}>
+                                  {/* Peak height number above bar */}
+                                  <span className="text-[8px] font-bold leading-none mb-0.5 text-black">
+                                    {peak.height}
+                                  </span>
+                                  <motion.div
+                                    initial={{ height: 0 }}
+                                    animate={{ height: `${Math.max(3, ((peak.height - 1) / 9) * 100)}%` }}
+                                    transition={{ duration: 0.15 }}
+                                    className="w-2 rounded-t min-h-[3px] cursor-pointer bg-green-500 border border-black hover:bg-green-400"
+                                    title={`Pico ${peak.height} → #${peak.resultNumber} (${peak.resultColor})`}
+                                  />
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         </div>
                         {/* Quick stats row */}
@@ -2123,22 +2117,15 @@ export function DashboardLive() {
                         {/* Detailed peak list */}
                         <div className="mt-2 max-h-28 overflow-y-auto space-y-0.5 custom-scrollbar-y pr-1">
                           {[...signalPeakHistory].reverse().slice(0, 30).map((peak) => (
-                            <div key={peak.id} className={`flex items-center justify-between px-2 py-1 rounded text-[10px] ${
-                              peak.height <= 3 ? 'bg-green-500/8 border border-green-500/15' :
-                              peak.height <= 6 ? 'bg-amber-500/8 border border-amber-500/15' :
-                              'bg-red-500/8 border border-red-500/15'
-                            }`}>
+                            <div key={peak.id} className="flex items-center justify-between px-2 py-1 rounded text-[10px] bg-green-500/8 border border-green-500/15">
                               <div className="flex items-center gap-1.5">
-                                <span className={`font-bold ${
-                                  peak.height <= 3 ? 'text-green-400' :
-                                  peak.height <= 6 ? 'text-amber-400' : 'text-red-400'
-                                }`}>
+                                <span className="font-bold text-black">
                                   Pico {peak.height}
                                 </span>
                                 <span className="text-zinc-600">→</span>
                                 <span className={`font-bold px-1 py-0 rounded text-[9px] ${
-                                  peak.resultColor === 'red' ? 'bg-red-500/20 text-red-400' :
-                                  peak.resultColor === 'black' ? 'bg-zinc-600/40 text-zinc-300' : 'bg-green-500/20 text-green-400'
+                                  peak.resultColor === 'red' ? 'bg-red-500/20 text-black' :
+                                  peak.resultColor === 'black' ? 'bg-zinc-500/30 text-black' : 'bg-green-500/20 text-black'
                                 }`}>
                                   {peak.resultNumber}
                                 </span>
@@ -2421,13 +2408,13 @@ export function DashboardLive() {
 
 
               {/* Historial de Picos de Señales V6.0 — Solo registros de señales reales */}
-              <Card className="bg-zinc-900 border border-cyan-800/50 mt-4">
+              <Card className="bg-zinc-900 border border-green-800/50 mt-4">
                 <CardHeader className="py-2 px-4">
                   <CardTitle className="text-white flex items-center justify-between text-sm">
                     <span className="flex items-center gap-2">
-                      <Activity className="w-4 h-4 text-cyan-400" />
-                      <span>Picos de Señales</span>
-                      <span className="text-[10px] bg-cyan-500/20 text-cyan-400 px-1.5 py-0.5 rounded-full font-normal">V6.0 Solo Señales</span>
+                      <Activity className="w-4 h-4 text-green-500" />
+                      <span>Señales Pro-Engine</span>
+                      <span className="text-[10px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded-full font-normal">V6.0 Solo Señales</span>
                     </span>
                     <span className="text-xs font-normal text-zinc-500">{signalPeakHistory.length} registros</span>
                   </CardTitle>
@@ -2437,57 +2424,44 @@ export function DashboardLive() {
                   <div className="flex items-center gap-3 bg-zinc-800/50 rounded-lg p-3">
                     <div className="text-xs text-zinc-400">Pico Señal Actual</div>
                     <div className="flex-1" />
-                    <span className={`text-2xl font-bold ${signalPeak >= 5 ? 'text-red-500' : signalPeak >= 3 ? 'text-amber-500' : 'text-green-500'}`}>
+                    <span className="text-2xl font-bold text-black bg-green-500 rounded-lg px-3 py-1 border border-black">
                       {signalPeak}
                     </span>
                   </div>
 
-                  {/* Barras visuales de picos de señales */}
+                  {/* Barras visuales de picos de señales con scrollbar */}
                   {signalPeakHistory.length > 0 && (
                     <>
-                      <div className="relative h-32 bg-zinc-800/30 rounded-lg overflow-hidden">
-                        {/* Líneas guía horizontales */}
-                        <div className="absolute inset-0 flex flex-col justify-between py-2 px-2 pointer-events-none">
-                          {[15, 12, 9, 6, 3, 1].map((val) => (
-                            <div key={val} className="relative flex items-center">
-                              <span className="text-[10px] text-zinc-600 w-5 text-right">{val}</span>
-                              <div className="flex-1 border-t border-zinc-700/20" />
-                            </div>
-                          ))}
-                        </div>
-                        {/* Barras */}
-                        <div className="absolute left-7 right-2 bottom-2 top-2 flex items-end gap-[2px]">
-                          {[...signalPeakHistory].reverse().slice(0, 30).map((peak, i) => (
-                            <motion.div
-                              key={peak.id}
-                              initial={{ height: 0 }}
-                              animate={{ height: `${Math.max(4, ((peak.height - 1) / 14) * 100)}%` }}
-                              transition={{ duration: 0.3, delay: i * 0.02 }}
-                              className={`flex-1 rounded-t relative cursor-pointer min-w-[6px] ${
-                                peak.height <= 3 ? 'bg-cyan-400/80 hover:bg-cyan-300' :
-                                peak.height <= 6 ? 'bg-amber-500/80 hover:bg-amber-400' :
-                                'bg-red-500/80 hover:bg-red-400'
-                              }`}
-                              title={`Pico Señal ${peak.height} → #${peak.resultNumber}`}
-                            >
-                              {peak.height >= 4 && (
-                                <span className="absolute -top-4 left-1/2 -translate-x-1/2 text-[8px] font-bold text-zinc-400 whitespace-nowrap">
+                      <div className="bg-zinc-800/30 rounded-lg px-2 pt-5 pb-1">
+                        <div className="overflow-x-auto custom-scrollbar-x">
+                          <div className="flex items-end gap-[2px] h-24" style={{ minWidth: `${signalPeakHistory.length * 16}px` }}>
+                            {[...signalPeakHistory].reverse().map((peak, i) => (
+                              <div key={peak.id} className="flex flex-col items-center relative" style={{ minWidth: '14px' }}>
+                                <span className="text-[9px] font-bold leading-none mb-0.5 text-black">
                                   {peak.height}
                                 </span>
-                              )}
-                            </motion.div>
-                          ))}
+                                <motion.div
+                                  key={peak.id}
+                                  initial={{ height: 0 }}
+                                  animate={{ height: `${Math.max(4, ((peak.height - 1) / 9) * 100)}%` }}
+                                  transition={{ duration: 0.15 }}
+                                  className="w-3 rounded-t min-h-[4px] cursor-pointer bg-green-500 border border-black hover:bg-green-400"
+                                  title={`Pico ${peak.height} → #${peak.resultNumber} (${peak.resultColor})`}
+                                />
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       </div>
 
                       {/* Estadísticas de señales */}
                       <div className="grid grid-cols-4 gap-2">
                         <div className="bg-zinc-800/50 rounded-lg p-2 text-center">
-                          <div className="text-sm font-bold text-cyan-400">{signalPeakHistory.length}</div>
+                          <div className="text-sm font-bold text-white">{signalPeakHistory.length}</div>
                           <div className="text-[10px] text-zinc-500">Señales</div>
                         </div>
                         <div className="bg-zinc-800/50 rounded-lg p-2 text-center">
-                          <div className="text-sm font-bold text-cyan-400">
+                          <div className="text-sm font-bold text-white">
                             {signalPeakHistory.length > 0
                               ? (signalPeakHistory.reduce((s, p) => s + p.height, 0) / signalPeakHistory.length).toFixed(1)
                               : '0'}
@@ -2505,24 +2479,17 @@ export function DashboardLive() {
                       </div>
 
                       {/* Lista detallada de picos de señales */}
-                      <div className="max-h-48 overflow-y-auto space-y-1 pr-1">
+                      <div className="max-h-48 overflow-y-auto space-y-1 pr-1 custom-scrollbar-y">
                         {[...signalPeakHistory].reverse().slice(0, 50).map((peak) => (
-                          <div key={peak.id} className={`flex items-center justify-between p-2 rounded text-xs ${
-                            peak.height <= 3 ? 'bg-cyan-500/10 border border-cyan-500/20' :
-                            peak.height <= 6 ? 'bg-amber-500/10 border border-amber-500/20' :
-                            'bg-red-500/10 border border-red-500/20'
-                          }`}>
+                          <div key={peak.id} className="flex items-center justify-between p-2 rounded text-xs bg-green-500/8 border border-green-500/15">
                             <div className="flex items-center gap-2">
-                              <span className={`font-bold ${
-                                peak.height <= 3 ? 'text-cyan-400' :
-                                peak.height <= 6 ? 'text-amber-400' : 'text-red-400'
-                              }`}>
+                              <span className="font-bold text-black">
                                 Pico {peak.height}
                               </span>
-                              <span className="text-zinc-500">→</span>
-                              <span className={`font-bold ${
-                                peak.resultColor === 'red' ? 'text-red-400' :
-                                peak.resultColor === 'black' ? 'text-zinc-300' : 'text-green-400'
+                              <span className="text-zinc-600">→</span>
+                              <span className={`font-bold px-1 py-0 rounded text-[9px] ${
+                                peak.resultColor === 'red' ? 'bg-red-500/20 text-black' :
+                                peak.resultColor === 'black' ? 'bg-zinc-500/30 text-black' : 'bg-green-500/20 text-black'
                               }`}>
                                 {peak.resultNumber}
                               </span>
