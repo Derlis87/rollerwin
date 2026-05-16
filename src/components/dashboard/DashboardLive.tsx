@@ -1199,9 +1199,9 @@ export function DashboardLive() {
         // Peak tracking (only on SIGNAL bets, not SKIP)
         let currentPeakHeight = 0
         const peakHeights: number[] = []
-        let maxPeak = 0
-        let totalPeaks = 0
-        let martingalaCycles = 0
+        // maxPeak computed from peakHeights at end (per simulate-v60.ts)
+        // totalPeaks derived from peakHeights.length (matches simulate-v60.ts)
+        // martingalaCycles derived from peakHeights.length
 
         // Streak tracking
         let maxWinStreak = 0
@@ -1252,9 +1252,6 @@ export function DashboardLive() {
             greenCount++
             runningProfit -= BASE_BET * betMult
             martingalaStep++
-            currentPeakHeight++
-
-            if (currentPeakHeight > maxPeak) maxPeak = currentPeakHeight
 
             // Green = loss for streaks
             currentLossStreak++
@@ -1264,13 +1261,10 @@ export function DashboardLive() {
             // Check bust
             if (martingalaStep >= MAX_MART) {
               busts++
-              totalPeaks++
-              peakHeights.push(currentPeakHeight)
-              martingalaCycles++
+              // NOTE: Bust does NOT record a peak, does NOT reset currentPeakHeight (per simulate-v60.ts)
               signalResults.push({ signal: signals, win: false })
               profitCurve.push({ index: i, profit: runningProfit })
               martingalaStep = 0
-              currentPeakHeight = 0
               currentLossStreak = 0
               cooldownRemaining = COOLDOWN_AFTER_BUST
             } else {
@@ -1300,9 +1294,6 @@ export function DashboardLive() {
             // Peak closes: record height (losses before this win + the win)
             const peakHeight = currentPeakHeight + 1
             peakHeights.push(peakHeight)
-            totalPeaks++
-            martingalaCycles++
-            if (peakHeight > maxPeak) maxPeak = peakHeight
 
             signalResults.push({ signal: signals, win: true })
             profitCurve.push({ index: i, profit: runningProfit })
@@ -1330,19 +1321,14 @@ export function DashboardLive() {
             currentPeakHeight++
             martingalaStep++
 
-            if (currentPeakHeight > maxPeak) maxPeak = currentPeakHeight
-
             // Check bust
             if (martingalaStep >= MAX_MART) {
               busts++
-              totalPeaks++
-              peakHeights.push(currentPeakHeight)
-              martingalaCycles++
+              // NOTE: Bust does NOT record a peak, does NOT reset currentPeakHeight (per simulate-v60.ts)
               signalResults.push({ signal: signals, win: false })
               profitCurve.push({ index: i, profit: runningProfit })
 
               martingalaStep = 0
-              currentPeakHeight = 0
               currentLossStreak = 0
               cooldownRemaining = COOLDOWN_AFTER_BUST
             } else {
@@ -1360,14 +1346,10 @@ export function DashboardLive() {
           recordPredictionFeedback(predictedColor === actualColor, ['markov'], predictedColor)
         }
 
-        // Close unfinished peak at end of data
+        // Close unfinished peak at end of data (matches simulate-v60.ts)
+        // Only pushes the peak — does NOT add extra losses or cycles
         if (currentPeakHeight > 0) {
-          totalPeaks++
           peakHeights.push(currentPeakHeight)
-          losses++
-          martingalaCycles++
-          signalResults.push({ signal: signals, win: false })
-          profitCurve.push({ index: nums.length - 1, profit: runningProfit })
           if (runningProfit < peakRunningProfit) {
             const dd = peakRunningProfit - runningProfit
             if (dd > maxDrawdown) maxDrawdown = dd
@@ -1415,9 +1397,9 @@ export function DashboardLive() {
           profitPer100Spins: Math.round(profitPer100Spins * 100) / 100,
           roi: Math.round(roi * 10) / 10,
           maxDrawdown: Math.round(maxDrawdown * 100) / 100,
-          maxPeak,
-          totalPeaks,
-          martingalaCycles,
+          maxPeak: peakHeights.length > 0 ? Math.max(...peakHeights) : 0,
+          totalPeaks: peakHeights.length,
+          martingalaCycles: peakHeights.length,
           streaks: { maxWin: maxWinStreak, maxLoss: maxLossStreak },
           peakHistogram,
           accuracyByWindow,
