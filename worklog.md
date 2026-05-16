@@ -78,3 +78,26 @@ Stage Summary:
 - File modified: src/components/dashboard/DashboardLive.tsx
 - 3 changes applied: verdict subtext, individual histogram bars, signal peak indicator
 - Build: SUCCESS
+---
+Task ID: 2
+Agent: main
+Task: Fix V6.0 signal peak indicator not showing peaks on import
+
+Work Log:
+- Diagnosed issue: handleApplyImport was clearing signalPeakHistory with comment "signals are live-only"
+- With 63 SKIPs and 1 signal, no peaks were recorded so indicator showed nothing
+- Added calculateV60SignalPeaks() function (105 lines) that replicates simulate-v60.ts logic:
+  - Runs V6.0 simulation on imported numbers
+  - Tracks cooldown (1 after loss, 3 after bust, 1 after green)
+  - Records peaks on WIN only (matching backtesting behavior)
+  - Closes unfinished peaks at end
+  - Returns peaks, signal count, and skip count
+- Updated handleApplyImport: calls calculateV60SignalPeaks instead of clearing
+- Updated bet type change useEffect: also recalculates V6.0 signal peaks
+- Build: SUCCESS
+
+Stage Summary:
+- Root cause: signalPeakHistory was always cleared on import
+- Fix: calculate V6.0 peaks from imported sequence (same logic as backtesting)
+- File modified: src/components/dashboard/DashboardLive.tsx
+- Now when importing numbers, the V6.0 peak indicator shows the full peak distribution

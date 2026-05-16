@@ -559,6 +559,112 @@ export function DashboardLive() {
     }
   }, [])
 
+  // ════════════════════════════════════════════════════════════════
+  // V6.0 SIGNAL PEAK CALCULATOR — replicates simulate-v60.ts peak logic
+  // Used to recalculate signal peaks when importing historical numbers
+  // ════════════════════════════════════════════════════════════════
+  const calculateV60SignalPeaks = useCallback((nums: number[]): { peaks: EnginePeakRecord[]; signals: number; skips: number } => {
+    if (nums.length < 10) return { peaks: [], signals: 0, skips: 0 }
+
+    // Reset engine for clean simulation
+    resetRecoveryHistory()
+
+    const MIN_HISTORY = 10
+    const COOLDOWN_AFTER_LOSS = 1
+    const COOLDOWN_AFTER_BUST = 3
+    const COOLDOWN_AFTER_GREEN = 1
+
+    let cooldownRemaining = 0
+    let currentPeakHeight = 0
+    let signals = 0
+    let skips = 0
+    let totalProcessed = 0
+    const peaks: EnginePeakRecord[] = []
+
+    for (let i = MIN_HISTORY; i < nums.length; i++) {
+      const history = nums.slice(0, i)
+      const nextNumber = nums[i]
+      totalProcessed++
+
+      // 1. Cooldown first
+      if (cooldownRemaining > 0) {
+        cooldownRemaining--
+        skips++
+        continue
+      }
+
+      // 2. Generate prediction
+      const pred = generateSmartPrediction(history, 'color')
+      if (!pred.bestValue) continue
+
+      // 3. Engine SKIP
+      if (pred.shouldSkip === true) {
+        skips++
+        continue
+      }
+
+      // ═══ SIGNAL ═══
+      signals++
+      const predictedColor = pred.bestValue
+      const actualColor = getNumberColor(nextNumber)
+
+      // 4. GREEN (special loss)
+      if (actualColor === 'green') {
+        currentPeakHeight++
+        if (currentPeakHeight >= 3) {
+          // Bust — do NOT record peak (matches simulate-v60.ts)
+          currentPeakHeight = 0
+          cooldownRemaining = COOLDOWN_AFTER_BUST
+        } else {
+          cooldownRemaining = COOLDOWN_AFTER_GREEN
+        }
+        recordPredictionFeedback(false, ['markov'], predictedColor)
+        continue
+      }
+
+      // 5. WIN
+      if (predictedColor === actualColor) {
+        const peakHeight = currentPeakHeight + 1
+        peaks.push({
+          id: `imp-${peaks.length}-${i}`,
+          height: peakHeight,
+          prediction: { type: 'color', value: predictedColor },
+          resultNumber: nextNumber,
+          resultColor: actualColor,
+          timestamp: new Date()
+        })
+        currentPeakHeight = 0
+        // No cooldown after win
+      } else {
+        // 6. LOSS
+        currentPeakHeight++
+        if (currentPeakHeight >= 3) {
+          // Bust — do NOT record peak (matches simulate-v60.ts)
+          currentPeakHeight = 0
+          cooldownRemaining = COOLDOWN_AFTER_BUST
+        } else {
+          cooldownRemaining = COOLDOWN_AFTER_LOSS
+        }
+      }
+
+      recordPredictionFeedback(predictedColor === actualColor, ['markov'], predictedColor)
+    }
+
+    // Close unfinished peak at end (matches simulate-v60.ts)
+    if (currentPeakHeight > 0) {
+      peaks.push({
+        id: `imp-${peaks.length}-end`,
+        height: currentPeakHeight,
+        prediction: { type: 'color', value: '' },
+        resultNumber: nums[nums.length - 1],
+        resultColor: getNumberColor(nums[nums.length - 1]),
+        timestamp: new Date()
+      })
+    }
+
+    return { peaks, signals, skips }
+  }, [generateSmartPrediction])
+
   // Helper: build peak calculation options based on current bet type and dozen mode
   // (placed after generateSmartPrediction and checkPredictionMatch to avoid "used before declaration")
   const getPeakCalcOptions = useCallback((bt: BetType, dm: BtDozenMode) => {
@@ -1054,13 +1160,12 @@ export function DashboardLive() {
     numbersRef.current = newNumbers
     setCurrentPeak(1)
     currentPeakRef.current = 1
-    // Reset signal-only peak tracking on import (signals are live-only)
-    setSignalPeakHistory([])
     setSignalPeak(1)
     signalPeakRef.current = 1
     setCurrentPrediction(null)
     currentPredictionRef.current = null
     setConfidence(0)
+
     // Recalculate general peak history from ALL imported numbers (includes SKIP peaks)
     if (newNumbers.length >= 6) {
       const peakOpts = getPeakCalcOptions(selectedBetTypeRef.current, calcDozenModeRef.current)
@@ -1070,8 +1175,27 @@ export function DashboardLive() {
       setPeakHistory([])
     }
 
-    console.log('[DashboardLive] Import:', newNumbers.length, 'numbers loaded. General peaks recalculated.')
-    
+    // ═══ V6.0 Signal Peak Calculation from imported numbers ═══
+    // Instead of clearing signal peaks, recalculate them using the same logic as simulate-v60.ts
+    if (newNumbers.length >= 10) {
+      const v60result = calculateV60SignalPeaks(newNumbers)
+      setSignalPeakHistory(v60result.peaks)
+      setSignalPeak(v60result.peaks.length > 0 ? 1 : 1)
+      signalPeakRef.current = 1
+      // Also initialize signal/skip counters from the import
+      setTotalSignals(v60result.signals)
+      setTotalSkips(v60result.skips)
+      totalSignalsRef.current = v60result.signals
+      totalSkipsRef.current = v60result.skips
+      console.log(`[DashboardLive] V6.0 Import: ${newNumbers.length} numbers → ${v60result.signals} signals, ${v60result.skips} skips, ${v60result.peaks.length} peaks`)
+    } else {
+      setSignalPeakHistory([])
+      setTotalSignals(0)
+      setTotalSkips(0)
+      totalSignalsRef.current = 0
+      totalSkipsRef.current = 0
+    }
+
     if (newNumbers.length >= 5) {
       const smart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
       setSmartPrediction(smart)
@@ -1080,9 +1204,8 @@ export function DashboardLive() {
       // DO NOT set currentPredictionRef.current — import prediction must NOT
       // be used for live peak tracking (causes phantom peaks without signal count)
       setConfidence(Math.min(85, smart.bestConfidence))
-      // Only show skip state, do NOT count — counters start from first LIVE number
+      // Only show skip state
       setIsEngineSkip(smart.shouldSkip === true)
-      // Also sync the ref directly to avoid timing gap with useEffect
       isEngineSkipRef.current = smart.shouldSkip === true
     } else {
       setCurrentPrediction(null)
@@ -1092,7 +1215,7 @@ export function DashboardLive() {
     setImportDialogOpen(false)
     setImportText('')
     setImportPreview(null)
-  }, [importPreview, generatePrediction, calculateStats, getPeakCalcOptions])
+  }, [importPreview, generatePrediction, calculateStats, getPeakCalcOptions, calculateV60SignalPeaks])
 
   // Recalculate peaks when bet type or dozen mode changes (keeps peak history consistent)
   useEffect(() => {
@@ -1101,13 +1224,25 @@ export function DashboardLive() {
       const peakOpts = getPeakCalcOptions(selectedBetTypeRef.current, calcDozenModeRef.current)
       const historicalPeaks = calculatePeakHistory(nums, peakOpts)
       setPeakHistory(historicalPeaks)
-      // Reset current peak and prediction when bet type changes
       setCurrentPeak(1)
       currentPeakRef.current = 1
-      // Also reset signal-only peak tracking
-      setSignalPeakHistory([])
-      setSignalPeak(1)
-      signalPeakRef.current = 1
+
+      // Also recalculate V6.0 signal peaks (always 'color' based)
+      if (nums.length >= 10) {
+        const v60result = calculateV60SignalPeaks(nums)
+        setSignalPeakHistory(v60result.peaks)
+        setSignalPeak(1)
+        signalPeakRef.current = 1
+        setTotalSignals(v60result.signals)
+        setTotalSkips(v60result.skips)
+        totalSignalsRef.current = v60result.signals
+        totalSkipsRef.current = v60result.skips
+      } else {
+        setSignalPeakHistory([])
+        setSignalPeak(1)
+        signalPeakRef.current = 1
+      }
+
       setCurrentPrediction(null)
       currentPredictionRef.current = null
       setConfidence(0)
@@ -1121,7 +1256,7 @@ export function DashboardLive() {
         setConfidence(Math.min(85, smart.bestConfidence))
       }
     }
-  }, [selectedBetType, peakDozenMode, getPeakCalcOptions, generateSmartPrediction])
+  }, [selectedBetType, peakDozenMode, getPeakCalcOptions, generateSmartPrediction, calculateV60SignalPeaks])
 
   // ════════════════════════════════════════════════════════════════
   // ADVANCED BACKTESTING V6.0 — Motor V6.0 Full Simulation
