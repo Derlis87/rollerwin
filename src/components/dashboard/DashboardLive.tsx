@@ -1345,8 +1345,8 @@ export function DashboardLive() {
         // Peak tracking (only on SIGNAL bets, not SKIP)
         let currentPeakHeight = 0
         const peakHeights: number[] = []
-        // maxPeak computed from peakHeights at end (per simulate-v60.ts)
-        // totalPeaks derived from peakHeights.length (matches simulate-v60.ts)
+        // Also track peak records for V6.0 signal peak history sync
+        const signalPeakRecords: EnginePeakRecord[] = []
         // martingalaCycles derived from peakHeights.length
 
         // Streak tracking
@@ -1441,6 +1441,16 @@ export function DashboardLive() {
             const peakHeight = currentPeakHeight + 1
             peakHeights.push(peakHeight)
 
+            // Also record as EnginePeakRecord for V6.0 signal peak history sync
+            signalPeakRecords.push({
+              id: `bt-${signalPeakRecords.length}-${i}`,
+              height: peakHeight,
+              prediction: { type: 'color', value: predictedColor },
+              resultNumber: nextNumber,
+              resultColor: actualColor,
+              timestamp: new Date()
+            })
+
             signalResults.push({ signal: signals, win: true })
             profitCurve.push({ index: i, profit: runningProfit })
 
@@ -1496,6 +1506,14 @@ export function DashboardLive() {
         // Only pushes the peak — does NOT add extra losses or cycles
         if (currentPeakHeight > 0) {
           peakHeights.push(currentPeakHeight)
+          signalPeakRecords.push({
+            id: `bt-${signalPeakRecords.length}-end`,
+            height: currentPeakHeight,
+            prediction: { type: 'color', value: '' },
+            resultNumber: nums[nums.length - 1],
+            resultColor: getNumberColor(nums[nums.length - 1]),
+            timestamp: new Date()
+          })
           if (runningProfit < peakRunningProfit) {
             const dd = peakRunningProfit - runningProfit
             if (dd > maxDrawdown) maxDrawdown = dd
@@ -1554,6 +1572,16 @@ export function DashboardLive() {
         }
 
         setAdvBtResults(results)
+
+        // ═══ Sync V6.0 Signal Peak History — exact same data as backtesting ═══
+        setSignalPeakHistory(signalPeakRecords)
+        setSignalPeak(signalPeakRecords.length > 0 ? signalPeakRecords[signalPeakRecords.length - 1].height : 1)
+        signalPeakRef.current = signalPeakRecords.length > 0 ? signalPeakRecords[signalPeakRecords.length - 1].height : 1
+        setTotalSignals(signals)
+        setTotalSkips(totalSkips)
+        totalSignalsRef.current = signals
+        totalSkipsRef.current = totalSkips
+        console.log(`[AdvBtRun] Synced V6.0 peaks: ${signalPeakRecords.length} peaks from ${nums.length} numbers (signals: ${signals})`)
       } catch (err) {
         console.error('[AdvBacktestV6] Error:', err)
       } finally {
