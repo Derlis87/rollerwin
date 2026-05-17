@@ -569,13 +569,17 @@ export function DashboardLive() {
     // Reset engine for clean simulation
     resetRecoveryHistory()
 
+    // ═══ Same constants as handleAdvBtRun backtesting ═══
     const MIN_HISTORY = 10
+    const MARTINGALA = [1, 2, 4]
+    const MAX_MART = MARTINGALA.length   // 3
     const COOLDOWN_AFTER_LOSS = 1
     const COOLDOWN_AFTER_BUST = 3
     const COOLDOWN_AFTER_GREEN = 1
 
     let cooldownRemaining = 0
-    let currentPeakHeight = 0
+    let martingalaStep = 0           // Separate martingala tracker (like backtesting)
+    let currentPeakHeight = 0        // Peak height tracker (decoupled from martingala)
     let signals = 0
     let skips = 0
     let totalProcessed = 0
@@ -586,7 +590,7 @@ export function DashboardLive() {
       const nextNumber = nums[i]
       totalProcessed++
 
-      // 1. Cooldown first
+      // 1. Cooldown first (does NOT reset martingala, does NOT advance peak)
       if (cooldownRemaining > 0) {
         cooldownRemaining--
         skips++
@@ -597,9 +601,11 @@ export function DashboardLive() {
       const pred = generateSmartPrediction(history, 'color')
       if (!pred.bestValue) continue
 
-      // 3. Engine SKIP
+      // 3. Engine SKIP (resets martingala, does NOT advance peak)
       if (pred.shouldSkip === true) {
         skips++
+        martingalaStep = 0
+        // currentPeakHeight is NOT reset on skip (per backtesting logic)
         continue
       }
 
@@ -608,12 +614,14 @@ export function DashboardLive() {
       const predictedColor = pred.bestValue
       const actualColor = getNumberColor(nextNumber)
 
-      // 4. GREEN (special loss)
+      // 4. GREEN (special loss — increments martingala but NOT peak height)
       if (actualColor === 'green') {
-        currentPeakHeight++
-        if (currentPeakHeight >= 3) {
-          // Bust — do NOT record peak (matches simulate-v60.ts)
-          currentPeakHeight = 0
+        martingalaStep++
+        // currentPeakHeight is NOT incremented for green (matches backtesting)
+
+        if (martingalaStep >= MAX_MART) {
+          // Bust — does NOT record peak, does NOT reset currentPeakHeight
+          martingalaStep = 0
           cooldownRemaining = COOLDOWN_AFTER_BUST
         } else {
           cooldownRemaining = COOLDOWN_AFTER_GREEN
@@ -633,14 +641,17 @@ export function DashboardLive() {
           resultColor: actualColor,
           timestamp: new Date()
         })
+        // Reset both trackers on win
+        martingalaStep = 0
         currentPeakHeight = 0
-        // No cooldown after win
       } else {
         // 6. LOSS
         currentPeakHeight++
-        if (currentPeakHeight >= 3) {
-          // Bust — do NOT record peak (matches simulate-v60.ts)
-          currentPeakHeight = 0
+        martingalaStep++
+
+        if (martingalaStep >= MAX_MART) {
+          // Bust — does NOT record peak, does NOT reset currentPeakHeight
+          martingalaStep = 0
           cooldownRemaining = COOLDOWN_AFTER_BUST
         } else {
           cooldownRemaining = COOLDOWN_AFTER_LOSS
@@ -650,7 +661,7 @@ export function DashboardLive() {
       recordPredictionFeedback(predictedColor === actualColor, ['markov'], predictedColor)
     }
 
-    // Close unfinished peak at end (matches simulate-v60.ts)
+    // Close unfinished peak at end (matches backtesting logic)
     if (currentPeakHeight > 0) {
       peaks.push({
         id: `imp-${peaks.length}-end`,
