@@ -2126,8 +2126,8 @@ export function DashboardLive() {
                                   initial={{ scaleY: 0 }}
                                   animate={{ scaleY: 1 }}
                                   transition={{ duration: 0.1 }}
-                                  style={{ height: `${Math.max(4, (peak.height / 10) * 100)}%`, transformOrigin: 'bottom' }}
-                                  className={`flex-shrink-0 rounded-t-sm cursor-pointer hover:opacity-80 ${
+                                  style={{ height: `${Math.max(4, (peak.height / 10) * 100)}%`, transformOrigin: 'bottom', width: '6px', minWidth: '6px' }}
+                                  className={`rounded-t-sm cursor-pointer hover:opacity-80 ${
                                     peak.height <= 3 ? 'bg-green-500' :
                                     peak.height <= 6 ? 'bg-amber-500' : 'bg-red-500'
                                   }`}
@@ -2477,8 +2477,8 @@ export function DashboardLive() {
                                 initial={{ scaleY: 0 }}
                                 animate={{ scaleY: 1 }}
                                 transition={{ duration: 0.1 }}
-                                style={{ height: `${Math.max(4, (peak.height / 10) * 100)}%`, transformOrigin: 'bottom' }}
-                                className={`flex-shrink-0 rounded-t-sm cursor-pointer hover:opacity-80 ${
+                                style={{ height: `${Math.max(4, (peak.height / 10) * 100)}%`, transformOrigin: 'bottom', width: '8px', minWidth: '8px' }}
+                                className={`rounded-t-sm cursor-pointer hover:opacity-80 ${
                                   peak.height <= 3 ? 'bg-green-500' :
                                   peak.height <= 6 ? 'bg-amber-500' : 'bg-red-500'
                                 }`}
