@@ -2120,22 +2120,22 @@ export function DashboardLive() {
                         <div className="relative bg-zinc-800/40 rounded-lg px-2 pt-4 pb-1">
                           <div className="overflow-x-auto custom-scrollbar-x">
                             <div className="flex items-end h-16" style={{ minWidth: `${signalPeakHistory.length * 10}px` }}>
-                              {[...signalPeakHistory].reverse().map((peak) => (
-                                <div key={peak.id} className="flex flex-col items-center" style={{ minWidth: '8px' }}>
-                                  <span className="text-[7px] font-bold leading-none mb-0.5 text-white">{peak.height}</span>
-                                  <motion.div
-                                    initial={{ scaleY: 0 }}
-                                    animate={{ scaleY: 1 }}
-                                    transition={{ duration: 0.1 }}
-                                    style={{ height: `${Math.max(3, (peak.height / 10) * 100)}%`, transformOrigin: 'bottom', width: '3px', minWidth: '3px' }}
-                                    className={`rounded-t-sm cursor-pointer hover:opacity-80 ${
-                                      peak.height <= 3 ? 'bg-green-500' :
-                                      peak.height <= 6 ? 'bg-amber-500' : 'bg-red-500'
-                                    }`}
-                                    title={`Pico ${peak.height} → #${peak.resultNumber} (${peak.resultColor})`}
-                                  />
-                                </div>
-                              ))}
+                              {[...signalPeakHistory].reverse().map((peak) => {
+                                const barH = Math.max(3, Math.round((peak.height / 10) * 56))
+                                return (
+                                  <div key={peak.id} className="flex flex-col items-center justify-end" style={{ minWidth: '8px' }}>
+                                    <span className="text-[7px] font-bold leading-none mb-0.5 text-white">{peak.height}</span>
+                                    <div
+                                      style={{ height: `${barH}px` }}
+                                      className={`rounded-t-sm cursor-pointer hover:opacity-80 ${
+                                        peak.height <= 3 ? 'bg-green-500' :
+                                        peak.height <= 6 ? 'bg-amber-500' : 'bg-red-500'
+                                      }`}
+                                      title={`Pico ${peak.height} → #${peak.resultNumber} (${peak.resultColor})`}
+                                    />
+                                  </div>
+                                )
+                              })}
                             </div>
                           </div>
                         </div>
@@ -2473,23 +2473,22 @@ export function DashboardLive() {
                       <div className="bg-zinc-800/40 rounded-lg px-2 pt-5 pb-1">
                         <div className="overflow-x-auto custom-scrollbar-x">
                           <div className="flex items-end h-24" style={{ minWidth: `${signalPeakHistory.length * 12}px` }}>
-                            {[...signalPeakHistory].reverse().map((peak) => (
-                              <div key={peak.id} className="flex flex-col items-center" style={{ minWidth: '10px' }}>
-                                <span className="text-[8px] font-bold leading-none mb-0.5 text-white">{peak.height}</span>
-                                <motion.div
-                                  key={peak.id}
-                                  initial={{ scaleY: 0 }}
-                                  animate={{ scaleY: 1 }}
-                                  transition={{ duration: 0.1 }}
-                                  style={{ height: `${Math.max(3, (peak.height / 10) * 100)}%`, transformOrigin: 'bottom', width: '4px', minWidth: '4px' }}
-                                  className={`rounded-t-sm cursor-pointer hover:opacity-80 ${
-                                    peak.height <= 3 ? 'bg-green-500' :
-                                    peak.height <= 6 ? 'bg-amber-500' : 'bg-red-500'
-                                  }`}
-                                  title={`Pico ${peak.height} → #${peak.resultNumber} (${peak.resultColor})`}
-                                />
-                              </div>
-                            ))}
+                            {[...signalPeakHistory].reverse().map((peak) => {
+                              const barH = Math.max(4, Math.round((peak.height / 10) * 88))
+                              return (
+                                <div key={peak.id} className="flex flex-col items-center justify-end" style={{ minWidth: '10px' }}>
+                                  <span className="text-[8px] font-bold leading-none mb-0.5 text-white">{peak.height}</span>
+                                  <div
+                                    style={{ height: `${barH}px` }}
+                                    className={`rounded-t-sm cursor-pointer hover:opacity-80 ${
+                                      peak.height <= 3 ? 'bg-green-500' :
+                                      peak.height <= 6 ? 'bg-amber-500' : 'bg-red-500'
+                                    }`}
+                                    title={`Pico ${peak.height} → #${peak.resultNumber} (${peak.resultColor})`}
+                                  />
+                                </div>
+                              )
+                            })}
                           </div>
                         </div>
                       </div>
