@@ -2116,27 +2116,23 @@ export function DashboardLive() {
                             <span className="text-zinc-500">Prom: <span className="text-zinc-300 font-bold">{signalPeakHistory.length > 0 ? (signalPeakHistory.reduce((s, p) => s + p.height, 0) / signalPeakHistory.length).toFixed(1) : '0'}</span></span>
                           </div>
                         </div>
-                        {/* Horizontal bars with scrollbar — all peaks visible */}
-                        <div className="relative bg-zinc-800/30 rounded-lg px-2 pt-5 pb-1">
+                        {/* Volume-style peak histogram with scrollbar */}
+                        <div className="relative bg-zinc-800/40 rounded-lg px-2 py-1.5">
                           <div className="overflow-x-auto custom-scrollbar-x">
-                            <div className="flex items-end gap-[2px] h-20" style={{ minWidth: `${signalPeakHistory.length * 14}px` }}>
-                              {[...signalPeakHistory].reverse().map((peak, i) => (
-                                <div key={peak.id} className="flex flex-col items-center relative" style={{ minWidth: '12px' }}>
-                                  {/* Peak height number above bar */}
-                                  <span className="text-[8px] font-bold leading-none mb-0.5 text-white">
-                                    {peak.height}
-                                  </span>
-                                  <motion.div
-                                    initial={{ height: 0 }}
-                                    animate={{ height: `${Math.max(3, (peak.height / 10) * 100)}%` }}
-                                    transition={{ duration: 0.15 }}
-                                    className={`w-2 rounded-t cursor-pointer hover:brightness-110 ${
-                                      peak.height <= 3 ? 'bg-green-500' :
-                                      peak.height <= 6 ? 'bg-amber-500' : 'bg-red-500'
-                                    }`}
-                                    title={`Pico ${peak.height} → #${peak.resultNumber} (${peak.resultColor})`}
-                                  />
-                                </div>
+                            <div className="flex items-end h-16" style={{ minWidth: `${signalPeakHistory.length * 8}px` }}>
+                              {[...signalPeakHistory].reverse().map((peak) => (
+                                <motion.div
+                                  key={peak.id}
+                                  initial={{ scaleY: 0 }}
+                                  animate={{ scaleY: 1 }}
+                                  transition={{ duration: 0.1 }}
+                                  style={{ height: `${Math.max(4, (peak.height / 10) * 100)}%`, transformOrigin: 'bottom' }}
+                                  className={`flex-shrink-0 rounded-t-sm cursor-pointer hover:opacity-80 ${
+                                    peak.height <= 3 ? 'bg-green-500' :
+                                    peak.height <= 6 ? 'bg-amber-500' : 'bg-red-500'
+                                  }`}
+                                  title={`Pico ${peak.height} → #${peak.resultNumber} (${peak.resultColor})`}
+                                />
                               ))}
                             </div>
                           </div>
@@ -2472,26 +2468,22 @@ export function DashboardLive() {
                   {/* Barras visuales de picos de señales con scrollbar */}
                   {signalPeakHistory.length > 0 && (
                     <>
-                      <div className="bg-zinc-800/30 rounded-lg px-2 pt-5 pb-1">
+                      <div className="bg-zinc-800/40 rounded-lg px-2 py-2">
                         <div className="overflow-x-auto custom-scrollbar-x">
-                          <div className="flex items-end gap-[2px] h-32" style={{ minWidth: `${signalPeakHistory.length * 16}px` }}>
-                            {[...signalPeakHistory].reverse().map((peak, i) => (
-                              <div key={peak.id} className="flex flex-col items-center relative" style={{ minWidth: '14px' }}>
-                                <span className="text-[9px] font-bold leading-none mb-0.5 text-white">
-                                  {peak.height}
-                                </span>
-                                <motion.div
-                                  key={peak.id}
-                                  initial={{ height: 0 }}
-                                  animate={{ height: `${Math.max(4, (peak.height / 10) * 100)}%` }}
-                                  transition={{ duration: 0.15 }}
-                                  className={`w-3 rounded-t cursor-pointer hover:brightness-110 ${
-                                    peak.height <= 3 ? 'bg-green-500' :
-                                    peak.height <= 6 ? 'bg-amber-500' : 'bg-red-500'
-                                  }`}
-                                  title={`Pico ${peak.height} → #${peak.resultNumber} (${peak.resultColor})`}
-                                />
-                              </div>
+                          <div className="flex items-end h-24" style={{ minWidth: `${signalPeakHistory.length * 10}px` }}>
+                            {[...signalPeakHistory].reverse().map((peak) => (
+                              <motion.div
+                                key={peak.id}
+                                initial={{ scaleY: 0 }}
+                                animate={{ scaleY: 1 }}
+                                transition={{ duration: 0.1 }}
+                                style={{ height: `${Math.max(4, (peak.height / 10) * 100)}%`, transformOrigin: 'bottom' }}
+                                className={`flex-shrink-0 rounded-t-sm cursor-pointer hover:opacity-80 ${
+                                  peak.height <= 3 ? 'bg-green-500' :
+                                  peak.height <= 6 ? 'bg-amber-500' : 'bg-red-500'
+                                }`}
+                                title={`Pico ${peak.height} → #${peak.resultNumber} (${peak.resultColor})`}
+                              />
                             ))}
                           </div>
                         </div>
