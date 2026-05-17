@@ -2126,8 +2126,8 @@ export function DashboardLive() {
                                   <div key={peak.id} className="flex flex-col items-center justify-end" style={{ minWidth: '8px' }}>
                                     <span className="text-[7px] font-bold leading-none mb-0.5 text-white">{peak.height}</span>
                                     <div
-                                      style={{ height: `${barH}px` }}
-                                      className={`rounded-t-sm cursor-pointer hover:opacity-80 ${
+                                      style={{ height: `${barH}px`, width: '4px' }}
+                                      className={`rounded-t-sm cursor-pointer hover:opacity-80 flex-shrink-0 ${
                                         peak.height <= 3 ? 'bg-green-500' :
                                         peak.height <= 6 ? 'bg-amber-500' : 'bg-red-500'
                                       }`}
@@ -2479,8 +2479,8 @@ export function DashboardLive() {
                                 <div key={peak.id} className="flex flex-col items-center justify-end" style={{ minWidth: '10px' }}>
                                   <span className="text-[8px] font-bold leading-none mb-0.5 text-white">{peak.height}</span>
                                   <div
-                                    style={{ height: `${barH}px` }}
-                                    className={`rounded-t-sm cursor-pointer hover:opacity-80 ${
+                                    style={{ height: `${barH}px`, width: '5px' }}
+                                    className={`rounded-t-sm cursor-pointer hover:opacity-80 flex-shrink-0 ${
                                       peak.height <= 3 ? 'bg-green-500' :
                                       peak.height <= 6 ? 'bg-amber-500' : 'bg-red-500'
                                     }`}
