@@ -730,38 +730,50 @@ export function DashboardLive() {
   // Handle number input
   const handleNumberInput = useCallback((num: number, fromDemo = false) => {
     if (soundEnabledRef.current && !fromDemo) playSound('click')
-    
+
     // Add number to history
     const newNumbers = [...numbersRef.current, num]
     setNumbers(newNumbers)
-    
+
     // Get current prediction (generate if needed) - MINIMO 5 NUMEROS
     let prediction = currentPredictionRef.current
-    
+
     if (!prediction && newNumbers.length >= 5) {
       // Generate smart prediction — V6.0 single source of truth
       const smart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
       setSmartPrediction(smart)
-      updateEngineStatus(smart.shouldSkip === true)
+      // Set engine skip state WITHOUT incrementing counters (first prediction is just setup)
+      setIsEngineSkip(smart.shouldSkip === true)
+      isEngineSkipRef.current = smart.shouldSkip === true
       prediction = { type: smart.type, value: smart.bestValue }
       setCurrentPrediction(prediction)
       setConfidence(Math.min(85, smart.bestConfidence))
     }
-    
+
     // Check if we have a prediction to verify
     if (prediction) {
-      // V6.0: If engine says SKIP, don't count this for peaks/calculator
+      // V6.0: If engine says SKIP, count this number as SKIP and don't track peak
       if (isEngineSkipRef.current) {
-        // SKIP mode: generate new prediction but don't track peak
+        // === COUNT: this number was SKIPPED ===
+        totalSkipsRef.current++
+        setTotalSkips(totalSkipsRef.current)
+
+        // Generate new prediction for next round (without counting)
         if (newNumbers.length >= 5) {
           const newSmart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
           setSmartPrediction(newSmart)
-          updateEngineStatus(newSmart.shouldSkip === true)
+          const newSkip = newSmart.shouldSkip === true
+          setIsEngineSkip(newSkip)
+          isEngineSkipRef.current = newSkip
           setCurrentPrediction({ type: newSmart.type, value: newSmart.bestValue })
           setConfidence(Math.min(85, newSmart.bestConfidence))
         }
         return
       }
+
+      // === COUNT: this number is a SIGNAL round (engine gave a prediction) ===
+      totalSignalsRef.current++
+      setTotalSignals(totalSignalsRef.current)
       // In double dozen/column mode, check against top 2 predictions
       const isDoubleBet = (selectedBetTypeRef.current === 'dozen' || selectedBetTypeRef.current === 'column') && calcDozenModeRef.current === 'double'
       const sp = smartPredictionRef.current
@@ -896,11 +908,18 @@ export function DashboardLive() {
         // Reset peak to 1
         setCurrentPeak(1)
         
-        // Generate new prediction for next round - V6.0 single source of truth
+        // Generate new prediction for next round (without counting — signal was already counted above)
         if (newNumbers.length >= 5) {
           const newSmart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
           setSmartPrediction(newSmart)
-          updateEngineStatus(newSmart.shouldSkip === true)
+          const newSkip = newSmart.shouldSkip === true
+          const wasSkip = isEngineSkipRef.current
+          setIsEngineSkip(newSkip)
+          isEngineSkipRef.current = newSkip
+          // Play alert sound when transitioning from SIGNAL → SKIP
+          if (!wasSkip && newSkip && soundEnabledRef.current) {
+            // no special sound needed here
+          }
           setCurrentPrediction({ type: newSmart.type, value: newSmart.bestValue })
           setConfidence(Math.min(85, newSmart.bestConfidence))
         }
@@ -1019,11 +1038,13 @@ export function DashboardLive() {
           }
         }
         
-        // Generate new prediction at each peak - V6.0 single source of truth
+        // Generate new prediction at each peak (without counting — signal was already counted above)
         if (newNumbers.length >= 5) {
           const newSmart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
           setSmartPrediction(newSmart)
-          updateEngineStatus(newSmart.shouldSkip === true)
+          const newSkip = newSmart.shouldSkip === true
+          setIsEngineSkip(newSkip)
+          isEngineSkipRef.current = newSkip
           setCurrentPrediction({ type: newSmart.type, value: newSmart.bestValue })
           setConfidence(Math.min(85, newSmart.bestConfidence))
         }
