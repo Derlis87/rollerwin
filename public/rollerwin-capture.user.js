@@ -1,11 +1,19 @@
 // ==UserScript==
 // @name         RollerWin Capture Evolution Betfury
 // @namespace    http://rollerwin.local/
-// @version      3.1.0
+// @version      3.2.0
 // @description  Detecta numeros de ruleta Evolution en Betfury y los envia automaticamente a RollerWin
 // @author       RollerWin
 // @match        https://betfury.io/*
 // @match        https://betfury.com/*
+// @match        https://*.evolution-cdn.com/*
+// @match        https://*.evolution-gaming.com/*
+// @match        https://*.evo-gaming.com/*
+// @match        https://*.evolution.live/*
+// @match        https://*.ssl-live-cdn.com/*
+// @match        https://*.evolutionmalta.com/*
+// @match        https://*.evolutiongames.com/*
+// @match        https://*.evoplay.games/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_notification
 // @grant        GM_setValue
@@ -19,6 +27,9 @@
 (function () {
   'use strict'
 
+  // Detectar si estamos dentro de un iframe
+  var isInIframe = (window.self !== window.top)
+
   // ── Configuracion ──
   var SERVER_URL = GM_getValue('rw_serverUrl', 'https://rollerwin3.onrender.com')
   var enabled = GM_getValue('rw_enabled', true)
@@ -27,7 +38,7 @@
   var errorCount = 0
   var lastSentTime = 0
   var statusEl = null
-  var statusMsg = 'Iniciando...'
+  var statusMsg = isInIframe ? 'Modo iframe activo' : 'Iniciando...'
   var isSettingsOpen = false
 
   var RED_NUMBERS = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]
@@ -54,18 +65,8 @@
     if (statusEl) statusEl.textContent = msg
   }
 
-  function extractDomain(url) {
-    try {
-      if (url.indexOf('://') === -1) url = 'https://' + url
-      return new URL(url).hostname
-    } catch(e) {
-      return url
-    }
-  }
-
   function sendToRollerWin(num) {
     var now = Date.now()
-    // No enviar mas de 1 numero cada 3 segundos (anti-duplicados)
     if (now - lastSentTime < 3000) return
 
     var url = SERVER_URL.replace(/\/+$/, '') + '/api/capture/receive'
@@ -79,19 +80,22 @@
           lastSentTime = now
           sentCount++
           errorCount = 0
-          setStatus(num + ' (' + getColor(num) + ') enviado OK\n' + sentCount + ' capturados')
+          console.log('[RollerWin] ' + num + ' (' + getColor(num) + ') enviado OK - ' + sentCount + ' total')
+          if (!isInIframe) {
+            setStatus(num + ' (' + getColor(num) + ') enviado OK\n' + sentCount + ' capturados')
+          }
         } else {
           errorCount++
-          setStatus('Error HTTP ' + resp.status + '\n' + errorCount + ' errores seguidos')
+          if (!isInIframe) setStatus('Error HTTP ' + resp.status + '\n' + errorCount + ' errores seguidos')
         }
       },
       onerror: function() {
         errorCount++
-        setStatus('Error de conexion\nRevisa la URL del servidor\n' + errorCount + ' errores')
+        if (!isInIframe) setStatus('Error de conexion\nRevisa la URL del servidor\n' + errorCount + ' errores')
       },
       ontimeout: function() {
         errorCount++
-        setStatus('Timeout - sin respuesta\n' + errorCount + ' errores')
+        if (!isInIframe) setStatus('Timeout - sin respuesta\n' + errorCount + ' errores')
       }
     })
   }
@@ -105,7 +109,7 @@
     GM_setValue('rw_lastNumber', lastNumber)
     sendToRollerWin(num)
     updateLastNumberUI(num)
-    console.log('[RollerWin] Numero detectado:', num, '(' + getColor(num) + ')')
+    console.log('[RollerWin] Numero detectado:', num, '(' + getColor(num) + ')', isInIframe ? '[IFRAME]' : '[PARENT]')
   }
 
   // ════════════════════════════════════════════
@@ -138,7 +142,7 @@
     ProxiedWebSocket.__rwHooked = true
 
     window.WebSocket = ProxiedWebSocket
-    console.log('[RollerWin] WebSocket hook instalado')
+    console.log('[RollerWin] WebSocket hook instalado' + (isInIframe ? ' [IFRAME]' : ''))
   }
 
   function parseSocketMessage(data) {
@@ -154,7 +158,7 @@
       text = String(data)
     }
 
-    // Socket.io v4 format: "42[\"event\",{...}]"
+    // Socket.io v4 format
     if (text.indexOf('42') === 0 || text.indexOf('43') === 0) {
       try {
         var jsonStr = text.substring(2)
@@ -166,7 +170,7 @@
       return
     }
 
-    // Socket.io long polling: numeric prefix + JSON array
+    // Long polling format
     if (/^\d{1,2}\[/.test(text)) {
       try {
         var idx = text.indexOf('[')
@@ -201,7 +205,6 @@
   function extractFromObject(obj, depth) {
     if (!obj || typeof obj !== 'object' || depth > 6) return
 
-    // Direct number fields - busca el numero resultado
     var numberFields = [
       'number', 'result', 'resultNumber', 'winningNumber',
       'win_number', 'game_number', 'roulette_number', 'value',
@@ -221,7 +224,6 @@
       }
     }
 
-    // Nested "result" object
     if (obj.result !== undefined) {
       if (typeof obj.result === 'number') {
         if (obj.result >= 0 && obj.result <= 36) {
@@ -233,12 +235,10 @@
       }
     }
 
-    // Nested "data"
     if (obj.data !== undefined && typeof obj.data === 'object' && obj.data !== null) {
       extractFromObject(obj.data, depth + 1)
     }
 
-    // Arrays: results, history, numbers
     var arrFields = ['results', 'history', 'numbers', 'gameResults', 'game_history']
     for (var j = 0; j < arrFields.length; j++) {
       var arr = obj[arrFields[j]]
@@ -254,15 +254,9 @@
       }
     }
 
-    // "game" / "round" objects
-    if (obj.game && typeof obj.game === 'object') {
-      extractFromObject(obj.game, depth + 1)
-    }
-    if (obj.round && typeof obj.round === 'object') {
-      extractFromObject(obj.round, depth + 1)
-    }
+    if (obj.game && typeof obj.game === 'object') extractFromObject(obj.game, depth + 1)
+    if (obj.round && typeof obj.round === 'object') extractFromObject(obj.round, depth + 1)
 
-    // Shallow scan at low depth
     if (depth < 2) {
       var keys = Object.keys(obj)
       for (var k = 0; k < keys.length; k++) {
@@ -289,11 +283,11 @@
 
   // ════════════════════════════════════════════
   // Strategy 2: DOM MutationObserver
-  // Optimizado para Evolution en Betfury
   // ════════════════════════════════════════════
   var domThrottleTimer = null
 
   function setupDOMObserver() {
+    if (!document.body) return
     var observer = new MutationObserver(function() {
       if (!enabled) return
       if (domThrottleTimer) return
@@ -311,42 +305,41 @@
   }
 
   function scanDOM() {
-    // Selectores genericos para ruleta en Betfury
     var selectors = [
-      // Betfury game history
       '.game-history-item__value',
       '.game-history__item-value',
       '.game-history-number',
       '[class*="game-history"] [class*="number"]',
       '[class*="game-history"] [class*="value"]',
       '.history-item__number',
-      // Result display
       '[class*="bet-result"] [class*="number"]',
       '[class*="result-popup"] [class*="number"]',
       '.last-result',
       '.current-number',
-      // Evolution specific patterns in Betfury
       '[class*="roulette"] [class*="result"]',
       '[class*="roulette"] [class*="winning"]',
       '[class*="roulette"] [class*="history"] [class*="item"]',
       '[class*="evolution"] [class*="result"]',
       '[class*="evolution"] [class*="history"] [class*="number"]',
-      // Generic casino result elements
       '[data-result-number]',
       '[data-number]',
       '[class*="game-result"]',
       '[class*="round-result"]',
-      // Betfury specific classes
       '.bng__game-history-item-value',
       '.bng__roulette-result',
       '[class*="bng"] [class*="history"] [class*="value"]',
-      '[class*="bng"] [class*="result"] [class*="num"]'
+      '[class*="bng"] [class*="result"] [class*="num"]',
+      // Evolution iframe internal selectors
+      '[class*="roulette-number"]',
+      '[class*="winning-number"]',
+      '[class*="game-number-display"]',
+      '[class*="result-number-display"]',
+      '[class*="number-display"]'
     ]
 
     for (var i = 0; i < selectors.length; i++) {
       try {
         var els = document.querySelectorAll(selectors[i])
-        // Solo tomar el PRIMER elemento (resultado mas reciente)
         for (var j = 0; j < Math.min(els.length, 3); j++) {
           var text = (els[j].textContent || '').trim()
           var num = parseInt(text, 10)
@@ -427,45 +420,11 @@
   }
 
   // ════════════════════════════════════════════
-  // Strategy 5: Iframe Evolution (bonus)
-  // Evolution carga el juego en iframe - intentamos acceder
-  // ════════════════════════════════════════════
-  function tryIframeHook() {
-    function scanIframes() {
-      try {
-        var iframes = document.querySelectorAll('iframe')
-        for (var i = 0; i < iframes.length; i++) {
-          try {
-            var iframeDoc = iframes[i].contentDocument || iframes[i].contentWindow.document
-            if (!iframeDoc) continue
-
-            // Buscar numeros en el contenido del iframe
-            var els = iframeDoc.querySelectorAll('[class*="number"], [class*="result"], [data-number]')
-            for (var j = 0; j < els.length; j++) {
-              var text = (els[j].textContent || '').trim()
-              var num = parseInt(text, 10)
-              if (!isNaN(num) && num >= 0 && num <= 36 && String(num) === text) {
-                processNumber(num)
-                return
-              }
-            }
-          } catch(e) {
-            // Cross-origin - no podemos acceder a este iframe
-          }
-        }
-      } catch(e) {}
-    }
-
-    // Escanear iframes periodicamente
-    setInterval(scanIframes, 3000)
-    setTimeout(scanIframes, 5000)
-  }
-
-  // ════════════════════════════════════════════
-  // Floating UI Widget
+  // Floating UI Widget (solo en pagina principal, no en iframe)
   // ════════════════════════════════════════════
   function createUI() {
-    // Remover widget anterior si existe
+    if (isInIframe) return // No crear UI dentro de iframes
+
     var existing = document.getElementById('rw-capture-widget')
     if (existing) existing.remove()
 
@@ -473,7 +432,6 @@
     container.id = 'rw-capture-widget'
     container.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:999999;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:12px;display:flex;flex-direction:column;align-items:flex-end;gap:6px;pointer-events:none;'
 
-    // Status Panel
     var statusPanel = document.createElement('div')
     statusPanel.id = 'rw-status-panel'
     statusPanel.style.cssText = 'pointer-events:auto;background:rgba(0,0,0,0.92);border:1px solid ' + (enabled ? '#22c55e' : '#ef4444') + ';border-radius:10px;padding:10px 14px;color:white;max-width:300px;min-width:220px;display:' + (enabled ? 'block' : 'none') + ';'
@@ -541,8 +499,7 @@
       if (newUrl) {
         SERVER_URL = newUrl
         GM_setValue('rw_serverUrl', newUrl)
-        setStatus('URL actualizada:\n' + newUrl + '\nReiniciando captura...')
-        // Close settings
+        setStatus('URL actualizada:\n' + newUrl)
         settingsPanel.style.display = 'none'
         isSettingsOpen = false
       }
@@ -581,7 +538,7 @@
     settingsPanel.appendChild(saveBtn)
     settingsPanel.appendChild(testBtn)
 
-    // Toggle Button (RW)
+    // Toggle Button
     var toggleBtn = document.createElement('button')
     toggleBtn.style.cssText = 'pointer-events:auto;width:44px;height:44px;border-radius:50%;border:2px solid ' + (enabled ? '#22c55e' : '#ef4444') + ';background:' + (enabled ? '#166534' : '#7f1d1d') + ';color:white;font-weight:bold;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 10px rgba(0,0,0,0.5);transition:all 0.2s;'
     toggleBtn.textContent = 'RW'
@@ -591,9 +548,7 @@
     container.appendChild(toggleBtn)
     document.body.appendChild(container)
 
-    // Toggle capture on/off
     toggleBtn.addEventListener('click', function(e) {
-      // Right click = settings
       if (e.button === 2) return
       enabled = !enabled
       GM_setValue('rw_enabled', enabled)
@@ -601,21 +556,15 @@
       toggleBtn.style.background = enabled ? '#166534' : '#7f1d1d'
       statusPanel.style.display = enabled ? 'block' : 'none'
       statusPanel.style.borderColor = enabled ? '#22c55e' : '#ef4444'
-      if (enabled) {
-        setStatus('Reactivado. Monitoreando...')
-      } else {
-        setStatus('Pausado')
-      }
+      setStatus(enabled ? 'Reactivado. Monitoreando...' : 'Pausado')
     })
 
-    // Double click = settings
     toggleBtn.addEventListener('dblclick', function(e) {
       e.preventDefault()
       isSettingsOpen = !isSettingsOpen
       settingsPanel.style.display = isSettingsOpen ? 'block' : 'none'
     })
 
-    // Right click on RW = settings
     toggleBtn.addEventListener('contextmenu', function(e) {
       e.preventDefault()
       isSettingsOpen = !isSettingsOpen
@@ -627,29 +576,30 @@
   // Init
   // ════════════════════════════════════════════
   function init() {
-    console.log('[RollerWin] Auto Captura v3.0 iniciado')
-    console.log('[RollerWin] Dominio:', location.hostname)
+    var mode = isInIframe ? 'IFRAME (' + location.hostname + ')' : 'PARENT (' + location.hostname + ')'
+    console.log('[RollerWin] Auto Captura v3.2 iniciado - ' + mode)
     console.log('[RollerWin] Servidor:', SERVER_URL)
     console.log('[RollerWin] Habilitado:', enabled)
-    console.log('[RollerWin] Doble click o click derecho en boton RW para configurar URL')
 
-    // Install hooks (antes de que cargue la pagina)
+    // Install hooks siempre (parent e iframe)
     hookWebSocket()
     hookXHR()
     hookFetch()
 
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', function() {
-        createUI()
+        createUI()       // Solo crea UI si NO es iframe
         setupDOMObserver()
-        tryIframeHook()
-        setStatus('Hooks instalados en ' + location.hostname + '\nAbre la mesa Evolution y los numeros se capturaran automaticamente\n\nServidor: ' + SERVER_URL)
+        if (!isInIframe) {
+          setStatus('Hooks instalados en ' + location.hostname + '\nEsperando numeros de Evolution...\n\nServidor: ' + SERVER_URL)
+        }
       })
     } else {
       createUI()
       setupDOMObserver()
-      tryIframeHook()
-      setStatus('Hooks instalados en ' + location.hostname + '\nAbre la mesa Evolution y los numeros se capturaran automaticamente\n\nServidor: ' + SERVER_URL)
+      if (!isInIframe) {
+        setStatus('Hooks instalados en ' + location.hostname + '\nEsperando numeros de Evolution...\n\nServidor: ' + SERVER_URL)
+      }
     }
   }
 
