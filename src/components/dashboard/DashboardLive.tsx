@@ -2150,7 +2150,7 @@ export function DashboardLive() {
                     </div>
 
                     {/* ═══ V6.0 Signal Peak Indicator ═══ */}
-                    {signalPeakHistory.length > 0 && (
+                    {totalSignals + totalSkips > 0 && (
                       <div className="mt-3 pt-3 border-t border-zinc-800">
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-1.5">
@@ -2158,7 +2158,8 @@ export function DashboardLive() {
                             <span className="text-xs font-bold text-white">Señales V6.0</span>
                           </div>
                           <div className="flex items-center gap-3 text-[10px]">
-                            <span className="text-zinc-500">Señales: <span className="text-white font-bold">{signalPeakHistory.length}</span></span>
+                            <span className="text-zinc-500">Señales: <span className="text-green-400 font-bold">{totalSignals}</span></span>
+                            <span className="text-zinc-500">Skips: <span className="text-zinc-300 font-bold">{totalSkips}</span></span>
                             <span className="text-zinc-500">Prom: <span className="text-zinc-300 font-bold">{signalPeakHistory.length > 0 ? (signalPeakHistory.reduce((s, p) => s + p.height, 0) / signalPeakHistory.length).toFixed(1) : '0'}</span></span>
                           </div>
                         </div>
@@ -2188,18 +2189,17 @@ export function DashboardLive() {
                         {/* Quick stats row */}
                         <div className="flex items-center gap-4 mt-1.5 text-[9px]">
                           <span className="text-green-400">
-                            Bajos (1-3): {signalPeakHistory.filter(p => p.height <= 3).length}
+                            Aciertos: {signalPeakHistory.length}
                           </span>
                           <span className="text-amber-400">
-                            Medios (4-6): {signalPeakHistory.filter(p => p.height >= 4 && p.height <= 6).length}
+                            Bajos (1-3): {signalPeakHistory.filter(p => p.height <= 3).length}
                           </span>
-                          {signalPeakHistory.filter(p => p.height >= 7).length > 0 && (
-                            <span className="text-red-400">
-                              Altos (7+): {signalPeakHistory.filter(p => p.height >= 7).length}
-                            </span>
-                          )}
+                          <span className="text-red-400">
+                            Altos (4+): {signalPeakHistory.filter(p => p.height >= 4).length}
+                          </span>
                         </div>
                         {/* Detailed peak list */}
+                        {signalPeakHistory.length > 0 && (
                         <div className="mt-2 max-h-28 overflow-y-auto space-y-0.5 custom-scrollbar-y pr-1">
                           {[...signalPeakHistory].reverse().slice(0, 30).map((peak) => (
                             <div key={peak.id} className="flex items-center justify-between px-2 py-1 rounded text-[10px] bg-green-500/8 border border-green-500/15">
@@ -2500,7 +2500,7 @@ export function DashboardLive() {
                       <Activity className="w-4 h-4 text-green-500" />
                       <span>Señales V6.0</span>
                     </span>
-                    <span className="text-xs font-normal text-zinc-500">{signalPeakHistory.length} registros</span>
+                    <span className="text-xs font-normal text-zinc-500">Señales: {totalSignals} | Skips: {totalSkips}</span>
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="px-4 pb-4 space-y-3">
@@ -2540,10 +2540,14 @@ export function DashboardLive() {
                       </div>
 
                       {/* Estadísticas de señales */}
-                      <div className="grid grid-cols-4 gap-2">
+                      <div className="grid grid-cols-5 gap-2">
                         <div className="bg-zinc-800/50 rounded-lg p-2 text-center">
-                          <div className="text-sm font-bold text-white">{signalPeakHistory.length}</div>
+                          <div className="text-sm font-bold text-green-400">{totalSignals}</div>
                           <div className="text-[10px] text-zinc-500">Señales</div>
+                        </div>
+                        <div className="bg-zinc-800/50 rounded-lg p-2 text-center">
+                          <div className="text-sm font-bold text-zinc-300">{totalSkips}</div>
+                          <div className="text-[10px] text-zinc-500">Skips</div>
                         </div>
                         <div className="bg-zinc-800/50 rounded-lg p-2 text-center">
                           <div className="text-sm font-bold text-white">
@@ -2559,7 +2563,7 @@ export function DashboardLive() {
                         </div>
                         <div className="bg-zinc-800/50 rounded-lg p-2 text-center">
                           <div className="text-sm font-bold text-amber-400">{signalPeakHistory.filter(p => p.height >= 4).length}</div>
-                          <div className="text-[10px] text-zinc-500">Medios/Altos</div>
+                          <div className="text-[10px] text-zinc-500">Altos</div>
                         </div>
                       </div>
 
