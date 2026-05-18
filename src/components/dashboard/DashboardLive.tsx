@@ -1990,26 +1990,28 @@ export function DashboardLive() {
                         <div className="mt-2 p-2.5 bg-zinc-800/60 border border-zinc-700/50 rounded-lg space-y-2">
                           <div className="flex items-center gap-1.5 text-[10px] text-amber-400 font-medium">
                             <HelpCircle className="w-3 h-3" />
-                            Configuracion requerida (una sola vez):
+                            Instala la extension de Chrome:
                           </div>
                           <ol className="text-[9px] text-zinc-400 space-y-1 pl-3 list-decimal leading-tight">
-                            <li>Instala la extension <strong className="text-zinc-300">Tampermonkey</strong> en tu navegador</li>
-                            <li>Hacé click en <strong className="text-zinc-300">"Instalar Userscript"</strong> abajo</li>
-                            <li>Abri la mesa de Evolution en Betfury</li>
-                            <li>Clic derecho en el boton <strong className="text-green-400">RW</strong> (esquina derecha) para configurar URL</li>
-                            <li>Activá Auto Captura y juga!</li>
+                            <li>Descargá la extension haciendo click abajo</li>
+                            <li>Extraé el ZIP en una carpeta en tu PC</li>
+                            <li>En Chrome, abrí <strong className="text-zinc-300">chrome://extensions</strong></li>
+                            <li>Activá <strong className="text-zinc-300">"Modo de desarrollador"</strong></li>
+                            <li>Click en <strong className="text-zinc-300">"Cargar extensión sin empaquetar"</strong> y seleccioná la carpeta extraida</li>
+                            <li>Abri la mesa de Evolution en Betfury y Listo!</li>
                           </ol>
                           <Button
                             variant="outline"
                             size="sm"
-                            asChild
-                            className="w-full h-7 text-[10px] bg-amber-500/10 border-amber-500/30 text-amber-400 hover:bg-amber-500/20 hover:text-amber-300 mt-1"
+                            onClick={() => window.open('/api/download-extension', '_blank')}
+                            className="w-full h-7 text-[10px] bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20 hover:text-green-300 mt-1 font-bold"
                           >
-                            <a href="/install" target="_blank" rel="noopener noreferrer">
-                              <Download className="w-3 h-3 mr-1" />
-                              Instalar Userscript v3.0
-                            </a>
+                            <Download className="w-3 h-3 mr-1" />
+                            Descargar Extension RollerWin (ZIP)
                           </Button>
+                          <p className="text-[8px] text-zinc-600 text-center">
+                            No necesitás Tampermonkey con esta extension
+                          </p>
                         </div>
                       )}
                     </div>
