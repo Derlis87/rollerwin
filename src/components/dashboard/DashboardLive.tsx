@@ -739,6 +739,9 @@ export function DashboardLive() {
     // Get current prediction (generate if needed) - MINIMO 5 NUMEROS
     let prediction = currentPredictionRef.current
 
+    // Determine if this prediction was JUST created (don't evaluate current number against it)
+    let justCreatedPrediction = false
+
     if (!prediction && newNumbers.length >= 5) {
       // Generate smart prediction — V6.0 single source of truth
       const smart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
@@ -749,10 +752,13 @@ export function DashboardLive() {
       prediction = { type: smart.type, value: smart.bestValue }
       setCurrentPrediction(prediction)
       setConfidence(Math.min(85, smart.bestConfidence))
+      justCreatedPrediction = true
     }
 
     // Check if we have a prediction to verify
-    if (prediction) {
+    // IMPORTANT: if prediction was JUST created, do NOT evaluate current number against it
+    // The prediction applies to the NEXT incoming number only
+    if (prediction && !justCreatedPrediction) {
       // V6.0: If engine says SKIP, count this number as SKIP and don't track peak
       if (isEngineSkipRef.current) {
         // === COUNT: this number was SKIPPED ===
