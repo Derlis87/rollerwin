@@ -101,3 +101,26 @@ Stage Summary:
 - Fix: calculate V6.0 peaks from imported sequence (same logic as backtesting)
 - File modified: src/components/dashboard/DashboardLive.tsx
 - Now when importing numbers, the V6.0 peak indicator shows the full peak distribution
+
+---
+Task ID: 1
+Agent: Main Agent
+Task: Fix extension regression - rebuild ZIP with latest code + fix number skipping
+
+Work Log:
+- Diagnosed that download-extension/route.ts had a stale ZIP from before v4.0 (commit 1eec172)
+- All v4.1-v4.3 fixes (iframe-only detection, strict selectors, cooldown) were NEVER in the downloadable ZIP
+- User re-downloaded from app, got broken pre-v4.0 extension
+- Fixed inject-main.js: anti-stale dedup increased to 45s window (was 30s) to prevent stale Evolution history messages from resetting cooldown and blocking new numbers
+- Cooldown set to 12s (was 18s in v4.2, 13s in v4.3) - gives 6s margin for 18s spins
+- Rebuilt chrome-extension.zip from latest source files
+- Updated download-extension/route.ts with new base64-encoded ZIP
+- Version bumped to 4.4.0 across all files
+- Committed and pushed to origin/main
+
+Stage Summary:
+- Root cause: stale ZIP in download route served pre-v4.0 broken extension
+- Key fix: anti-stale dedup window increased from 30s to 45s
+- ZIP now contains v4.4 with all v4.2 detection fixes + anti-stale + retries
+- Files changed: inject-main.js, content.js, manifest.json, popup.html, chrome-extension.zip, route.ts
+- Commit: 07f756c pushed to origin/main
