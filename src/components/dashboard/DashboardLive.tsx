@@ -54,7 +54,7 @@ import { CASINO_CONFIGS, openCasino, getTableUrl } from '@/lib/casino-urls'
 
 import { calculatePeakHistory, getCurrentPeak, parseNumberText, type PeakRecord as EnginePeakRecord } from '@/lib/peak-engine'
 import { useRouletteCapturer } from '@/hooks/useRouletteCapturer'
-import { generateSmartPrediction as generateSmartPredictionV4, recordPredictionFeedback, resetRecoveryHistory, type SmartPrediction as SmartPredictionV4, type BetType as BetTypeV4 } from '@/lib/smart-prediction-v4'
+import { generateSmartPrediction as generateSmartPredictionV4, recordPredictionFeedback, resetRecoveryHistory, resetFullEngine, type SmartPrediction as SmartPredictionV4, type BetType as BetTypeV4 } from '@/lib/smart-prediction-v4'
 
 const BET_TYPE_OPTIONS = [
   { id: 'color', name: 'Colores (Rojo/Negro)', icon: '🎨' },
@@ -1311,8 +1311,8 @@ export function DashboardLive() {
 
     setTimeout(() => {
       try {
-        // Reset engine state so predictions are clean
-        resetRecoveryHistory()
+        // Reset ALL engine state for deterministic backtesting
+        resetFullEngine()
 
         const MIN_HISTORY = 10
         const MARTINGALA = [1, 2, 4]
@@ -1574,6 +1574,8 @@ export function DashboardLive() {
         setAdvBtResults(results)
 
         // ═══ Sync V6.0 Signal Peak History — exact same data as backtesting ═══
+        // Note: engine state is already dirty from the simulation above, so we use
+        // the signalPeakRecords captured during the main loop (no re-simulation needed)
         setSignalPeakHistory(signalPeakRecords)
         setSignalPeak(signalPeakRecords.length > 0 ? signalPeakRecords[signalPeakRecords.length - 1].height : 1)
         signalPeakRef.current = signalPeakRecords.length > 0 ? signalPeakRecords[signalPeakRecords.length - 1].height : 1

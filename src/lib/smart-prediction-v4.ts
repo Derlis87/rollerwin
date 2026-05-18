@@ -301,6 +301,15 @@ export function resetRecoveryHistory() {
   recoveryHistory.length = 0
 }
 
+/** Full engine reset — clears ALL adaptive state for deterministic backtesting */
+export function resetFullEngine() {
+  recoveryHistory.length = 0
+  consecutiveFlips = 0
+  for (const key of Object.keys(DEFAULT_WEIGHTS) as ModuleName[]) {
+    accuracyTracker[key] = { hits: 0, attempts: 0, weight: DEFAULT_WEIGHTS[key] }
+  }
+}
+
 function getWeight(mod: ModuleName): number {
   return accuracyTracker[mod]?.weight ?? DEFAULT_WEIGHTS[mod]
 }
