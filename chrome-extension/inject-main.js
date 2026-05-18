@@ -1,7 +1,7 @@
-// RollerWin Capture v4.2 - MAIN WORLD DETECTION ENGINE
+// RollerWin Capture v4.4 - MAIN WORLD DETECTION ENGINE
 // SOLO detecta numeros desde iframes (donde corre Evolution)
 // El parent page SOLO retransmite lo que llega via postMessage desde iframes
-// Cooldown de 18s para un numero por giro
+// FIX: dedup por numero anterior previene que historial stale bloquee numeros nuevos
 (function() {
   'use strict';
 
@@ -16,8 +16,8 @@
   var hostname = location.hostname || '';
 
   // Cooldown: la ruleta Evolution tira cada ~18 segundos
-  // Usamos 13s para dar margen (el numero aparece ~3-4s despues del giro)
-  var COOLDOWN_MS = 13000;
+  // 12s da margen suficiente (el numero aparece ~3-4s despues del giro)
+  var COOLDOWN_MS = 12000;
 
   var RED = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
 
@@ -33,8 +33,15 @@
     if (n < 0 || n > 36) return;
 
     var now = Date.now();
+
+    // 1. Cooldown: evitar multiples detecciones del mismo giro
     if (now - lastTime < COOLDOWN_MS) return;
-    if (n === lastNum && now - lastTime < 30000) return;
+
+    // 2. Anti-stale: NUNCA reenviar el ultimo numero enviado.
+    // Solo permitir el mismo numero si paso mas de 45s (nuevo giro, mismo resultado).
+    // Esto previene que mensajes de historial stale de Evolution reseteen el cooldown
+    // y bloqueen el numero real del siguiente giro.
+    if (n === lastNum && now - lastTime < 45000) return;
 
     lastNum = n;
     lastTime = now;
@@ -482,5 +489,5 @@
     window.EventSource = Proxy;
   })();
 
-  console.log('[RollerWin] v4.2 MOTOR ACTIVO en IFRAME ' + hostname + ' | Cooldown: 18s');
+  console.log('[RollerWin] v4.4 MOTOR ACTIVO en IFRAME ' + hostname + ' | Cooldown: 12s | Anti-stale: 45s');
 })();
