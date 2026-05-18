@@ -16,7 +16,8 @@
   var hostname = location.hostname || '';
 
   // Cooldown: la ruleta Evolution tira cada ~18 segundos
-  var COOLDOWN_MS = 18000;
+  // Usamos 13s para dar margen (el numero aparece ~3-4s despues del giro)
+  var COOLDOWN_MS = 13000;
 
   var RED = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
 
@@ -42,19 +43,33 @@
     console.log('[RollerWin] RESULTADO #' + sentCount + ': ' + n + ' (' + getColor(n) + ') — ' + source +
       ' ' + (isInIframe ? '[IFRAME ' + hostname + ']' : '[PARENT]'));
 
-    // Enviar al servidor RollerWin
+    // Enviar al servidor RollerWin (con reintento)
     try {
-      fetch(SERVER + '/api/capture/receive', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ number: n })
-      }).then(function(r) {
-        if (r.ok) console.log('[RollerWin] Servidor OK:', n);
-        else console.log('[RollerWin] Error HTTP:', r.status);
-      }).catch(function(e) {
-        console.log('[RollerWin] Error red:', e.message);
-      });
-    } catch(e) {}
+      var doSend = function(attempt) {
+        fetch(SERVER + '/api/capture/receive', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ number: n })
+        }).then(function(r) {
+          if (r.ok) {
+            console.log('[RollerWin] Servidor OK:', n, '(intentos:', attempt + ')');
+          } else if (attempt < 2) {
+            console.log('[RollerWin] Reintentando (' + (attempt+1) + ') HTTP', r.status);
+            setTimeout(function() { doSend(attempt + 1); }, 2000);
+          } else {
+            console.log('[RollerWin] Error HTTP tras reintentos:', r.status);
+          }
+        }).catch(function(e) {
+          if (attempt < 2) {
+            console.log('[RollerWin] Reintentando (' + (attempt+1) + ') error:', e.message);
+            setTimeout(function() { doSend(attempt + 1); }, 2000);
+          } else {
+            console.log('[RollerWin] Error red tras reintentos:', e.message);
+          }
+        });
+      };
+      doSend(0);
+    } catch(e) { console.log('[RollerWin] Error fetch:', e.message); }
 
     // Notificar al parent (si estamos en iframe)
     if (isInIframe) {
