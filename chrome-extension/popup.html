@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { width: 260px; padding: 12px; margin: 0; font-family: -apple-system, sans-serif; background: #0a0a0a; color: #e4e4e7; }
+    .header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+    .dot.off { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
+    .title { font-size: 13px; font-weight: 600; }
+    .status { font-size: 11px; color: #a1a1aa; margin-bottom: 8px; }
+    .number-display { display: flex; align-items: center; gap: 8px; padding: 10px; background: #18181b; border-radius: 8px; margin-bottom: 8px; }
+    .number-label { font-size: 10px; color: #71717a; }
+    .number-circle { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700; color: white; background: #52525b; }
+    .red { background: #dc2626; }
+    .black { background: #1a1a2e; }
+    .green { background: #16a34a; }
+    .total { font-size: 11px; color: #a1a1aa; text-align: center; }
+    .total strong { color: #22c55e; }
+    .server { font-size: 9px; color: #52525b; text-align: center; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="dot" id="dot"></div>
+    <div class="title">RollerWin Capture</div>
+  </div>
+  <div class="status" id="status">Cargando...</div>
+  <div class="number-display">
+    <div>
+      <div class="number-label">Ultimo numero</div>
+      <div class="number-circle" id="numCircle">-</div>
+    </div>
+    <div>
+      <div class="number-label">Total capturados</div>
+      <div class="total"><strong id="totalCount">0</strong></div>
+    </div>
+  </div>
+  <div class="server">Servidor: rollerwin3.onrender.com</div>
+
+  <script>
+    chrome.runtime.sendMessage({ type: 'getStatus' }, function(resp) {
+      if (!resp) {
+        document.getElementById('status').textContent = 'Abri betfury.com para activar'
+        document.getElementById('dot').classList.add('off')
+        return
+      }
+      updateUI(resp)
+    })
+
+    function updateUI(data) {
+      var dot = document.getElementById('dot')
+      var status = document.getElementById('status')
+      var circle = document.getElementById('numCircle')
+      var total = document.getElementById('totalCount')
+
+      if (data.isConnected && data.totalCaptured > 0) {
+        dot.classList.remove('off')
+        status.textContent = 'Activo - Monitoreando Evolution'
+        if (data.lastNumber) {
+          circle.textContent = data.lastNumber.number
+          circle.className = 'number-circle ' + data.lastNumber.color
+        }
+        total.textContent = data.totalCaptured
+      } else {
+        dot.classList.add('off')
+        status.textContent = 'Abri betfury.com para activar'
+        total.textContent = '0'
+      }
+    }
+
+    chrome.runtime.onMessage.addListener(function(msg) {
+      if (msg.type === 'number') updateUI({ isConnected: true, lastNumber: { number: msg.number, color: msg.color }, totalCaptured: msg.total })
+    })
+  </script>
+</body>
+</html>

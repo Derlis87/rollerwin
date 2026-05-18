@@ -1,0 +1,67 @@
+{
+  "manifest_version": 3,
+  "name": "RollerWin Capture",
+  "version": "3.2.0",
+  "description": "Captura numeros de ruleta Evolution en Betfury y los envia a RollerWin",
+  "permissions": ["scripting", "activeTab", "storage"],
+  "host_permissions": [
+    "https://betfury.io/*",
+    "https://betfury.com/*",
+    "https://*.evolution-cdn.com/*",
+    "https://*.evolution-gaming.com/*",
+    "https://*.evo-gaming.com/*",
+    "https://*.evolution.live/*",
+    "https://*.ssl-live-cdn.com/*",
+    "https://*.evolutionmalta.com/*",
+    "https://*.evolutiongames.com/*",
+    "https://*.evoplay.games/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://betfury.io/*",
+        "https://betfury.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "https://*.evolution-cdn.com/*",
+        "https://*.evolution-gaming.com/*",
+        "https://*.evo-gaming.com/*",
+        "https://*.evolution.live/*",
+        "https://*.ssl-live-cdn.com/*",
+        "https://*.evolutionmalta.com/*",
+        "https://*.evolutiongames.com/*",
+        "https://*.evoplay.games/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["content.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
