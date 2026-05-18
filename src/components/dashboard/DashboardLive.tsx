@@ -56,6 +56,7 @@ import { useAppStore, getNumberColor } from '@/store/app-store'
 import { CASINO_CONFIGS, openCasino, getTableUrl } from '@/lib/casino-urls'
 
 import { calculatePeakHistory, getCurrentPeak, parseNumberText, type PeakRecord as EnginePeakRecord } from '@/lib/peak-engine'
+import { PeakLevelCharts } from './charts/PeakLevelCharts'
 import { useRouletteCapturer } from '@/hooks/useRouletteCapturer'
 import { generateSmartPrediction as generateSmartPredictionV4, recordPredictionFeedback, resetRecoveryHistory, resetFullEngine, type SmartPrediction as SmartPredictionV4, type BetType as BetTypeV4 } from '@/lib/smart-prediction-v4'
 
@@ -2160,6 +2161,7 @@ export function DashboardLive() {
                           <div className="flex items-center gap-3 text-[10px]">
                             <span className="text-zinc-500">Señales: <span className="text-green-400 font-bold">{totalSignals}</span></span>
                             <span className="text-zinc-500">Skips: <span className="text-zinc-300 font-bold">{totalSkips}</span></span>
+                            <span className="text-zinc-500">Aciertos: <span className="text-green-400 font-bold">{signalPeakHistory.length}</span></span>
                             <span className="text-zinc-500">Prom: <span className="text-zinc-300 font-bold">{signalPeakHistory.length > 0 ? (signalPeakHistory.reduce((s, p) => s + p.height, 0) / signalPeakHistory.length).toFixed(1) : '0'}</span></span>
                           </div>
                         </div>
@@ -2188,9 +2190,6 @@ export function DashboardLive() {
                         </div>
                         {/* Quick stats row */}
                         <div className="flex items-center gap-4 mt-1.5 text-[9px]">
-                          <span className="text-green-400">
-                            Aciertos: {signalPeakHistory.length}
-                          </span>
                           <span className="text-amber-400">
                             Bajos (1-3): {signalPeakHistory.filter(p => p.height <= 3).length}
                           </span>
@@ -2221,6 +2220,7 @@ export function DashboardLive() {
                             </div>
                           ))}
                         </div>
+                        )}
                       </div>
                     )}
                   </CardContent>
@@ -2317,6 +2317,16 @@ export function DashboardLive() {
                   </Card>
                 ) : null}
 
+                {/* ═══ Histograma de Picos V6.0 ═══ */}
+                {signalPeakHistory.length > 0 && (
+                  <div className="mt-4">
+                    <PeakLevelCharts
+                      peakHistory={signalPeakHistory}
+                      currentPeak={signalPeak}
+                      betTypeLabel={selectedBetType === 'color' ? 'Color (R/N)' : selectedBetType === 'parity' ? 'Par/Impar' : selectedBetType === 'dozen' ? 'Docenas' : 'Columnas'}
+                    />
+                  </div>
+                )}
 
               </>
             )}
