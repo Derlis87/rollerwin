@@ -2197,11 +2197,14 @@ export function DashboardLive() {
                         </div>
                         {/* Quick stats row */}
                         <div className="flex items-center gap-4 mt-1.5 text-[9px]">
+                          <span className="text-teal-400">
+                            Bajos (1-3): {signalPeakHistory.filter(p => p.height >= 1 && p.height <= 3).length}
+                          </span>
                           <span className="text-amber-400">
-                            Bajos (1-3): {signalPeakHistory.filter(p => p.height <= 3).length}
+                            Medios (4-6): {signalPeakHistory.filter(p => p.height >= 4 && p.height <= 6).length}
                           </span>
                           <span className="text-red-400">
-                            Altos (4+): {signalPeakHistory.filter(p => p.height >= 4).length}
+                            Altos (7+): {signalPeakHistory.filter(p => p.height >= 7).length}
                           </span>
                         </div>
                         {/* Detailed peak list */}
@@ -2575,12 +2578,16 @@ export function DashboardLive() {
                           <div className="text-[10px] text-zinc-500">Promedio</div>
                         </div>
                         <div className="bg-zinc-800/50 rounded-lg p-2 text-center">
-                          <div className="text-sm font-bold text-green-400">{signalPeakHistory.filter(p => p.height <= 3).length}</div>
-                          <div className="text-[10px] text-zinc-500">Bajos</div>
+                          <div className="text-sm font-bold text-teal-400">{signalPeakHistory.filter(p => p.height >= 1 && p.height <= 3).length}</div>
+                          <div className="text-[10px] text-zinc-500">Bajos (1-3)</div>
                         </div>
                         <div className="bg-zinc-800/50 rounded-lg p-2 text-center">
-                          <div className="text-sm font-bold text-amber-400">{signalPeakHistory.filter(p => p.height >= 4).length}</div>
-                          <div className="text-[10px] text-zinc-500">Altos</div>
+                          <div className="text-sm font-bold text-amber-400">{signalPeakHistory.filter(p => p.height >= 4 && p.height <= 6).length}</div>
+                          <div className="text-[10px] text-zinc-500">Medios (4-6)</div>
+                        </div>
+                        <div className="bg-zinc-800/50 rounded-lg p-2 text-center">
+                          <div className="text-sm font-bold text-red-400">{signalPeakHistory.filter(p => p.height >= 7).length}</div>
+                          <div className="text-[10px] text-zinc-500">Altos (7+)</div>
                         </div>
                       </div>
 
@@ -2866,8 +2873,9 @@ export function DashboardLive() {
                             return advBtResults.peakHistogram.map(p => {
                               const pct = (p.count / maxCount) * 100
                               const isLow = p.height <= 3
-                              const barColor = isLow ? 'bg-green-500' : 'bg-orange-500'
-                              const textColor = isLow ? 'text-green-400' : 'text-orange-400'
+                              const isMed = p.height >= 4 && p.height <= 6
+                              const barColor = isLow ? 'bg-teal-500' : isMed ? 'bg-amber-500' : 'bg-red-500'
+                              const textColor = isLow ? 'text-teal-400' : isMed ? 'text-amber-400' : 'text-red-400'
                               return (
                                 <div key={p.height} className="flex items-center gap-2">
                                   <span className="text-[10px] text-zinc-400 w-14 shrink-0">Pico {p.height}</span>
