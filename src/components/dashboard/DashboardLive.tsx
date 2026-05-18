@@ -37,7 +37,10 @@ import {
   CircleDot,
   Wifi,
   Scan,
-  FileDown
+  FileDown,
+  Download,
+  HelpCircle,
+  Settings
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -1981,15 +1984,31 @@ export function DashboardLive() {
                               </>
                             )}
                           </div>
-                          <p className="text-[9px] text-zinc-500 text-center leading-tight px-1">
-                            Asegurate de tener el userscript de Tampermonkey activo en la pagina del casino
-                          </p>
                         </div>
                       )}
                       {!isAutoCapture && (
-                        <p className="text-[9px] text-zinc-500 mt-1 text-center leading-tight px-1">
-                          Requiere Tampermonkey con el userscript instalado en la pagina del casino
-                        </p>
+                        <div className="mt-2 p-2.5 bg-zinc-800/60 border border-zinc-700/50 rounded-lg space-y-2">
+                          <div className="flex items-center gap-1.5 text-[10px] text-amber-400 font-medium">
+                            <HelpCircle className="w-3 h-3" />
+                            Configuracion requerida (una sola vez):
+                          </div>
+                          <ol className="text-[9px] text-zinc-400 space-y-1 pl-3 list-decimal leading-tight">
+                            <li>Instala la extension <strong className="text-zinc-300">Tampermonkey</strong> en tu navegador</li>
+                            <li>Hacé click en <strong className="text-zinc-300">"Instalar Userscript"</strong> abajo</li>
+                            <li>Abri la mesa de Evolution en Betfury</li>
+                            <li>Clic derecho en el boton <strong className="text-green-400">RW</strong> (esquina derecha) para configurar URL</li>
+                            <li>Activá Auto Captura y juga!</li>
+                          </ol>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => window.open('/api/capture/userscript', '_blank')}
+                            className="w-full h-7 text-[10px] bg-amber-500/10 border-amber-500/30 text-amber-400 hover:bg-amber-500/20 hover:text-amber-300 mt-1"
+                          >
+                            <Download className="w-3 h-3 mr-1" />
+                            Instalar Userscript v3.0
+                          </Button>
+                        </div>
                       )}
                     </div>
                   </div>
