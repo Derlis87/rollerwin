@@ -2583,6 +2583,22 @@ export function DashboardLive() {
                   />
                 </div>
 
+                {/* Use imported numbers button */}
+                {numbers.length >= 10 && (
+                  <Button
+                    onClick={() => {
+                      setAdvBtSequence(numbers.join(', '))
+                      setAdvBtAnalyzed(null)
+                      setAdvBtResults(null)
+                    }}
+                    variant="outline"
+                    className="w-full border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 hover:text-emerald-300 text-xs"
+                  >
+                    <Copy className="w-3.5 h-3.5 mr-1.5" />
+                    Usar números importados ({numbers.length} números)
+                  </Button>
+                )}
+
                 {/* Action buttons */}
                 <div className="flex gap-2">
                   <Button
