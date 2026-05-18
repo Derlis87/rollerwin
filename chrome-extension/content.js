@@ -85,12 +85,13 @@
     panel.style.cssText = 'pointer-events:auto;background:rgba(0,0,0,0.92);border:1px solid #22c55e;border-radius:10px;padding:10px 14px;color:white;max-width:300px;min-width:220px;';
     panel.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">' +
       '<div style="width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 6px #22c55e;"></div>' +
-      '<span style="font-size:11px;font-weight:600;color:#e4e4e7;">RollerWin Capture v4</span>' +
+      '<span style="font-size:11px;font-weight:600;color:#e4e4e7;">RollerWin Capture v4.1</span>' +
       '<span style="font-size:9px;color:#71717a;margin-left:auto;">MAIN world</span></div>';
 
     statusEl = document.createElement('div');
     statusEl.style.cssText = 'font-size:10px;color:#a1a1aa;white-space:pre-line;line-height:1.5;';
     statusEl.textContent = 'Inyectado en TODOS los frames (MAIN world)\n' +
+      'Cooldown: 15s (un numero por giro)\n' +
       'Esperando numeros de Evolution...\n\n' +
       'Servidor: ' + SERVER_URL;
 

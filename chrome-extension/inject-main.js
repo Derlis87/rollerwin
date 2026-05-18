@@ -1,10 +1,9 @@
-// RollerWin Capture v4.0 - MAIN WORLD DETECTION ENGINE
-// Este script se inyecta en MUNDO PRINCIPAL (MAIN world) en TODOS los frames
-// incluyendo iframes cross-origin de Evolution Gaming
+// RollerWin Capture v4.1 - MAIN WORLD DETECTION ENGINE
+// Se inyecta en MUNDO PRINCIPAL en TODOS los frames (incluyendo iframes de Evolution)
+// v4.1: Cooldown de 18s, eliminada busqueda bruta, deteccion solo de game-fields
 (function() {
   'use strict';
 
-  // Guarda contra doble inyeccion
   if (window.__rwMainV4) return;
   window.__rwMainV4 = true;
 
@@ -15,6 +14,10 @@
   var isInIframe = (window.self !== window.top);
   var hostname = location.hostname || '';
 
+  // Cooldown: la ruleta Evolution tira cada ~18 segundos
+  // Usamos 15s de cooldown para tener margen
+  var COOLDOWN_MS = 15000;
+
   var RED = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
 
   function getColor(n) {
@@ -23,22 +26,25 @@
   }
 
   // ══════════════════════════════════════
-  // ENVIAR numero al servidor RollerWin
+  // ENVIAR numero - con cooldown de 18s
   // ══════════════════════════════════════
-  function sendNumber(n) {
+  function sendNumber(n, source) {
+    if (n < 0 || n > 36) return;
+
     var now = Date.now();
-    // Anti-duplicado: 3 segundos de cooldown + mismo numero
-    if (n === lastNum && now - lastTime < 10000) return;
-    if (now - lastTime < 2000) return;
+    // Cooldown estricto: 15 segundos entre numeros
+    if (now - lastTime < COOLDOWN_MS) {
+      return;
+    }
 
     lastNum = n;
     lastTime = now;
     sentCount++;
 
-    console.log('[RollerWin MAIN] === DETECTADO: ' + n + ' (' + getColor(n) + ') === ' +
-      (isInIframe ? '[IFRAME ' + hostname + ']' : '[PARENT]') + ' (#' + sentCount + ')');
+    console.log('[RollerWin MAIN] === RESULTADO #' + sentCount + ': ' + n + ' (' + getColor(n) + ') === fuente: ' + source + ' ' +
+      (isInIframe ? '[IFRAME ' + hostname + ']' : '[PARENT]'));
 
-    // Enviar al servidor
+    // Enviar al servidor RollerWin
     try {
       fetch(SERVER + '/api/capture/receive', {
         method: 'POST',
@@ -48,145 +54,203 @@
         if (r.ok) {
           console.log('[RollerWin MAIN] Enviado a servidor OK:', n);
         } else {
-          console.log('[RollerWin MAIN] Error HTTP al enviar:', r.status);
+          console.log('[RollerWin MAIN] Error HTTP:', r.status);
         }
       }).catch(function(e) {
-        console.log('[RollerWin MAIN] Error de red al enviar:', e.message);
+        console.log('[RollerWin MAIN] Error red:', e.message);
       });
-    } catch(e) {
-      console.log('[RollerWin MAIN] Error fetch:', e.message);
-    }
+    } catch(e) {}
 
-    // Notificar al parent (si estamos en iframe)
+    // Notificar al parent si estamos en iframe
     if (isInIframe) {
       try {
         window.parent.postMessage({
           source: 'rollerwin-capture',
           number: n,
           color: getColor(n),
-          hostname: hostname
+          hostname: hostname,
+          sentCount: sentCount
         }, '*');
       } catch(e) {}
     } else {
-      // En parent, disparar CustomEvent para content.js (ISOLATED world)
+      // CustomEvent para content.js (ISOLATED world)
       try {
         document.dispatchEvent(new CustomEvent('rw-number', {
-          detail: { number: n, color: getColor(n) }
+          detail: { number: n, color: getColor(n), sentCount: sentCount }
         }));
       } catch(e) {}
     }
   }
 
   // ══════════════════════════════════════
-  // EXTRACCION AGRESIVA de numeros
+  // EXTRACCION SELECTIVA de numeros
+  // Solo campos que son DEFINITIVAMENTE resultados de ruleta
   // ══════════════════════════════════════
-  var GAME_FIELDS = [
-    'number','result','resultNumber','winningNumber','win_number','game_number',
-    'roulette_number','value','num','n','ball_number','pocket','pocket_number',
-    'last_number','lastNumber','current_number','currentNumber','gameResult',
-    'game_result','outcome','winningPocket','pocketId','resultId',
-    'numberStr','numberString','displayNumber','display_number',
-    'roundResult','round_result','gameOutcome','game_outcome',
-    'winningNumberDisplay','resultNumber','finalNumber','final_number'
+
+  // Campos de alto confianza - solo estos envian numeros
+  var HIGH_CONFIDENCE_FIELDS = [
+    'number', 'result', 'resultnumber', 'winningnumber', 'win_number',
+    'game_number', 'roulette_number', 'ball_number', 'pocket', 'pocket_number',
+    'winningpocket', 'pocketid', 'resultid', 'displaynumber',
+    'roundresult', 'gameoutcome', 'finalnumber', 'outcome',
+    'winningnumberdisplay', 'resultnumber', 'final_number', 'game_result',
+    'round_result', 'game_outcome', 'numberstr', 'numberstring'
   ];
 
-  function extractDeep(obj, depth, path) {
-    if (!obj || typeof obj !== 'object' || depth > 8) return;
+  // Campos de confianza media - requieren contexto extra
+  var MEDIUM_CONFIDENCE_FIELDS = [
+    'value', 'num', 'n', 'resultvalue'
+  ];
+
+  function isHighConfidence(key) {
+    var k = key.replace(/[_\-\s]/g, '').toLowerCase();
+    for (var i = 0; i < HIGH_CONFIDENCE_FIELDS.length; i++) {
+      if (k === HIGH_CONFIDENCE_FIELDS[i].replace(/[_\-\s]/g, '')) return true;
+    }
+    return false;
+  }
+
+  function isMediumConfidence(key) {
+    var k = key.replace(/[_\-\s]/g, '').toLowerCase();
+    for (var i = 0; i < MEDIUM_CONFIDENCE_FIELDS.length; i++) {
+      if (k === MEDIUM_CONFIDENCE_FIELDS[i].replace(/[_\-\s]/g, '')) return true;
+    }
+    return false;
+  }
+
+  // Extraer numero de un valor (number o string)
+  function tryParseNum(val) {
+    if (typeof val === 'number') {
+      if (val >= 0 && val <= 36 && val === Math.floor(val)) return val;
+      return null;
+    }
+    if (typeof val === 'string') {
+      var trimmed = val.trim();
+      if (trimmed.length === 1 || trimmed.length === 2) {
+        var n = parseInt(trimmed, 10);
+        if (!isNaN(n) && n >= 0 && n <= 36 && trimmed === String(n)) return n;
+      }
+    }
+    return null;
+  }
+
+  function extractObj(obj, depth, path) {
+    if (!obj || typeof obj !== 'object' || depth > 7) return;
 
     if (Array.isArray(obj)) {
-      for (var i = 0; i < Math.min(obj.length, 5); i++) {
-        var item = obj[i];
-        if (typeof item === 'number' && item >= 0 && item <= 36) {
-          // Array con numeros directos - probablemente resultados
-          sendNumber(item);
-          return;
-        }
-        if (typeof item === 'string') {
-          var sn = parseInt(item, 10);
-          if (!isNaN(sn) && sn >= 0 && sn <= 36 && item === String(sn)) {
-            sendNumber(sn);
+      // Solo procesar arrays si el path sugiere resultados
+      var pathLow = path.toLowerCase();
+      if (pathLow.indexOf('result') >= 0 || pathLow.indexOf('history') >= 0 ||
+          pathLow.indexOf('number') >= 0 || pathLow.indexOf('winning') >= 0 ||
+          pathLow.indexOf('outcome') >= 0 || pathLow.indexOf('pocket') >= 0) {
+        // Tomar el PRIMER elemento del array (resultado mas reciente)
+        if (obj.length > 0) {
+          var first = obj[0];
+          var n = tryParseNum(first);
+          if (n !== null) {
+            sendNumber(n, 'array@' + path);
             return;
           }
-        }
-        if (typeof item === 'object' && item !== null) {
-          extractDeep(item, depth + 1, path + '[' + i + ']');
+          if (typeof first === 'object' && first !== null) {
+            extractObj(first, depth + 1, path + '[0]');
+          }
         }
       }
       return;
     }
 
     var keys = Object.keys(obj);
-    for (var k = 0; k < keys.length; k++) {
-      var key = keys[k];
+    for (var i = 0; i < keys.length; i++) {
+      var key = keys[i];
       var val = obj[key];
-      var keyLower = key.toLowerCase();
       var currentPath = path + '.' + key;
 
-      // Verificar si el key es un campo de juego conocido
-      var isGameField = false;
-      for (var g = 0; g < GAME_FIELDS.length; g++) {
-        if (keyLower === GAME_FIELDS[g].toLowerCase()) {
-          isGameField = true;
-          break;
+      // Alta confianza: enviar inmediatamente
+      if (isHighConfidence(key)) {
+        var num = tryParseNum(val);
+        if (num !== null) {
+          sendNumber(num, 'field:' + key + '@' + currentPath);
+          return;
         }
       }
 
-      if (typeof val === 'number') {
-        if (val >= 0 && val <= 36 && val === Math.floor(val)) {
-          if (isGameField) {
-            sendNumber(val);
-            return;
-          }
-          // Log para debug (sin enviar) - detectar posibles fuentes de numeros
-          if (depth <= 3) {
-            console.log('[RollerWin DEBUG] Numero encontrado (no game-field):', val, 'en', currentPath);
-          }
-        }
-      }
-
-      if (typeof val === 'string') {
-        var num = parseInt(val, 10);
-        if (!isNaN(num) && num >= 0 && num <= 36 && val === String(num) && val.length <= 2) {
-          if (isGameField) {
-            sendNumber(num);
+      // Confianza media: verificar que es un numero 0-36 y NO un monto
+      if (isMediumConfidence(key)) {
+        var num2 = tryParseNum(val);
+        if (num2 !== null) {
+          // Verificar que no es un monto (montos suelen ser > 36)
+          // Solo enviar si esta en contexto de juego
+          var pathLow2 = currentPath.toLowerCase();
+          if (pathLow2.indexOf('game') >= 0 || pathLow2.indexOf('result') >= 0 ||
+              pathLow2.indexOf('round') >= 0 || pathLow2.indexOf('roulette') >= 0 ||
+              pathLow2.indexOf('wheel') >= 0 || pathLow2.indexOf('spin') >= 0 ||
+              pathLow2.indexOf('win') >= 0 || pathLow2.indexOf('outcome') >= 0) {
+            sendNumber(num2, 'medium:' + key + '@' + currentPath);
             return;
           }
         }
       }
 
+      // Bajar en el arbol para objetos anidados
       if (typeof val === 'object' && val !== null) {
-        extractDeep(val, depth + 1, currentPath);
+        extractObj(val, depth + 1, currentPath);
       }
     }
   }
 
-  // Buscar numeros en texto plano (regex)
-  function tryExtractFromText(text) {
-    if (!text || typeof text !== 'string' || text.length > 100000) return;
+  // Regex selectivo - solo campos de resultado
+  function extractFromText(text, source) {
+    if (!text || typeof text !== 'string' || text.length > 200000) return;
 
-    var patterns = [
-      /"number"\s*:\s*(\d{1,2})/gi,
-      /"result"\s*:\s*(\d{1,2})/gi,
+    // Buscar pares clave-valor JSON de resultado
+    // Ejemplo: "resultNumber":17  o  "number": 32
+    var strictPatterns = [
       /"resultNumber"\s*:\s*(\d{1,2})/gi,
       /"winningNumber"\s*:\s*(\d{1,2})/gi,
-      /"win_number"\s*:\s*(\d{1,2})/gi,
-      /"pocket"\s*:\s*(\d{1,2})/gi,
-      /"pocket_number"\s*:\s*(\d{1,2})/gi,
+      /"winning_number"\s*:\s*(\d{1,2})/gi,
       /"ball_number"\s*:\s*(\d{1,2})/gi,
-      /"game_number"\s*:\s*(\d{1,2})/gi,
+      /"pocket_number"\s*:\s*(\d{1,2})/gi,
       /"roulette_number"\s*:\s*(\d{1,2})/gi,
       /"finalNumber"\s*:\s*(\d{1,2})/gi,
-      /"outcome"\s*:\s*(\d{1,2})/gi,
+      /"game_number"\s*:\s*(\d{1,2})/gi,
       /"displayNumber"\s*:\s*(\d{1,2})/gi,
-      /"value"\s*:\s*(\d{1,2})/gi
+      /"winningPocket"\s*:\s*(\d{1,2})/gi
     ];
 
-    for (var i = 0; i < patterns.length; i++) {
+    for (var i = 0; i < strictPatterns.length; i++) {
       var match;
-      patterns[i].lastIndex = 0;
-      while ((match = patterns[i].exec(text)) !== null) {
+      strictPatterns[i].lastIndex = 0;
+      while ((match = strictPatterns[i].exec(text)) !== null) {
         var n = parseInt(match[1], 10);
-        if (n >= 0 && n <= 36) sendNumber(n);
+        if (n >= 0 && n <= 36) {
+          sendNumber(n, 'regex:' + match[0].substring(0, 30) + '@' + source);
+        }
+      }
+    }
+
+    // Patrones medios - solo si tienen contexto de juego cerca
+    var mediumPatterns = [
+      /"(?:number|result|value)"\s*:\s*(\d{1,2})\b/gi
+    ];
+
+    for (var j = 0; j < mediumPatterns.length; j++) {
+      var match2;
+      mediumPatterns[j].lastIndex = 0;
+      while ((match2 = mediumPatterns[j].exec(text)) !== null) {
+        var n2 = parseInt(match2[1], 10);
+        if (n2 >= 0 && n2 <= 36) {
+          // Verificar contexto: buscar palabras de juego cerca (100 chars antes/despues)
+          var start = Math.max(0, match2.index - 100);
+          var end = Math.min(text.length, match2.index + 100);
+          var context = text.substring(start, end).toLowerCase();
+          if (context.indexOf('roulette') >= 0 || context.indexOf('game') >= 0 ||
+              context.indexOf('result') >= 0 || context.indexOf('wheel') >= 0 ||
+              context.indexOf('spin') >= 0 || context.indexOf('round') >= 0 ||
+              context.indexOf('winning') >= 0 || context.indexOf('pocket') >= 0 ||
+              context.indexOf('evolution') >= 0 || context.indexOf('history') >= 0) {
+            sendNumber(n2, 'regex+ctx:' + match2[0] + '@' + source);
+          }
+        }
       }
     }
   }
@@ -200,44 +264,49 @@
     OrigWS.__rwV4Hooked = true;
 
     var ProxyWS = function(url, protocols) {
-      console.log('[RollerWin MAIN] WebSocket creado:', url ? url.substring(0, 80) : 'null');
+      var wsUrl = url ? String(url) : '';
+      // Solo logear WebSockets que parecen de Evolution/juegos
+      if (wsUrl.indexOf('evolution') >= 0 || wsUrl.indexOf('game') >= 0 ||
+          wsUrl.indexOf('live') >= 0 || wsUrl.indexOf('ssl') >= 0) {
+        console.log('[RollerWin MAIN] WebSocket (posible juego):', wsUrl.substring(0, 100));
+      }
       var ws = protocols ? new OrigWS(url, protocols) : new OrigWS(url);
 
       ws.addEventListener('message', function(e) {
         try {
           var data = e.data;
           if (typeof data !== 'string') {
-            // Try ArrayBuffer
             if (data instanceof ArrayBuffer) {
-              try {
-                data = String.fromCharCode.apply(null, new Uint8Array(data));
-              } catch(er) { return; }
-            } else {
-              return;
-            }
+              try { data = String.fromCharCode.apply(null, new Uint8Array(data)); } catch(er) { return; }
+            } else return;
           }
 
-          // Socket.io format: 42["event",{...}]  or 43["event",{...}]
+          // Socket.io: 42["event",{...}]
           if (data.charAt(0) === '4' && (data.charAt(1) === '2' || data.charAt(1) === '3')) {
             try {
               var parsed = JSON.parse(data.substring(2));
               if (Array.isArray(parsed) && parsed.length >= 2 && typeof parsed[1] === 'object') {
-                console.log('[RollerWin MAIN] Socket.io msg:', parsed[0]);
-                extractDeep(parsed[1], 0, 'socketio.' + parsed[0]);
+                var evtName = String(parsed[0] || '');
+                // Solo procesar eventos de resultado
+                if (evtName.indexOf('result') >= 0 || evtName.indexOf('complete') >= 0 ||
+                    evtName.indexOf('win') >= 0 || evtName.indexOf('game') >= 0 ||
+                    evtName.indexOf('round') >= 0 || evtName.indexOf('number') >= 0 ||
+                    evtName.indexOf('spin') >= 0 || evtName.indexOf('update') >= 0) {
+                  extractObj(parsed[1], 0, 'socketio.' + evtName);
+                  extractFromText(data, 'socketio.' + evtName);
+                }
               }
             } catch(err) {}
           }
 
-          // Plain JSON
+          // JSON directo
           if (data.charAt(0) === '{' || data.charAt(0) === '[') {
             try {
-              var jsonObj = JSON.parse(data);
-              extractDeep(jsonObj, 0, 'ws.json');
+              var json = JSON.parse(data);
+              extractObj(json, 0, 'ws');
+              extractFromText(data, 'ws');
             } catch(err) {}
           }
-
-          // Regex search on raw text
-          tryExtractFromText(data);
 
         } catch(err) {}
       });
@@ -245,15 +314,13 @@
       return ws;
     };
 
-    // Preserve prototype chain
     ProxyWS.prototype = OrigWS.prototype;
     ProxyWS.CONNECTING = OrigWS.CONNECTING;
     ProxyWS.OPEN = OrigWS.OPEN;
     ProxyWS.CLOSING = OrigWS.CLOSING;
     ProxyWS.CLOSED = OrigWS.CLOSED;
-
     window.WebSocket = ProxyWS;
-    console.log('[RollerWin MAIN] WebSocket hook instalado en', hostname);
+    console.log('[RollerWin MAIN] WebSocket hook OK en', hostname);
   })();
 
   // ══════════════════════════════════════
@@ -274,27 +341,30 @@
 
       var promise = origFetch.apply(this, arguments);
 
-      // Analizar TODAS las respuestas (no solo las de game/result)
-      // Evolution puede usar URLs impredecibles
-      promise.then(function(response) {
-        try {
-          var cloned = response.clone();
-          cloned.text().then(function(text) {
-            if (text && text.length > 0) {
-              tryExtractFromText(text);
-              try {
-                var json = JSON.parse(text);
-                extractDeep(json, 0, 'fetch');
-              } catch(e) {}
-            }
-          }).catch(function() {});
-        } catch(e) {}
-      }).catch(function() {});
+      // Solo analizar respuestas de URLs que parecen de juego
+      var urlLow = url.toLowerCase();
+      if (urlLow.indexOf('game') >= 0 || urlLow.indexOf('result') >= 0 ||
+          urlLow.indexOf('roulette') >= 0 || urlLow.indexOf('evolution') >= 0 ||
+          urlLow.indexOf('history') >= 0 || urlLow.indexOf('live') >= 0 ||
+          urlLow.indexOf('wheel') >= 0 || urlLow.indexOf('round') >= 0 ||
+          urlLow.indexOf('state') >= 0 || urlLow.indexOf('bet') >= 0) {
+
+        promise.then(function(response) {
+          try {
+            response.clone().text().then(function(text) {
+              if (text && text.length > 0) {
+                try { extractObj(JSON.parse(text), 0, 'fetch'); } catch(e) {}
+                extractFromText(text, 'fetch');
+              }
+            }).catch(function() {});
+          } catch(e) {}
+        }).catch(function() {});
+      }
 
       return promise;
     };
 
-    console.log('[RollerWin MAIN] Fetch hook instalado en', hostname);
+    console.log('[RollerWin MAIN] Fetch hook OK en', hostname);
   })();
 
   // ══════════════════════════════════════
@@ -314,33 +384,85 @@
     XMLHttpRequest.prototype.send = function(body) {
       var self = this;
       this.addEventListener('load', function() {
-        try {
-          var text = self.responseText;
-          if (text) {
-            tryExtractFromText(text);
-            try {
-              var json = JSON.parse(text);
-              extractDeep(json, 0, 'xhr');
-            } catch(e) {}
-          }
-        } catch(e) {}
+        var urlLow = (self._rwUrl || '').toLowerCase();
+        if (urlLow.indexOf('game') >= 0 || urlLow.indexOf('result') >= 0 ||
+            urlLow.indexOf('roulette') >= 0 || urlLow.indexOf('evolution') >= 0 ||
+            urlLow.indexOf('history') >= 0 || urlLow.indexOf('live') >= 0 ||
+            urlLow.indexOf('wheel') >= 0 || urlLow.indexOf('round') >= 0 ||
+            urlLow.indexOf('state') >= 0 || urlLow.indexOf('bet') >= 0) {
+          try {
+            var text = self.responseText;
+            if (text) {
+              try { extractObj(JSON.parse(text), 0, 'xhr'); } catch(e) {}
+              extractFromText(text, 'xhr');
+            }
+          } catch(e) {}
+        }
       });
       return origSend.apply(this, arguments);
     };
 
-    console.log('[RollerWin MAIN] XHR hook instalado en', hostname);
+    console.log('[RollerWin MAIN] XHR hook OK en', hostname);
   })();
 
   // ══════════════════════════════════════
-  // ESCANEADOR DOM AGRESIVO
+  // DOM SCANNER - SELECTORES ESPECIFICOS SOLAMENTE
+  // Sin busqueda bruta de texto
   // ══════════════════════════════════════
   (function setupDOMScanner() {
+
+    // Clases a excluir (elementos que contienen numeros pero NO son resultados)
+    var EXCLUDE_CLASSES = [
+      'balance', 'wallet', 'timer', 'countdown', 'player', 'chat', 'limit',
+      'min-', 'max-', 'stake', 'total', 'amount', 'payout', 'multiplier',
+      'level', 'rank', 'vip', 'bonus', 'free', 'chip', 'currency', 'price',
+      'percent', 'ratio', 'day', 'time', 'hour', 'minute', 'second', 'date',
+      'year', 'month', 'session', 'id-', 'uid', 'avatar', 'badge-count',
+      'notification', 'unread', 'counter', 'index', 'page', 'size', 'length'
+    ];
+
+    function isExcluded(el) {
+      if (!el) return false;
+      var cls = (el.className || '');
+      if (typeof cls !== 'string') cls = '';
+      var id = (el.id || '');
+      var combined = (cls + ' ' + id).toLowerCase();
+      for (var i = 0; i < EXCLUDE_CLASSES.length; i++) {
+        if (combined.indexOf(EXCLUDE_CLASSES[i]) >= 0) return true;
+      }
+      return false;
+    }
+
+    function isValidResult(el, num) {
+      if (!el || num === null) return false;
+      // Verificar que no esta excluido
+      if (isExcluded(el)) return false;
+      if (isExcluded(el.parentElement)) return false;
+      // Tiene que ser un nodo hoja o casi hoja (max 1 child)
+      if (el.children.length > 2) return false;
+      // El texto tiene que ser SOLO el numero
+      var text = (el.textContent || '').trim();
+      if (text !== String(num)) return false;
+      // Tiene que verse como un display de resultado (circulo, badge, item)
+      var cls = (el.className || '').toLowerCase();
+      var parentCls = el.parentElement ? (el.parentElement.className || '').toLowerCase() : '';
+      var combined = cls + ' ' + parentCls;
+      // Debe tener al menos una pista de que es resultado/history/numero
+      var hasGameHint = combined.indexOf('result') >= 0 || combined.indexOf('history') >= 0 ||
+                        combined.indexOf('number') >= 0 || combined.indexOf('winning') >= 0 ||
+                        combined.indexOf('pocket') >= 0 || combined.indexOf('roulette') >= 0 ||
+                        combined.indexOf('game') >= 0 || combined.indexOf('wheel') >= 0 ||
+                        combined.indexOf('outcome') >= 0 || combined.indexOf('badge') >= 0 ||
+                        combined.indexOf('circle') >= 0 || combined.indexOf('ball') >= 0 ||
+                        combined.indexOf('marker') >= 0 || combined.indexOf('chip-') >= 0 ||
+                        combined.indexOf('past') >= 0 || combined.indexOf('stat') >= 0 ||
+                        combined.indexOf('sequence') >= 0 || combined.indexOf('track') >= 0;
+      return hasGameHint;
+    }
+
     function scanDOM() {
-      // ═══ SELECTORES ESPECIFICOS DE EVOLUTION ═══
-      var evoSelectors = [
-        // Evolution Gaming especificos
-        '[class*="game-history-item"] [class*="value"]',
-        '[class*="game-history-item"] [class*="number"]',
+      // ═══ SELECTORES DE ALTA CONFIANZA ═══
+      var highConfSelectors = [
         '[class*="game-history"] [class*="value"]',
         '[class*="game-history"] [class*="number"]',
         '[class*="history-item"] [class*="number"]',
@@ -360,103 +482,69 @@
         '[class*="latest-result"]',
         '[class*="game-number-display"]',
         '[class*="roulette-number"]',
-        '[class*="game-round"] [class*="result"]',
         '[class*="round-result"]',
-        '[class*="round-number"]',
-        '[class*="history"] [class*="circle"]',
-        '[class*="history"] [class*="badge"]',
-        '[class*="history"] [class*="item"]',
-        '[class*="bng"] [class*="history"] [class*="value"]',
-        '[class*="bng"] [class*="result"]',
-        // Atributos de data
         '[data-result-number]',
-        '[data-number]',
         '[data-winning-number]',
         '[data-game-result]',
-        '[data-result]',
-        // Genericos comunes
-        '.number-display',
-        '.result-number',
-        '.game-result-number',
-        // Evolution iframe interno
-        '[class*="video-overlay"] [class*="number"]',
-        '[class*="overlay"] [class*="result"]',
-        '[class*="stats"] [class*="number"]',
-        '[class*="board"] [class*="result"]',
-        '[class*="table"] [class*="result"]',
         '[class*="wheel"] [class*="result"]',
+        '[class*="wheel"] [class*="number"]',
         '[class*="spin"] [class*="result"]',
-        '[class*="autoplay"] [class*="result"]',
-        // Posibles selectores nuevos de Evolution
+        '[class*="past"] [class*="number"]',
+        '[class*="sequence"] [class*="number"]',
+        '[class*="track"] [class*="number"]',
         '[class*="GameHistory"] [class*="value"]',
         '[class*="GameHistory"] [class*="number"]',
         '[class*="gameHistory"] [class*="value"]',
-        '[class*="gameHistory"] [class*="number"]',
         '[class*="HistoryItem"]',
-        '[class*="ResultHistory"]',
-        '[class*="resultHistory"]',
-        // EZugi (parte de Evolution)
-        '[class*="ezugi"] [class*="result"]',
-        '[class*="ezugi"] [class*="number"]'
+        '[class*="ResultHistory"]'
       ];
 
-      for (var i = 0; i < evoSelectors.length; i++) {
+      // Alta confianza: usar estos selectores
+      for (var i = 0; i < highConfSelectors.length; i++) {
         try {
-          var els = document.querySelectorAll(evoSelectors[i]);
-          for (var j = 0; j < Math.min(els.length, 3); j++) {
+          var els = document.querySelectorAll(highConfSelectors[i]);
+          for (var j = 0; j < Math.min(els.length, 2); j++) {
             var text = (els[j].textContent || '').trim();
             var num = parseInt(text, 10);
-            if (!isNaN(num) && num >= 0 && num <= 36 && String(num) === text) {
-              console.log('[RollerWin MAIN] DOM match selector:', evoSelectors[i], '=', num);
-              sendNumber(num);
+            if (!isNaN(num) && num >= 0 && num <= 36 && String(num) === text && !isExcluded(els[j])) {
+              sendNumber(num, 'DOM:' + highConfSelectors[i]);
               return;
             }
           }
         } catch(e) {}
       }
 
-      // ═══ BUSQUEDA BRUTA: scanear texto en contenedores de juego ═══
-      var containers = document.querySelectorAll(
-        '[class*="game"], [class*="roulette"], [class*="casino"], ' +
-        '[class*="evolution"], [class*="history"], [class*="result"], ' +
-        '[class*="lobby"], [class*="bng"], [class*="ezugi"]'
-      );
+      // ═══ SELECTORES DE BAJA CONFIANZA ═══
+      // Solo el PRIMER elemento que coincida y pase validacion estricta
+      var lowConfSelectors = [
+        '[class*="history"] [class*="circle"]',
+        '[class*="history"] [class*="badge"]',
+        '[class*="history"] [class*="item"]',
+        '[class*="bng"] [class*="value"]',
+        '[class*="bng"] [class*="result"]',
+        '[class*="bng"] [class*="history"] [class*="value"]',
+        '[data-number]',
+        '[data-result]',
+        '[class*="number-display"]',
+        '[class*="result-number"]',
+        '[class*="overlay"] [class*="result"]',
+        '[class*="stats"] [class*="number"]',
+        '[class*="board"] [class*="result"]',
+        '[class*="table"] [class*="result"]',
+        '[class*="autoplay"] [class*="result"]',
+        '[class*="ezugi"] [class*="result"]',
+        '[class*="ezugi"] [class*="number"]'
+      ];
 
-      for (var c = 0; c < containers.length; c++) {
+      for (var k = 0; k < lowConfSelectors.length; k++) {
         try {
-          var walker = document.createTreeWalker(
-            containers[c],
-            NodeFilter.SHOW_TEXT,
-            null,
-            false
-          );
-          var node;
-          while (node = walker.nextNode()) {
-            var t = (node.textContent || '').trim();
-            if (t.length === 1 || t.length === 2) {
-              var n = parseInt(t, 10);
-              if (!isNaN(n) && n >= 0 && n <= 36 && t === String(n)) {
-                var parent = node.parentElement;
-                if (!parent) continue;
-                // Verificar que es un nodo hoja (no hay elementos hijos)
-                if (parent.children.length > 1) continue;
-                // Excluir clases que no son de resultado
-                var cls = (parent.className || '').toLowerCase() + ' ' + (parent.id || '').toLowerCase();
-                if (cls.indexOf('balance') >= 0 || cls.indexOf('wallet') >= 0 ||
-                    cls.indexOf('timer') >= 0 || cls.indexOf('countdown') >= 0 ||
-                    cls.indexOf('player') >= 0 || cls.indexOf('chat') >= 0 ||
-                    cls.indexOf('limit') >= 0 || cls.indexOf('min') >= 0 ||
-                    cls.indexOf('max') >= 0 || cls.indexOf('stake') >= 0 ||
-                    cls.indexOf('total') >= 0 || cls.indexOf('amount') >= 0 ||
-                    cls.indexOf('payout') >= 0 || cls.indexOf('multiplier') >= 0 ||
-                    cls.indexOf('level') >= 0 || cls.indexOf('rank') >= 0 ||
-                    cls.indexOf('vip') >= 0 || cls.indexOf('bonus') >= 0 ||
-                    cls.indexOf('free') >= 0 || cls.indexOf('spin') >= 0 ||
-                    cls.indexOf('bet') >= 0 || cls.indexOf('chip') >= 0) {
-                  continue;
-                }
-                console.log('[RollerWin MAIN] DOM brute force:', n, 'in', cls.substring(0, 50));
-                sendNumber(n);
+          var els2 = document.querySelectorAll(lowConfSelectors[k]);
+          for (var l = 0; l < Math.min(els2.length, 1); l++) {
+            var text2 = (els2[l].textContent || '').trim();
+            var num2 = parseInt(text2, 10);
+            if (!isNaN(num2) && num2 >= 0 && num2 <= 36 && String(num2) === text2) {
+              if (isValidResult(els2[l], num2)) {
+                sendNumber(num2, 'DOM-low:' + lowConfSelectors[k]);
                 return;
               }
             }
@@ -468,40 +556,35 @@
     function setup() {
       if (!document.body) return;
 
-      // Scan inicial
-      setTimeout(scanDOM, 1000);
-      setTimeout(scanDOM, 3000);
+      setTimeout(scanDOM, 2000);
+      setTimeout(scanDOM, 5000);
 
-      // MutationObserver para cambios en el DOM
       var timer = null;
-      new MutationObserver(function(mutations) {
+      new MutationObserver(function() {
         if (timer) return;
         timer = setTimeout(function() {
           timer = null;
           scanDOM();
-        }, 500);
+        }, 1000);
       }).observe(document.body, {
         childList: true,
         subtree: true,
-        characterData: true,
-        attributes: true
+        characterData: true
       });
 
-      // Scan periodico como respaldo (cada 3 segundos)
-      setInterval(scanDOM, 3000);
+      // Scan periodico cada 5 segundos (no cada 3, para no sobrecargar)
+      setInterval(scanDOM, 5000);
     }
 
     if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', function() {
-        setTimeout(setup, 100);
-      });
+      document.addEventListener('DOMContentLoaded', function() { setTimeout(setup, 100); });
     } else {
       setTimeout(setup, 100);
     }
   })();
 
   // ══════════════════════════════════════
-  // INTERCEPTAR postMessage (Evolution usa postMessage entre frames)
+  // HOOK postMessage
   // ══════════════════════════════════════
   (function hookPostMessage() {
     var origPostMessage = window.postMessage;
@@ -510,32 +593,27 @@
 
     window.postMessage = function(data, targetOrigin, transfer) {
       try {
-        var str = typeof data === 'string' ? data : JSON.stringify(data);
-        tryExtractFromText(str);
         if (typeof data === 'object' && data !== null) {
-          extractDeep(data, 0, 'postMessage');
+          extractObj(data, 0, 'postMessage-out');
         }
       } catch(e) {}
       return origPostMessage.call(window, data, targetOrigin, transfer);
     };
 
-    // Escuchar mensajes entrantes
     window.addEventListener('message', function(event) {
       try {
         var data = event.data;
-        if (typeof data === 'string') {
-          tryExtractFromText(data);
-        } else if (typeof data === 'object' && data !== null) {
-          extractDeep(data, 0, 'onmessage');
+        if (typeof data === 'object' && data !== null) {
+          extractObj(data, 0, 'postMessage-in');
         }
       } catch(e) {}
     });
 
-    console.log('[RollerWin MAIN] postMessage hook instalado en', hostname);
+    console.log('[RollerWin MAIN] postMessage hook OK en', hostname);
   })();
 
   // ══════════════════════════════════════
-  // HOOK EventSource (SSE - Server Sent Events)
+  // HOOK EventSource (SSE)
   // ══════════════════════════════════════
   (function hookEventSource() {
     if (typeof window.EventSource === 'undefined') return;
@@ -544,29 +622,15 @@
     OrigES.__rwV4Hooked = true;
 
     var ProxyES = function(url, opts) {
-      console.log('[RollerWin MAIN] EventSource creado:', url ? url.substring(0, 80) : 'null');
       var es = opts ? new OrigES(url, opts) : new OrigES(url);
 
-      es.addEventListener('message', function(e) {
-        try {
-          var data = e.data;
-          if (typeof data === 'string') {
-            tryExtractFromText(data);
-            try { extractDeep(JSON.parse(data), 0, 'sse'); } catch(err) {}
-          }
-        } catch(err) {}
-      });
-
-      // Algunos proveedores usan eventos con nombre
       var origAddListener = es.addEventListener.bind(es);
-      var eventTypes = ['result', 'game', 'update', 'roulette', 'number', 'outcome', 'round'];
-      eventTypes.forEach(function(evtType) {
+      ['result', 'game', 'update', 'roulette', 'number', 'outcome', 'round'].forEach(function(evtType) {
         origAddListener(evtType, function(e) {
           try {
-            var data = e.data;
-            if (typeof data === 'string') {
-              tryExtractFromText(data);
-              try { extractDeep(JSON.parse(data), 0, 'sse.' + evtType); } catch(err) {}
+            if (typeof e.data === 'string') {
+              extractFromText(e.data, 'sse.' + evtType);
+              try { extractObj(JSON.parse(e.data), 0, 'sse.' + evtType); } catch(err) {}
             }
           } catch(err) {}
         });
@@ -579,12 +643,10 @@
     ProxyES.CONNECTING = OrigES.CONNECTING;
     ProxyES.OPEN = OrigES.OPEN;
     ProxyES.CLOSED = OrigES.CLOSED;
-
     window.EventSource = ProxyES;
-    console.log('[RollerWin MAIN] EventSource hook instalado en', hostname);
   })();
 
-  console.log('[RollerWin MAIN] v4.0 MOTOR DE DETECCION activo en ' + hostname + ' ' +
-    (isInIframe ? '[IFRAME]' : '[PARENT]'));
+  console.log('[RollerWin MAIN] v4.1 activo en ' + hostname + ' ' +
+    (isInIframe ? '[IFRAME]' : '[PARENT]') + ' | Cooldown: ' + (COOLDOWN_MS/1000) + 's');
 
 })();
