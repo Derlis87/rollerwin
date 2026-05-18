@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         RollerWin - Auto Captura Evolution
+// @name         RollerWin Capture Evolution Betfury
 // @namespace    http://rollerwin.local/
-// @version      3.0.0
+// @version      3.1.0
 // @description  Detecta numeros de ruleta Evolution en Betfury y los envia automaticamente a RollerWin
 // @author       RollerWin
 // @match        https://betfury.io/*

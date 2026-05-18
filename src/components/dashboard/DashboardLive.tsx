@@ -2005,7 +2005,7 @@ export function DashboardLive() {
                             asChild
                             className="w-full h-7 text-[10px] bg-amber-500/10 border-amber-500/30 text-amber-400 hover:bg-amber-500/20 hover:text-amber-300 mt-1"
                           >
-                            <a href="/rollerwin-capture.user.js" target="_blank" rel="noopener noreferrer">
+                            <a href="/install" target="_blank" rel="noopener noreferrer">
                               <Download className="w-3 h-3 mr-1" />
                               Instalar Userscript v3.0
                             </a>
