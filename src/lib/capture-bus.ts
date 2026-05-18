@@ -62,21 +62,20 @@ class CaptureBus {
 
   /**
    * Get entries newer than `afterId`.
-   * If afterId is empty/undefined, returns empty array (no stale data).
-   * If afterId is not found (old session), returns empty array.
+   * If afterId is empty/undefined, return all current entries (after a reset).
+   * If afterId is not found (old session), return all entries.
    */
   getNew(afterId?: string): CaptureEntry[] {
     if (!afterId) {
-      // First poll — return nothing (don't send stale history numbers)
-      // The caller will get the afterId from the first empty response
-      return []
+      // First poll after reset — return all entries accumulated so far
+      return [...this.entries]
     }
 
     const idx = this.entries.findIndex(e => e.id === afterId)
     if (idx === -1) {
-      // ID not found (old session or after reset) — return nothing,
-      // caller will pick up the next fresh number
-      return []
+      // ID not found (server restarted or old session) — return all entries
+      // so the client can resync
+      return [...this.entries]
     }
 
     return this.entries.slice(idx + 1)
