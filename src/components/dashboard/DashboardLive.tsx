@@ -1241,12 +1241,13 @@ export function DashboardLive() {
     if (newNumbers.length >= 5) {
       const smart = generateSmartPrediction(newNumbers, selectedBetTypeRef.current)
       setSmartPrediction(smart)
+      smartPredictionRef.current = smart
       const pred = { type: smart.type, value: smart.bestValue }
-      setCurrentPrediction(pred)  // Visual display only
-      // DO NOT set currentPredictionRef.current — import prediction must NOT
-      // be used for live peak tracking (causes phantom peaks without signal count)
+      setCurrentPrediction(pred)
+      // SET ref so the first live-captured number gets evaluated against this prediction
+      currentPredictionRef.current = pred
       setConfidence(Math.min(85, smart.bestConfidence))
-      // Only show skip state
+      // Set engine skip state from imported data
       setIsEngineSkip(smart.shouldSkip === true)
       isEngineSkipRef.current = smart.shouldSkip === true
     } else {
