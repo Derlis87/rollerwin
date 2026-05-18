@@ -1,48 +1,18 @@
 {
   "manifest_version": 3,
   "name": "RollerWin Capture",
-  "version": "3.2.0",
+  "version": "4.0.0",
   "description": "Captura numeros de ruleta Evolution en Betfury y los envia a RollerWin",
-  "permissions": ["scripting", "activeTab", "storage"],
-  "host_permissions": [
-    "https://betfury.io/*",
-    "https://betfury.com/*",
-    "https://*.evolution-cdn.com/*",
-    "https://*.evolution-gaming.com/*",
-    "https://*.evo-gaming.com/*",
-    "https://*.evolution.live/*",
-    "https://*.ssl-live-cdn.com/*",
-    "https://*.evolutionmalta.com/*",
-    "https://*.evolutiongames.com/*",
-    "https://*.evoplay.games/*"
-  ],
+  "permissions": ["scripting", "activeTab", "storage", "webNavigation"],
+  "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://betfury.io/*",
-        "https://betfury.com/*"
-      ],
+      "matches": ["*://*.betfury.com/*", "*://*.betfury.io/*"],
       "js": ["content.js"],
-      "run_at": "document_start",
-      "all_frames": true
-    },
-    {
-      "matches": [
-        "https://*.evolution-cdn.com/*",
-        "https://*.evolution-gaming.com/*",
-        "https://*.evo-gaming.com/*",
-        "https://*.evolution.live/*",
-        "https://*.ssl-live-cdn.com/*",
-        "https://*.evolutionmalta.com/*",
-        "https://*.evolutiongames.com/*",
-        "https://*.evoplay.games/*"
-      ],
-      "js": ["content.js"],
-      "run_at": "document_start",
-      "all_frames": true
+      "run_at": "document_idle"
     }
   ],
   "action": {
@@ -60,7 +30,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["content.js"],
+      "resources": ["inject-main.js"],
       "matches": ["<all_urls>"]
     }
   ]
