@@ -351,8 +351,7 @@ function buildConsensusMarkov(
   data: number[],
   getCat: (n: number) => string | null
 ): { scores: Record<string, number>; consensus: string | null; agreement: number; windowResults: Array<{ window: number; color: string; pct: number }> } {
-  // v6.1: Use larger windows when we have 2000+ historical numbers for deeper pattern mining
-  const windows = data.length >= 2000 ? [50, 200, 500, 1000] : data.length >= 500 ? [30, 100, 300] : [20, 50, 100]
+  const windows = [20, 50, 100]
   const windowResults: Array<{ window: number; color: string; pct: number }> = []
   const scores: Record<string, number> = { red: 0, black: 0 }
 
@@ -771,8 +770,7 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
     const scores: Record<string, number> = {}; cats.forEach(c => scores[c] = 0)
     if (nonZero.length < 9) return scores
 
-    // v6.1: Use up to 200 last non-green results for triplet search (was only 9)
-    const TRIPLET_SEARCH_WINDOW = Math.min(200, nonZero.length)
+    const TRIPLET_SEARCH_WINDOW = Math.min(9, nonZero.length)
     const cats_history = nonZero.slice(-TRIPLET_SEARCH_WINDOW).map(n => getCat(n)).filter(Boolean)
     if (cats_history.length < 6) return scores
 
@@ -1058,9 +1056,8 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
       // v6.0: Streaks 3-5 moved to SKIP ZONE (no edge demonstrated).
       // Only streak 2 retains SOFT status — data shows 54.4% accuracy.
 
-      // v6.1: Recency-Weighted Markov — usa ventana adaptativa según historial disponible
-      // Con 5000+ números usamos 2000, con 1000+ usamos 1000, si no 300
-      const MARKOV_WINDOW_SOFT = nonZero.length >= 5000 ? 2000 : nonZero.length >= 1000 ? 1000 : 300
+      // Recency-Weighted Markov
+      const MARKOV_WINDOW_SOFT = 300
       const recentSlice = nonZero.length > MARKOV_WINDOW_SOFT ? nonZero.slice(-MARKOV_WINDOW_SOFT) : nonZero
 
       // Markov-2 (recency-weighted)
@@ -1235,8 +1232,8 @@ export function generateSmartPrediction(nums: number[], betType: BetType): Smart
     // v5.3: Now actually CONNECTS detectAlternatingPattern and shouldRecoveryFlip.
     // v5.2: Added Recovery Bailout to detect when engine is stuck predicting
     // one color and flip the prediction. Also added short-term recency.
-    // v6.1: Same adaptive window as SOFT mode
-    const MARKOV_WINDOW_NORM = nonZero.length >= 5000 ? 2000 : nonZero.length >= 1000 ? 1000 : 300
+    // Recency-Weighted Markov
+    const MARKOV_WINDOW_NORM = 300
     const recentSlice = nonZero.length > MARKOV_WINDOW_NORM ? nonZero.slice(-MARKOV_WINDOW_NORM) : nonZero
 
     // Markov-2 (recency-weighted, same as SOFT mode)
