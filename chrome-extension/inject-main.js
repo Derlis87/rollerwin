@@ -15,10 +15,6 @@
   var isInIframe = (window.self !== window.top);
   var hostname = location.hostname || '';
 
-  // Cooldown: la ruleta Evolution tira cada ~18 segundos
-  // 12s da margen suficiente (el numero aparece ~3-4s despues del giro)
-  var COOLDOWN_MS = 12000;
-
   var RED = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
 
   function getColor(n) {
@@ -34,14 +30,10 @@
 
     var now = Date.now();
 
-    // 1. Cooldown: evitar multiples detecciones del mismo giro
-    if (now - lastTime < COOLDOWN_MS) return;
-
-    // 2. Anti-stale: NUNCA reenviar el ultimo numero enviado.
-    // Solo permitir el mismo numero si paso mas de 45s (nuevo giro, mismo resultado).
-    // Esto previene que mensajes de historial stale de Evolution reseteen el cooldown
-    // y bloqueen el numero real del siguiente giro.
-    if (n === lastNum && now - lastTime < 45000) return;
+    // 1. Cooldown: evitar multiples detecciones del MISMO giro (~18s entre giros).
+    // 5s es suficiente: un numero aparece una vez por giro, y los hooks multiples
+    // (WS, Fetch, DOM) lo detectan casi al mismo tiempo.
+    if (n === lastNum && now - lastTime < 5000) return;
 
     lastNum = n;
     lastTime = now;

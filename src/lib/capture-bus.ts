@@ -69,9 +69,9 @@ export function pushCapture(number: number) {
 
   const entries = readEntries()
 
-  // Dedup: same number within 10 seconds
+  // Dedup: same number within 8 seconds (giros son ~18s apart, 8s es seguro)
   const recent = entries[entries.length - 1]
-  if (recent && recent.number === number && Date.now() - recent.timestamp < 10000) {
+  if (recent && recent.number === number && Date.now() - recent.timestamp < 8000) {
     return
   }
 
