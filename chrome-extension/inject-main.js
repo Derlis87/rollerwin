@@ -1,4 +1,4 @@
-// RollerWin Capture v4.4 - MAIN WORLD DETECTION ENGINE
+// RollerWin Capture v4.4.1 - MAIN WORLD DETECTION ENGINE
 // SOLO detecta numeros desde iframes (donde corre Evolution)
 // El parent page SOLO retransmite lo que llega via postMessage desde iframes
 // FIX: dedup por numero anterior previene que historial stale bloquee numeros nuevos
@@ -121,6 +121,105 @@
         }
       } catch(e) {}
     });
+
+    // ── v4.4.1: SESSION KEEP-ALIVE + AUTO-CLOSE "SESIÓN FINALIZADA" ──
+    // Betfury cierra la sesión por inactividad. Esto:
+    // 1) Envía keep-alive cada 4 min para prevenir el timeout
+    // 2) Detecta y auto-cierra el modal "SESIÓN FINALIZADA" si aparece
+    // 3) Notifica via widget que la sesión fue cerrada
+
+    var _keepAliveTimer = null;
+    var _modalCheckTimer = null;
+    var _sessionLost = false;
+
+    // Keep-alive: hace un fetch ligero para mantener la sesión activa
+    function startKeepAlive() {
+      if (_keepAliveTimer) return;
+      _keepAliveTimer = setInterval(function() {
+        try {
+          // Intenta un fetch a la API de Betfury para mantener sesión viva
+          fetch('/api/user/session', { method: 'GET', credentials: 'include', keepalive: true })
+            .catch(function() {});
+        } catch(e) {}
+        // También simula un evento de ratón para activity tracking
+        document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 1, clientY: 1 }));
+      }, 240000); // cada 4 minutos
+      console.log('[RollerWin] Keep-alive activado (cada 4 min)');
+    }
+
+    // Busca y cierra el modal "SESIÓN FINALIZADA"
+    function checkAndCloseModal() {
+      var allEls = document.querySelectorAll('div, p, span, h1, h2, h3, button');
+      for (var i = 0; i < allEls.length; i++) {
+        var el = allEls[i];
+        if (el.textContent && el.textContent.indexOf('SESIÓN') !== -1 && el.textContent.indexOf('FINALIZADA') !== -1) {
+          console.log('[RollerWin] ⚠️ Modal SESIÓN FINALIZADA detectado, cerrando...');
+          _sessionLost = true;
+          // Buscar el botón "OK" o botón de cerrar dentro del modal
+          var modal = el.closest('[class*="modal"], [class*="dialog"], [class*="popup"], [class*="overlay"]');
+          if (modal) {
+            var btns = modal.querySelectorAll('button, [class*="close"], [class*="btn"], [role="button"]');
+            for (var j = 0; j < btns.length; j++) {
+              var txt = (btns[j].textContent || '').trim();
+              if (txt === 'OK' || txt === 'Ok' || txt === 'ok' || txt.indexOf('Cerrar') !== -1 || txt.indexOf('Close') !== -1) {
+                btns[j].click();
+                console.log('[RollerWin] Botón "' + txt + '" clickeado');
+                break;
+              }
+            }
+            // Si no encontró botón por texto, clickear el primer botón
+            if (btns.length > 0) {
+              try { btns[0].click(); } catch(e) {}
+            }
+          }
+          // Notificar al widget
+          try {
+            document.dispatchEvent(new CustomEvent('rw-number', {
+              detail: { number: -1, color: 'session-lost', message: 'Sesión finalizada — necesita re-login' }
+            }));
+          } catch(e) {}
+          return true;
+        }
+      }
+      // También buscar texto en inglés "session expired" o "session ended"
+      for (var i2 = 0; i2 < allEls.length; i2++) {
+        var el2 = allEls[i2];
+        var t = (el2.textContent || '').toLowerCase();
+        if ((t.indexOf('session') !== -1 && t.indexOf('expired') !== -1) ||
+            (t.indexOf('session') !== -1 && t.indexOf('ended') !== -1)) {
+          console.log('[RollerWin] ⚠️ Session expired modal detectado, cerrando...');
+          var modal2 = el2.closest('[class*="modal"], [class*="dialog"], [class*="popup"], [class*="overlay"]');
+          if (modal2) {
+            var btns2 = modal2.querySelectorAll('button, [class*="close"], [class*="btn"], [role="button"]');
+            for (var k = 0; k < btns2.length; k++) {
+              try { btns2[k].click(); break; } catch(e) {}
+            }
+          }
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function startModalWatcher() {
+      if (_modalCheckTimer) return;
+      // Chequea cada 3 segundos
+      _modalCheckTimer = setInterval(checkAndCloseModal, 3000);
+      // También observer por cambios en el DOM
+      try {
+        var observer = new MutationObserver(function() {
+          checkAndCloseModal();
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+      } catch(e) {}
+      console.log('[RollerWin] Modal watcher activado (Sesión Finalizada)');
+    }
+
+    // Iniciar ambos sistemas
+    startKeepAlive();
+    startModalWatcher();
+    // Primer chequeo inmediato
+    setTimeout(checkAndCloseModal, 2000);
 
     return; // NADA MAS en el parent page
   }
