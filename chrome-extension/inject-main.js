@@ -647,5 +647,5 @@
     window.EventSource = Proxy;
   })();
 
-  console.log('[RollerWin] v4.4 MOTOR ACTIVO en IFRAME ' + hostname + ' | Cooldown: 12s | Anti-stale: 45s');
+  console.log('[RollerWin] v4.5 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup: 5s mismo numero');
 })();
