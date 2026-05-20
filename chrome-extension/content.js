@@ -1,4 +1,4 @@
-// RollerWin Capture v4.6 - Content Script (ISOLATED world, SOLO parent page)
+// RollerWin Capture v4.7 - Content Script (ISOLATED world, SOLO parent page)
 // Crea la UI flotante y recibe numeros via postMessage y CustomEvent
 (function() {
   'use strict';
@@ -85,15 +85,14 @@
     panel.style.cssText = 'pointer-events:auto;background:rgba(0,0,0,0.92);border:1px solid #22c55e;border-radius:10px;padding:10px 14px;color:white;max-width:300px;min-width:220px;';
     panel.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">' +
       '<div style="width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 6px #22c55e;"></div>' +
-      '<span style="font-size:11px;font-weight:600;color:#e4e4e7;">RollerWin Capture v4.6</span>' +
+      '<span style="font-size:11px;font-weight:600;color:#e4e4e7;">RollerWin Capture v4.7</span>' +
       '<span style="font-size:9px;color:#71717a;margin-left:auto;">MAIN world</span></div>';
 
     statusEl = document.createElement('div');
     statusEl.style.cssText = 'font-size:10px;color:#a1a1aa;white-space:pre-line;line-height:1.5;';
-    statusEl.textContent = 'Solo detecta desde iframes de Evolution\n' +
-      'Dedup: 5s (mismo numero)\n' +
-      'Keep-alive: mousemove 60s + fetch 90s\n' +
-      'Timer hook + Auto-close modal\n' +
+    statusEl.textContent = 'MOTOR v6.0 | Keep-alive: 30s\n' +
+      'Auto-recover + Timer hook\n' +
+      'Sin capturas >2min: reload\n' +
       'Esperando resultados del iframe...\n\n' +
       'Servidor: ' + SERVER_URL;
 
@@ -144,5 +143,5 @@
     });
   }
 
-  console.log('[RollerWin] Content Script v4.6 activo [PARENT]', location.hostname);
+  console.log('[RollerWin] Content Script v4.7 activo [PARENT]', location.hostname);
 })();

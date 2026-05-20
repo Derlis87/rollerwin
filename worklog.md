@@ -40,3 +40,34 @@ Stage Summary:
   5. visibilitychange handler (immediate activity when user returns to tab)
 - ZIP updated at public/RollerWin-Capture-v4.zip
 - All version labels synchronized: manifest v4.6.0, widget v4.6, popup v4.6, console logs v4.6
+
+---
+Task ID: 3
+Agent: main
+Task: Upgrade to v4.7 with ULTRA KEEP-ALIVE + AUTO-RECOVER after modal analysis
+
+Work Log:
+- Analyzed user's screenshot: modal shows "SESIÓN FINALIZADA" + "OK" button, roulette table visible behind
+- Key insight: clicking "OK" redirects to Betfury main page, losing the game table entirely
+- v4.6 approach of auto-clicking OK was wrong — it triggers the redirect
+- Researched Betfury URL patterns: game pages use betfury.com/casino/games/{slug}-by-{provider}, SPA with pushState
+- Rewrote entire keep-alive section from scratch as v4.7 ULTRA KEEP-ALIVE with 6 layers
+- Layer 1: Keep-alive activo every 30s (mousemove + mousedown/up + pointermove + Shift keydown + focus)
+- Layer 2: JWT refresh every 90s (4 endpoints, detects 401/403 as session lost)
+- Layer 3: Timer hook (setTimeout + setInterval for 10+ min, refresh every 3 min)
+- Layer 4: Session modal detection — NO click on OK, instead hides modal DOM element + overlays
+- Layer 5: Auto-recover — hooks history.pushState/replaceState to save game URL, if URL leaves /casino/games/ path, auto-navigates back (up to 5 attempts)
+- Layer 6: Visibility + focus handler (immediate activity + trigger recover on return)
+- Added iframe disconnect detection: if no captures for 2+ minutes while on game page, reload
+- Updated all version labels to v4.7 across all files
+- Updated ZIP at public/RollerWin-Capture-v4.zip
+
+Stage Summary:
+- Extension v4.7 with 6-layer protection:
+  1. Keep-alive every 30s (was 60s) with mousedown+pointermove added
+  2. JWT refresh every 90s with 401/403 detection
+  3. Timer hook (setTimeout + setInterval, refresh every 3 min)
+  4. Modal detection: HIDE modal, NO click OK (prevents redirect)
+  5. Auto-recover: save game URL via history hook, auto-navigate back if page changes
+  6. Visibility + focus + iframe disconnect reload (2 min no capture)
+- Key behavioral change: v4.6 clicked OK → redirect → lost game. v4.7 hides modal → stays on page → if redirected, auto-returns to game
