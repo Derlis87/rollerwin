@@ -1,4 +1,4 @@
-// RollerWin Capture v4.5 - MAIN WORLD DETECTION ENGINE
+// RollerWin Capture v4.6 - MAIN WORLD DETECTION ENGINE
 // SOLO detecta numeros desde iframes (donde corre Evolution)
 // El parent page SOLO retransmite lo que llega via postMessage desde iframes
 // FIX: dedup por numero anterior previene que historial stale bloquee numeros nuevos
@@ -667,5 +667,5 @@
     window.EventSource = Proxy;
   })();
 
-  console.log('[RollerWin] v4.5 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup: 5s mismo numero');
+  console.log('[RollerWin] v4.6 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup: 5s mismo numero');
 })();
