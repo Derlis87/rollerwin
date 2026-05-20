@@ -114,109 +114,88 @@
       } catch(e) {}
     });
 
-    // ── v4.5: ROBUST SESSION KEEP-ALIVE + AUTO-CLOSE + AUTO-REINJECT ──
-    // Problema: Betfury detecta inactividad y cierra sesión.
-    // Solución: simular actividad REAL cada 2 min + auto-cerrar modal + re-inyectar al volver
+    // ── v4.5.1: INVISIBLE KEEP-ALIVE + AUTO-CLOSE MODAL ──
+    // El keep-alive anterior (v4.5) hacía clicks y scrolls que CERRABAN la mesa.
+    // Ahora solo hace fetches silenciosos a la API — NO toca ningún elemento.
 
     var _sessionLost = false;
-    var _lastActivityPing = Date.now();
 
-    // ── 1) KEEP-ALIVE: simula actividad REAL cada 2 minutos ──
-    // Betfury detecta synthetic events, así que hacemos clicks reales en elementos inocuos
-    function simulateActivity() {
-      try {
-        // Click en el body (simula clic del usuario en la página)
-        document.body.click();
-
-        // Scroll mínimo para counts como actividad
-        window.scrollBy(0, 1);
-        setTimeout(function() { window.scrollBy(0, -1); }, 100);
-
-        // Focus en la ventana
-        window.focus();
-
-        // Click en un elemento visible que no rompa nada
-        var safeTargets = document.querySelectorAll('header, nav, [class*="header"], [class*="nav"], [class*="sidebar"], [class*="menu"]');
-        if (safeTargets.length > 0) {
-          safeTargets[0].dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-          safeTargets[0].dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-        }
-
-        // Fetch a varios endpoints de Betfury para mantener JWT vivo
-        var endpoints = ['/api/user/session', '/api/user/profile', '/api/user/balance', '/api/casino/games'];
-        var ep = endpoints[Math.floor(Math.random() * endpoints.length)];
-        fetch(ep, { method: 'GET', credentials: 'include', keepalive: true }).catch(function() {});
-
-        _lastActivityPing = Date.now();
-        console.log('[RollerWin] Keep-alive ping (' + new Date().toLocaleTimeString() + ')');
-      } catch(e) {}
+    // ── 1) KEEP-ALIVE: solo fetch silencioso cada 90 segundos ──
+    // No hace clicks, scrolls ni toca elementos. Solo pide datos a la API.
+    function silentKeepAlive() {
+      var endpoints = [
+        '/api/user/session',
+        '/api/user/profile',
+        '/api/user/balance'
+      ];
+      var ep = endpoints[Math.floor(Math.random() * endpoints.length)];
+      fetch(ep, { method: 'GET', credentials: 'include', keepalive: true })
+        .then(function() { console.log('[RollerWin] Keep-alive OK (' + new Date().toLocaleTimeString() + ')'); })
+        .catch(function() { console.log('[RollerWin] Keep-alive fetch falló (normal)'); });
     }
 
-    // Primer ping inmediato, luego cada 2 minutos
-    setTimeout(simulateActivity, 5000);
-    setInterval(simulateActivity, 120000);
+    // Primer ping a los 10s, luego cada 90 segundos
+    setTimeout(silentKeepAlive, 10000);
+    setInterval(silentKeepAlive, 90000);
 
-    // ── 2) KEEP-ALIVE desde within iframes también ──
-    // Intenta enviar activity pings a iframes de Evolution
-    function pingIframes() {
-      try {
-        var iframes = document.querySelectorAll('iframe');
-        for (var i = 0; i < iframes.length; i++) {
-          try {
-            iframes[i].contentWindow.postMessage({ type: 'ping', source: 'rollerwin-keepalive' }, '*');
-          } catch(e) {}
-        }
-      } catch(e) {}
-    }
-    setInterval(pingIframes, 60000);
+    // ── 2) AUTO-CLOSE MODAL "SESIÓN FINALIZADA" ──
+    // Solo reacciona si aparece el modal, NO toca nada mientras la mesa está activa
+    var _modalAlreadyClosed = false;
 
-    // ── 3) AUTO-CLOSE MODAL "SESIÓN FINALIZADA" ──
     function checkAndCloseModal() {
-      var allEls = document.querySelectorAll('div, p, span, h1, h2, h3, button');
+      if (_modalAlreadyClosed) return false;
+      var allEls = document.querySelectorAll('div, p, span, h1, h2, h3');
       for (var i = 0; i < allEls.length; i++) {
         var el = allEls[i];
-        if (el.textContent && el.textContent.indexOf('SESIÓN') !== -1 && el.textContent.indexOf('FINALIZADA') !== -1) {
+        var txt = el.textContent || '';
+        // Solo buscar si tiene ambos textos (evita falsos positivos)
+        if (txt.indexOf('SESIÓN') !== -1 && txt.indexOf('FINALIZADA') !== -1) {
           console.log('[RollerWin] Modal SESIÓN FINALIZADA detectado, cerrando...');
-          _sessionLost = true;
-          // Clickear el botón OK
+          _modalAlreadyClosed = true;
+          // Buscar SOLO botones que digan OK/Aceptar dentro del modal
           var modal = el.closest('[class*="modal"], [class*="dialog"], [class*="popup"], [class*="overlay"], [class*="confirm"]');
           if (modal) {
-            var btns = modal.querySelectorAll('button, [class*="close"], [class*="btn"], [role="button"], [class*="confirm"]');
+            var btns = modal.querySelectorAll('button');
             for (var j = 0; j < btns.length; j++) {
-              var txt = (btns[j].textContent || '').trim();
-              if (txt === 'OK' || txt === 'Ok' || txt === 'ok' || txt === 'Aceptar' || txt.indexOf('Cerrar') !== -1 || txt.indexOf('Close') !== -1) {
+              var bt = (btns[j].textContent || '').trim();
+              if (bt === 'OK' || bt === 'Ok' || bt === 'ok' || bt === 'Aceptar') {
                 btns[j].click();
-                console.log('[RollerWin] Boton "' + txt + '" clickeado');
-                break;
+                console.log('[RollerWin] Boton "' + bt + '" clickeado');
+                // Resetear flag después de 60s por si vuelve a aparecer
+                setTimeout(function() { _modalAlreadyClosed = false; }, 60000);
+                return true;
               }
             }
-            // Fallback: clickear primer botón
-            if (btns.length > 0) try { btns[0].click(); } catch(e) {}
           }
-          // Si no encontró modal por clases, buscar botón OK directo
-          else {
-            var allBtns = document.querySelectorAll('button');
-            for (var b = 0; b < allBtns.length; b++) {
-              var bt = (allBtns[b].textContent || '').trim();
-              if (bt === 'OK' || bt === 'Ok' || bt === 'Aceptar') {
-                allBtns[b].click();
-                break;
-              }
+          // Fallback: buscar botón OK en toda la página
+          var allBtns = document.querySelectorAll('button');
+          for (var b = 0; b < allBtns.length; b++) {
+            var btxt = (allBtns[b].textContent || '').trim();
+            if (btxt === 'OK' || btxt === 'Ok' || btxt === 'Aceptar') {
+              allBtns[b].click();
+              console.log('[RollerWin] Fallback boton "' + btxt + '" clickeado');
+              setTimeout(function() { _modalAlreadyClosed = false; }, 60000);
+              return true;
             }
           }
           return true;
         }
       }
-      // Variantes en inglés
+      // Variante en inglés
       for (var i2 = 0; i2 < allEls.length; i2++) {
-        var el2 = allEls[i2];
-        var t = (el2.textContent || '').toLowerCase();
+        var t = ((allEls[i2].textContent || '')).toLowerCase();
         if ((t.indexOf('session') !== -1 && t.indexOf('expired') !== -1) ||
             (t.indexOf('session') !== -1 && t.indexOf('ended') !== -1)) {
           console.log('[RollerWin] Session expired modal detectado');
           var allBtns2 = document.querySelectorAll('button');
           for (var b2 = 0; b2 < allBtns2.length; b2++) {
-            try { allBtns2[b2].click(); break; } catch(e) {}
+            var bt2 = (allBtns2[b2].textContent || '').trim();
+            if (bt2 === 'OK' || bt2 === 'Ok') {
+              allBtns2[b2].click();
+              _modalAlreadyClosed = true;
+              setTimeout(function() { _modalAlreadyClosed = false; }, 60000);
+              return true;
+            }
           }
           return true;
         }
@@ -224,61 +203,28 @@
       return false;
     }
 
-    // Chequeo modal cada 2 segundos
-    setInterval(checkAndCloseModal, 2000);
+    // Chequeo modal cada 3 segundos (no cada 2s, para no sobrecargar)
+    setInterval(checkAndCloseModal, 3000);
     try {
       var _modalObserver = new MutationObserver(function() { checkAndCloseModal(); });
       _modalObserver.observe(document.body, { childList: true, subtree: true });
     } catch(e) {}
-    setTimeout(checkAndCloseModal, 2000);
+    setTimeout(checkAndCloseModal, 5000);
 
-    // ── 4) AUTO-REINJECT cuando la página vuelve a ser visible ──
-    // Si el usuario vuelve a la pestaña después de re-login, re-inyectamos en todos los iframes
+    // ── 3) AUTO-REINJECT cuando el usuario vuelve a la pestaña ──
     document.addEventListener('visibilitychange', function() {
-      if (!document.hidden && !_sessionLost) {
-        console.log('[RollerWin] Tab visible — verificando iframes...');
-        setTimeout(function() {
-          var iframes = document.querySelectorAll('iframe');
-          for (var i = 0; i < iframes.length; i++) {
-            try {
-              // Notificar al iframe que puede re-inyectar
-              iframes[i].contentWindow.postMessage({ type: 'rw-reinject', source: 'rollerwin-parent' }, '*');
-            } catch(e) {}
-          }
-        }, 2000);
-      }
       if (!document.hidden) {
-        // Re-marcar como no-lost cuando el usuario vuelve
-        // (asumió que re-logueó si el modal apareció)
+        console.log('[RollerWin] Tab visible — keep-alive ping...');
+        silentKeepAlive();
         if (_sessionLost) {
-          console.log('[RollerWin] Usuario volvió después de session lost — actividad resumida');
+          console.log('[RollerWin] Sesión fue perdida — usuario volvió, re-activando');
           _sessionLost = false;
-          simulateActivity();
+          _modalAlreadyClosed = false;
         }
       }
     });
 
-    // ── 5) KEEP-ALIVE con click en área de juego cada 3 minutos ──
-    // Hace un click REAL en el area de la mesa (no destructivo)
-    function clickGameArea() {
-      try {
-        var gameArea = document.querySelector('[class*="game"], [class*="roulette"], [class*="casino"], [class*="lobby"]');
-        if (gameArea) {
-          var rect = gameArea.getBoundingClientRect();
-          var event = new MouseEvent('click', {
-            bubbles: true,
-            cancelable: true,
-            clientX: rect.left + rect.width / 2,
-            clientY: rect.top + rect.height / 2
-          });
-          gameArea.dispatchEvent(event);
-          console.log('[RollerWin] Click en game area (keep-alive)');
-        }
-      } catch(e) {}
-    }
-    setInterval(clickGameArea, 180000);
-
-    console.log('[RollerWin] Keep-alive v4.5 activado: pings cada 2min + modal watcher + auto-reinject');
+    console.log('[RollerWin] Keep-alive v4.5.1: fetch silencioso cada 90s + auto-close modal');
 
     return; // NADA MAS en el parent page
   }
