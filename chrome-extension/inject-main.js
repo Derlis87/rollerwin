@@ -1,4 +1,4 @@
-// RollerWin Capture v4.7 - MAIN WORLD DETECTION ENGINE
+// RollerWin Capture v4.8 - MAIN WORLD DETECTION ENGINE
 // SOLO detecta numeros desde iframes (donde corre Evolution)
 // El parent page SOLO retransmite lo que llega via postMessage desde iframes
 // FIX: dedup por numero anterior previene que historial stale bloquee numeros nuevos
@@ -114,29 +114,41 @@
       } catch(e) {}
     });
 
-    // ╔═══════════════════════════════════════════════════════════════╗
-    // ║  v4.7: ULTRA KEEP-ALIVE + AUTO-RECOVER                        ║
-    // ║  Problema: Betfury expira sesión tras ~30 min inactividad.     ║
-    // ║  El modal "SESIÓN FINALIZADA" + OK redirige a página principal  ║
-    // ║  y hay que buscar la mesa de nuevo manualmente.                 ║
-    // ║  Solución: (A) Prevenir caducamiento, (B) Auto-volver a mesa   ║
-    // ╚═══════════════════════════════════════════════════════════════╝
+    // ╔══════════════════════════════════════════════════════════════════╗
+    // ║  v4.8: BETFURY-AWARE KEEP-ALIVE                                ║
+    // ║                                                                ║
+    // ║  INVESTIGACIÓN REAL:                                            ║
+    // ║  - Betfury usa wallet auth (NO JWT tradicional)                 ║
+    // ║  - No hay endpoint de refresh público                          ║
+    // ║  - La actividad dentro del iframe de Evolution NO cuenta       ║
+    // ║  - El timer de sesión es SERVER-SIDE (no se puede prevenir)    ║
+    // ║  - El único refresh válido es un fetch real a la API de Betfury║
+    // ║                                                                ║
+    // ║  ESTRATEGIA:                                                   ║
+    // ║  1. FETCH REALES a endpoints de Betfury cada 5 min             ║
+    // ║     (esto ES actividad del servidor y reinicia el timer)        ║
+    // ║  2. Si la sesión ya expiró → la extensión NO puede re-login   ║
+    //     (requiere wallet sign) → Avisar al usuario                    ║
+    // ║  3. NUNCA recargar la página automáticamente                   ║
+    //     (puede dejar la mesa en estado "preview" sin juego)          ║
+    // ╚══════════════════════════════════════════════════════════════════╝
 
-    var _sessionLost = false;
-    var _gameUrl = location.href; // Guardar URL de la mesa actual
-    var _lastCaptureTime = Date.now(); // Último número capturado
     var _keepAliveCount = 0;
+    var _lastCaptureTime = Date.now();
+    var _sessionAlive = true;
+    var _lastKeepAliveResponse = 'pending';
 
-    // Guardar la URL del juego cuando cambiamos entre páginas internas del SPA
+    // Guardar la URL de la mesa actual (via history hooks)
+    var _gameUrl = location.href;
     var _pushStateOrig = history.pushState;
     var _replaceStateOrig = history.replaceState;
     if (history.pushState) {
       history.pushState = function() {
         var result = _pushStateOrig.apply(this, arguments);
         if (location.href.indexOf('/casino/games/') !== -1 ||
-            location.href.indexOf('/casino/live-casino') !== -1) {
+            location.href.indexOf('/casino/live-casino') !== -1 ||
+            location.href.indexOf('/roulette') !== -1) {
           _gameUrl = location.href;
-          console.log('[RollerWin] URL de juego guardada:', _gameUrl);
         }
         return result;
       };
@@ -145,336 +157,168 @@
       history.replaceState = function() {
         var result = _replaceStateOrig.apply(this, arguments);
         if (location.href.indexOf('/casino/games/') !== -1 ||
-            location.href.indexOf('/casino/live-casino') !== -1) {
+            location.href.indexOf('/casino/live-casino') !== -1 ||
+            location.href.indexOf('/roulette') !== -1) {
           _gameUrl = location.href;
-          console.log('[RollerWin] URL de juego guardada (replace):', _gameUrl);
         }
         return result;
       };
     }
 
-    // Actualizar _gameUrl periódicamente si estamos en una mesa
+    // Actualizar URL guardada periódicamente
     setInterval(function() {
-      if (location.href.indexOf('/casino/games/') !== -1 ||
-          location.href.indexOf('/casino/live-casino') !== -1) {
-        _gameUrl = location.href;
+      var h = location.href;
+      if (h.indexOf('/casino/games/') !== -1 || h.indexOf('/roulette') !== -1) {
+        _gameUrl = h;
       }
     }, 30000);
 
-    // Recibir timestamp de última captura desde CustomEvent
+    // Recibir timestamp de última captura
     document.addEventListener('rw-number', function() {
       _lastCaptureTime = Date.now();
     });
 
-    // ══════════════════════════════════════
-    // LAYER 1: KEEP-ALIVE ACTIVO (30s)
-    // Dispatch de eventos sintéticos que Betfury reconoce como actividad
-    // ══════════════════════════════════════
-    var _mouseX = 200, _mouseY = 200;
-    function invisibleActivity() {
+    // ════════════════════════════════════════════════════════
+    // ESTRATEGIA PRINCIPAL: FETCH REALES a la API de Betfury
+    // Estos fetch VAN al servidor de Betfury con las cookies
+    // de sesión y SÍ reinician el timer de inactividad.
+    // Cada 5 minutos es suficiente para mantener la sesión.
+    // ════════════════════════════════════════════════════════
+    function betfuryKeepAlive() {
       _keepAliveCount++;
 
-      // Movimiento de mouse con coordenadas realistas
-      _mouseX += (Math.random() > 0.5 ? 1 : -1) * (Math.floor(Math.random() * 15) + 5);
-      _mouseY += (Math.random() > 0.5 ? 1 : -1) * (Math.floor(Math.random() * 10) + 5);
-      if (_mouseX < 80) _mouseX = 150 + Math.random() * 200;
-      if (_mouseX > 900) _mouseX = 400 + Math.random() * 200;
-      if (_mouseY < 80) _mouseY = 150 + Math.random() * 150;
-      if (_mouseY > 700) _mouseY = 300 + Math.random() * 150;
-
-      // Mousemove sobre el document
-      document.dispatchEvent(new MouseEvent('mousemove', {
-        clientX: _mouseX, clientY: _mouseY,
-        screenX: _mouseX, screenY: _mouseY,
-        movementX: Math.floor(Math.random() * 5) + 1,
-        movementY: Math.floor(Math.random() * 5) + 1,
-        bubbles: true, cancelable: true, view: window
-      }));
-
-      // Mousedown + mouseup en el body (simula actividad de ratón sin hacer click en nada)
-      // Esto es clave: algunos frameworks consideran mousedown como actividad real
-      document.dispatchEvent(new MouseEvent('mousedown', {
-        clientX: _mouseX, clientY: _mouseY,
-        button: 0, buttons: 1,
-        bubbles: true, cancelable: true, view: window
-      }));
-      document.dispatchEvent(new MouseEvent('mouseup', {
-        clientX: _mouseX, clientY: _mouseY,
-        button: 0, buttons: 0,
-        bubbles: true, cancelable: true, view: window
-      }));
-
-      // Keypress sutil (NO keydown de control que abre menús)
-      // Usamos una tecla segura que no tiene acción en el navegador
-      document.dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'Shift', code: 'ShiftLeft', keyCode: 16, which: 16,
-        bubbles: true, cancelable: false
-      }));
-      document.dispatchEvent(new KeyboardEvent('keyup', {
-        key: 'Shift', code: 'ShiftLeft', keyCode: 16, which: 16,
-        bubbles: true, cancelable: false
-      }));
-
-      // Pointer events (modern browsers usan pointer events en vez de mouse)
-      try {
-        document.dispatchEvent(new PointerEvent('pointermove', {
-          clientX: _mouseX, clientY: _mouseY,
-          pointerId: 1, pointerType: 'mouse', isPrimary: true,
-          bubbles: true, cancelable: true, view: window
-        }));
-      } catch(e) {}
-
-      // Focus event en window (algunos SPAs lo usan para actividad)
-      try { window.dispatchEvent(new Event('focus', { bubbles: false })); } catch(e) {}
-
-      if (_keepAliveCount % 5 === 0) { // Log cada 5 pings (no spam)
-        console.log('[RollerWin] Keep-alive #' + _keepAliveCount + ' (' + new Date().toLocaleTimeString() + ')');
-      }
-    }
-
-    // Primera actividad a los 3s, luego cada 30 segundos
-    setTimeout(invisibleActivity, 3000);
-    setInterval(invisibleActivity, 30000);
-
-    // ══════════════════════════════════════
-    // LAYER 2: JWT REFRESH (90s)
-    // Llamadas a API de Betfury para mantener el token vivo
-    // ══════════════════════════════════════
-    function jwtKeepAlive() {
+      // Lista de endpoints reales de Betfury que mantenemos la sesión
+      // Estos van al MISMO dominio (betfury.com/betfury.io)
       var endpoints = [
-        '/api/user/session',
-        '/api/user/profile',
         '/api/user/balance',
-        '/api/user/settings'
+        '/api/user/profile',
+        '/api/user/session',
+        '/api/user/settings',
+        '/api/casino/categories',
+        '/api/casino/games/favorites'
       ];
+
       var ep = endpoints[Math.floor(Math.random() * endpoints.length)];
+
       fetch(ep, {
         method: 'GET',
-        credentials: 'include',
+        credentials: 'include',   // IMPORTANTE: envía cookies de sesión
         keepalive: true,
-        headers: { 'Accept': 'application/json' }
-      }).then(function(r) {
-        if (r.status === 401 || r.status === 403) {
-          console.log('[RollerWin] JWT expirado (HTTP ' + r.status + ')');
-          _sessionLost = true;
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
         }
-      }).catch(function() {});
-    }
-    setTimeout(jwtKeepAlive, 5000);
-    setInterval(jwtKeepAlive, 90000);
-
-    // ══════════════════════════════════════
-    // LAYER 3: HOOK TIMERS DE SESIÓN
-    // Interceptar timers largos (posibles expiradores de sesión)
-    // ══════════════════════════════════════
-    var _origSetTimeout = window.setTimeout;
-    var _origSetInterval = window.setInterval;
-    var _origClearTimeout = window.clearTimeout;
-    var _longTimers = [];
-
-    window.setTimeout = function(fn, delay) {
-      if (delay && delay >= 600000) { // 10+ min
-        var id = _origSetTimeout.call(window, fn, delay);
-        _longTimers.push({ id: id, fn: fn, delay: delay });
-        console.log('[RollerWin] Timer largo capturado:', Math.round(delay/1000) + 's');
-        return id;
-      }
-      return _origSetTimeout.apply(window, arguments);
-    };
-
-    window.setInterval = function(fn, delay) {
-      if (delay && delay >= 600000) { // 10+ min
-        var id = _origSetInterval.call(window, fn, delay);
-        console.log('[RollerWin] Interval largo capturado:', Math.round(delay/1000) + 's');
-        return id;
-      }
-      return _origSetInterval.apply(window, arguments);
-    };
-
-    window.clearTimeout = function(id) {
-      _longTimers = _longTimers.filter(function(t) { return t.id !== id; });
-      return _origClearTimeout.apply(window, arguments);
-    };
-
-    // Refrescar timers largos cada 3 minutos
-    setInterval(function() {
-      if (_longTimers.length === 0) return;
-      console.log('[RollerWin] Refrescando ' + _longTimers.length + ' timer(s) de sesión...');
-      var refreshed = [];
-      _longTimers.forEach(function(timer) {
-        _origClearTimeout.call(window, timer.id);
-        var newId = _origSetTimeout.call(window, timer.fn, timer.delay);
-        refreshed.push({ id: newId, fn: timer.fn, delay: timer.delay });
+      }).then(function(r) {
+        _lastKeepAliveResponse = r.status;
+        if (r.status === 200 || r.status === 201) {
+          _sessionAlive = true;
+          if (_keepAliveCount % 3 === 0) {
+            console.log('[RollerWin] Keep-alive #' + _keepAliveCount + ' OK (HTTP ' + r.status + ') — ' + new Date().toLocaleTimeString());
+          }
+        } else if (r.status === 401 || r.status === 403) {
+          _sessionAlive = false;
+          console.log('[RollerWin] ⚠️ Sesión EXPIRADA (HTTP ' + r.status + ') — se necesita re-login');
+        } else {
+          console.log('[RollerWin] Keep-alive #' + _keepAliveCount + ' HTTP ' + r.status);
+        }
+      }).catch(function(err) {
+        _lastKeepAliveResponse = 'error';
+        console.log('[RollerWin] Keep-alive #' + _keepAliveCount + ' error:', err.message);
       });
-      _longTimers = refreshed;
-    }, 180000);
+    }
 
-    // ══════════════════════════════════════
-    // LAYER 4: DETECTAR Y MANEJAR MODAL + AUTO-RECOVER
-    // PROBLEMA: Click en OK redirige a página principal y se pierde la mesa.
-    // SOLUCIÓN: Detectar el modal, guardar URL, y si salimos de la mesa, volver.
-    // ══════════════════════════════════════
-    var _modalDetected = false;
-    var _recoverAttempts = 0;
-    var _maxRecoverAttempts = 5;
+    // Primer fetch rápido (3s) y luego cada 5 minutos
+    setTimeout(betfuryKeepAlive, 3000);
+    setInterval(betfuryKeepAlive, 300000); // 5 minutos
 
-    function detectSessionModal() {
-      if (_modalDetected) return;
+    // ════════════════════════════════════════════════════════
+    // DETECCIÓN DE ESTADO: Saber si el juego sigue activo
+    // ════════════════════════════════════════════════════════
+
+    // Detectar modal de sesión expirada (solo para AVISAR, no para actuar)
+    function checkSessionStatus() {
       var allEls = document.querySelectorAll('div, p, span, h1, h2, h3');
 
       // Español: "SESIÓN FINALIZADA"
       for (var i = 0; i < allEls.length; i++) {
         var txt = (allEls[i].textContent || '');
         if (txt.indexOf('SESI') !== -1 && txt.indexOf('FINALIZADA') !== -1) {
-          console.log('[RollerWin] ⚠️ SESIÓN FINALIZADA detectada!');
-          _modalDetected = true;
-          _sessionLost = true;
-
-          // Guardar URL del juego ANTES de que nos redirija
-          if (location.href.indexOf('/casino/games/') !== -1) {
-            _gameUrl = location.href;
-            console.log('[RollerWin] URL de mesa guardada para auto-recover:', _gameUrl);
-          }
-
-          // NO hacer click en OK — eso redirige a la página principal.
-          // En su lugar, intentar quitar el modal del DOM para que no moleste
+          if (!_sessionAlive) return; // Ya lo sabemos
+          _sessionAlive = false;
+          _lastKeepAliveResponse = 'session-modal';
+          console.log('[RollerWin] ⚠️ Modal SESIÓN FINALIZADA detectado');
+          console.log('[RollerWin] La sesión expiró. Necesitás hacer click en OK y re-login');
+          console.log('[RollerWin] La extensión NO puede re-login automáticamente (requiere wallet)');
+          // NOTIFICAR al content script para que muestre estado
           try {
-            var modal = allEls[i].closest('[class*="modal"], [class*="dialog"], [class*="popup"], [class*="overlay"], [class*="confirm"]');
-            if (modal) {
-              modal.style.display = 'none';
-              console.log('[RollerWin] Modal ocultado (sin click en OK)');
-            }
-            // También ocultar overlay oscuro
-            var overlays = document.querySelectorAll('[class*="overlay"], [class*="backdrop"]');
-            for (var o = 0; o < overlays.length; o++) {
-              if (overlays[o].style.display !== 'none') {
-                overlays[o].style.display = 'none';
-              }
-            }
+            document.dispatchEvent(new CustomEvent('rw-status', {
+              detail: { status: 'session-expired', message: 'Sesión expirada — re-login requerido' }
+            }));
           } catch(e) {}
-
-          // Intentar refrescar la sesión con un fetch inmediato
-          jwtKeepAlive();
-          invisibleActivity();
-
-          setTimeout(function() { _modalDetected = false; }, 30000);
-          return true;
+          return;
         }
       }
 
-      // Inglés: "session expired" / "session ended"
+      // Inglés: "session expired"
       for (var i2 = 0; i2 < allEls.length; i2++) {
         var t = ((allEls[i2].textContent || '').toLowerCase());
         if ((t.indexOf('session') !== -1 && t.indexOf('expired') !== -1) ||
             (t.indexOf('session') !== -1 && t.indexOf('ended') !== -1)) {
-          console.log('[RollerWin] ⚠️ Session expired (EN) detectado!');
-          _modalDetected = true;
-          _sessionLost = true;
-          _gameUrl = location.href;
-          // Mismo manejo: ocultar modal, no hacer click
+          if (!_sessionAlive) return;
+          _sessionAlive = false;
+          _lastKeepAliveResponse = 'session-modal';
+          console.log('[RollerWin] ⚠️ Session expired modal detected');
           try {
-            var m = allEls[i2].closest('[class*="modal"], [class*="dialog"], [class*="popup"], [class*="overlay"]');
-            if (m) m.style.display = 'none';
+            document.dispatchEvent(new CustomEvent('rw-status', {
+              detail: { status: 'session-expired', message: 'Session expired — re-login required' }
+            }));
           } catch(e) {}
-          setTimeout(function() { _modalDetected = false; }, 30000);
-          return true;
+          return;
         }
       }
-      return false;
     }
 
-    setInterval(detectSessionModal, 3000);
+    setInterval(checkSessionStatus, 10000);
     try {
-      new MutationObserver(function() { detectSessionModal(); }).observe(document.body, { childList: true, subtree: true });
+      new MutationObserver(function() { checkSessionStatus(); }).observe(document.body, { childList: true, subtree: true });
     } catch(e) {}
 
-    // ══════════════════════════════════════
-    // LAYER 5: AUTO-RECOVER — Si salimos de la mesa, volver automáticamente
-    // Monitorea la URL y si ya no estamos en la mesa, redirige de vuelta.
-    // ══════════════════════════════════════
-    function autoRecover() {
-      // Si no tenemos URL de juego guardada, nada que hacer
-      if (!_gameUrl || _gameUrl.indexOf('/casino/games/') === -1) return;
-
-      // Si estamos en la mesa, todo bien
-      var currentUrl = location.href;
-      if (currentUrl.indexOf('/casino/games/') !== -1) {
-        // Estamos de vuelta en la mesa, resetear contador
-        _recoverAttempts = 0;
-        return;
-      }
-
-      // Si la sesión no se perdió, no recuperar
-      if (!_sessionLost) return;
-
-      // Si ya intentamos demasiadas veces, parar
-      if (_recoverAttempts >= _maxRecoverAttempts) {
-        console.log('[RollerWin] Auto-recover: max intentos alcanzados (' + _maxRecoverAttempts + ')');
-        return;
-      }
-
-      // Estamos fuera de la mesa y la sesión se perdió → volver
-      _recoverAttempts++;
-      console.log('[RollerWin] 🔄 Auto-recover #' + _recoverAttempts + ': volviendo a mesa...');
-      console.log('[RollerWin] URL destino:', _gameUrl);
-
-      // Intentar navegar de vuelta usando history.back primero
-      // (el modal de sesión podría haber hecho un pushState)
-      setTimeout(function() {
-        if (location.href.indexOf('/casino/games/') !== -1) return; // Ya volvimos
-
-        // Si history.back no funciona, navegar directamente
-        console.log('[RollerWin] Navegando a:', _gameUrl);
-        location.href = _gameUrl;
-      }, 2000);
-
-      // Darle tiempo y si no funciona, intentar location.href directo
-      setTimeout(function() {
-        if (location.href.indexOf('/casino/games/') !== -1) return; // Ya volvimos
-        console.log('[RollerWin] Reintentando con location.href...');
-        location.href = _gameUrl;
-      }, 8000);
-    }
-
-    // Checkear cada 10 segundos si necesitamos recuperar
-    setInterval(autoRecover, 10000);
-
-    // También detectar cuando no hay capturas por mucho tiempo (2+ minutos)
-    // Esto puede indicar que el iframe de Evolution se desconectó
-    setInterval(function() {
-      var noCaptureMs = Date.now() - _lastCaptureTime;
-      if (noCaptureMs > 120000 && _gameUrl && _gameUrl.indexOf('/casino/games/') !== -1) {
-        console.log('[RollerWin] ⚠️ Sin capturas por ' + Math.round(noCaptureMs/1000) + 's — posible desconexión del iframe');
-        // Si no hay capturas, intentar refrescar la página para reconectar
-        // Solo si la sesión sigue activa
-        if (!_sessionLost) {
-          console.log('[RollerWin] Recargando página para reconectar iframe...');
-          location.reload();
-        }
-      }
-    }, 60000);
-
-    // ══════════════════════════════════════
-    // LAYER 6: VISIBILITY + FOCUS
-    // ══════════════════════════════════════
+    // ════════════════════════════════════════════════════════
+    // VISIBILITY + FOCUS: Re-keepalive al volver
+    // ════════════════════════════════════════════════════════
     document.addEventListener('visibilitychange', function() {
       if (!document.hidden) {
-        invisibleActivity();
-        jwtKeepAlive();
-        if (_sessionLost) {
-          console.log('[RollerWin] Usuario volvió con sesión perdida — intentando recover...');
-          setTimeout(autoRecover, 3000);
-        }
+        // Al volver a la pestaña, hacer un keep-alive inmediato
+        betfuryKeepAlive();
+        checkSessionStatus();
       }
     });
 
-    // Focus en la ventana (usuario vuelve a la pestaña)
     window.addEventListener('focus', function() {
-      invisibleActivity();
+      betfuryKeepAlive();
     });
 
-    console.log('[RollerWin] v4.7 ULTRA KEEP-ALIVE activo: 6 capas de protección');
-    console.log('[RollerWin] Mesa guardada:', _gameUrl);
+    // ════════════════════════════════════════════════════════
+    // REPORTAR estado periódicamente al content script
+    // Para que el widget muestre info real
+    // ════════════════════════════════════════════════════════
+    setInterval(function() {
+      try {
+        var noCaptureSec = Math.round((Date.now() - _lastCaptureTime) / 1000);
+        document.dispatchEvent(new CustomEvent('rw-status', {
+          detail: {
+            status: _sessionAlive ? 'alive' : 'expired',
+            keepAliveCount: _keepAliveCount,
+            lastResponse: _lastKeepAliveResponse,
+            noCaptureSec: noCaptureSec,
+            gameUrl: _gameUrl
+          }
+        }));
+      } catch(e) {}
+    }, 15000);
+
+    console.log('[RollerWin] v4.8 BETFURY-AWARE keep-alive activo');
+    console.log('[RollerWin] Fetch reales a Betfury cada 5 min | URL mesa:', _gameUrl);
 
     return; // NADA MAS en el parent page
   }
@@ -843,5 +687,5 @@
     window.EventSource = Proxy;
   })();
 
-  console.log('[RollerWin] v4.7 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup: 5s mismo numero');
+  console.log('[RollerWin] v4.8 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup: 5s mismo numero');
 })();

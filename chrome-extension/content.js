@@ -1,5 +1,6 @@
-// RollerWin Capture v4.7 - Content Script (ISOLATED world, SOLO parent page)
+// RollerWin Capture v4.8 - Content Script (ISOLATED world, SOLO parent page)
 // Crea la UI flotante y recibe numeros via postMessage y CustomEvent
+// v4.8: Recibe eventos rw-status del MAIN world para mostrar estado real
 (function() {
   'use strict';
   if (window.__rwContentV4) return;
@@ -11,6 +12,10 @@
   var statusEl = null;
   var circleEl = null;
   var enabled = true;
+  var dotEl = null;
+
+  // Estado del keep-alive (recibido del MAIN world)
+  var _kaStatus = { alive: true, count: 0, lastResp: 'pending', noCapSec: 0 };
 
   var RED = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
 
@@ -35,9 +40,7 @@
     }
 
     // Actualizar estado
-    if (statusEl) {
-      statusEl.textContent = 'Detectado: ' + num + ' (' + getColor(num) + ')\n' + sentCount + ' capturados';
-    }
+    refreshStatus();
 
     // Enviar al background para badge
     try {
@@ -48,6 +51,48 @@
         total: sentCount
       });
     } catch(e) {}
+  }
+
+  // Refrescar el texto de estado con info real
+  function refreshStatus() {
+    if (!statusEl) return;
+
+    var lines = [];
+    lines.push('MOTOR v6.0 | Betfury-aware keep-alive');
+    lines.push('Keep-alive: #' + _kaStatus.count + ' | Resp: ' + _kaStatus.lastResp);
+
+    if (!_kaStatus.alive || _kaStatus.lastResp === 'session-modal') {
+      lines.push('');
+      lines.push('!!! SESION EXPIRADA !!!');
+      lines.push('Hace click en OK y re-login');
+      lines.push('La extension NO puede re-login solo');
+    } else {
+      var noCap = _kaStatus.noCapSec;
+      if (noCap > 60) {
+        lines.push('Sin capturas: ' + noCap + 's');
+      }
+      if (sentCount > 0) {
+        lines.push(sentCount + ' capturados | OK');
+      } else {
+        lines.push('Esperando resultados del iframe...');
+      }
+    }
+
+    lines.push('');
+    lines.push('Servidor: ' + SERVER_URL);
+
+    statusEl.textContent = lines.join('\n');
+
+    // Cambiar color del dot según estado
+    if (dotEl) {
+      if (!_kaStatus.alive || _kaStatus.lastResp === 'session-modal' || _kaStatus.lastResp === 401 || _kaStatus.lastResp === 403) {
+        dotEl.style.background = '#ef4444';
+        dotEl.style.boxShadow = '0 0 6px #ef4444';
+      } else {
+        dotEl.style.background = '#22c55e';
+        dotEl.style.boxShadow = '0 0 6px #22c55e';
+      }
+    }
   }
 
   // ══════════════════════════════════════
@@ -62,11 +107,24 @@
     }
   });
 
-  // 2. CustomEvent desde MAIN world en parent
+  // 2. CustomEvent desde MAIN world en parent (números)
   document.addEventListener('rw-number', function(event) {
     if (event.detail && typeof event.detail.number === 'number') {
       console.log('[RollerWin] Recibido de MAIN parent:', event.detail.number);
       updateUI(event.detail.number);
+    }
+  });
+
+  // 3. CustomEvent desde MAIN world (estado del keep-alive)
+  document.addEventListener('rw-status', function(event) {
+    if (event.detail) {
+      _kaStatus = {
+        alive: event.detail.status === 'alive',
+        count: event.detail.keepAliveCount || 0,
+        lastResp: event.detail.lastResponse || '?',
+        noCapSec: event.detail.noCaptureSec || 0
+      };
+      refreshStatus();
     }
   });
 
@@ -84,15 +142,13 @@
     panel.id = 'rw-status-panel';
     panel.style.cssText = 'pointer-events:auto;background:rgba(0,0,0,0.92);border:1px solid #22c55e;border-radius:10px;padding:10px 14px;color:white;max-width:300px;min-width:220px;';
     panel.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">' +
-      '<div style="width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 6px #22c55e;"></div>' +
-      '<span style="font-size:11px;font-weight:600;color:#e4e4e7;">RollerWin Capture v4.7</span>' +
+      '<div id="rw-dot" style="width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 6px #22c55e;"></div>' +
+      '<span style="font-size:11px;font-weight:600;color:#e4e4e7;">RollerWin Capture v4.8</span>' +
       '<span style="font-size:9px;color:#71717a;margin-left:auto;">MAIN world</span></div>';
 
     statusEl = document.createElement('div');
     statusEl.style.cssText = 'font-size:10px;color:#a1a1aa;white-space:pre-line;line-height:1.5;';
-    statusEl.textContent = 'MOTOR v6.0 | Keep-alive: 30s\n' +
-      'Auto-recover + Timer hook\n' +
-      'Sin capturas >2min: reload\n' +
+    statusEl.textContent = 'MOTOR v6.0 | Betfury-aware keep-alive\n' +
       'Esperando resultados del iframe...\n\n' +
       'Servidor: ' + SERVER_URL;
 
@@ -122,6 +178,7 @@
     document.body.appendChild(container);
 
     circleEl = document.getElementById('rw-last-num');
+    dotEl = document.getElementById('rw-dot');
   }
 
   // ══════════════════════════════════════
@@ -143,5 +200,5 @@
     });
   }
 
-  console.log('[RollerWin] Content Script v4.7 activo [PARENT]', location.hostname);
+  console.log('[RollerWin] Content Script v4.8 activo [PARENT]', location.hostname);
 })();
