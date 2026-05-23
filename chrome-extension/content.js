@@ -1,6 +1,6 @@
-// RollerWin Capture v4.8 - Content Script (ISOLATED world, SOLO parent page)
+// RollerWin Capture v4.9 - Content Script (ISOLATED world, SOLO parent page)
 // Crea la UI flotante y recibe numeros via postMessage y CustomEvent
-// v4.8: Recibe eventos rw-status del MAIN world para mostrar estado real
+// v4.9: Muestra estado de auto-recover en el widget
 (function() {
   'use strict';
   if (window.__rwContentV4) return;
@@ -15,7 +15,7 @@
   var dotEl = null;
 
   // Estado del keep-alive (recibido del MAIN world)
-  var _kaStatus = { alive: true, count: 0, lastResp: 'pending', noCapSec: 0 };
+  var _kaStatus = { alive: true, count: 0, lastResp: 'pending', noCaptureSec: 0, recovering: false, recoverCount: 0 };
 
   var RED = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
 
@@ -58,21 +58,20 @@
     if (!statusEl) return;
 
     var lines = [];
-    lines.push('MOTOR v6.0 | Betfury-aware keep-alive');
-    lines.push('Keep-alive: #' + _kaStatus.count + ' | Resp: ' + _kaStatus.lastResp);
+    lines.push('MOTOR v6.0 | Auto-recover v4.9');
+    lines.push('Keep-alive: #' + _kaStatus.count + ' | HTTP: ' + _kaStatus.lastResp);
 
-    if (!_kaStatus.alive || _kaStatus.lastResp === 'session-modal') {
+    if (_kaStatus.recovering) {
       lines.push('');
-      lines.push('!!! SESION EXPIRADA !!!');
-      lines.push('Hace click en OK y re-login');
-      lines.push('La extension NO puede re-login solo');
+      lines.push('RECUPERANDO... (recover #' + _kaStatus.recoverCount + ')');
+      lines.push('Volviendo a mesa de ruleta...');
     } else {
-      var noCap = _kaStatus.noCapSec;
+      var noCap = _kaStatus.noCaptureSec;
       if (noCap > 60) {
         lines.push('Sin capturas: ' + noCap + 's');
       }
       if (sentCount > 0) {
-        lines.push(sentCount + ' capturados | OK');
+        lines.push(sentCount + ' capturados | Recovers: ' + _kaStatus.recoverCount);
       } else {
         lines.push('Esperando resultados del iframe...');
       }
@@ -85,7 +84,10 @@
 
     // Cambiar color del dot según estado
     if (dotEl) {
-      if (!_kaStatus.alive || _kaStatus.lastResp === 'session-modal' || _kaStatus.lastResp === 401 || _kaStatus.lastResp === 403) {
+      if (_kaStatus.recovering) {
+        dotEl.style.background = '#f59e0b';
+        dotEl.style.boxShadow = '0 0 6px #f59e0b';
+      } else if (!_kaStatus.alive || _kaStatus.lastResp === 401 || _kaStatus.lastResp === 403) {
         dotEl.style.background = '#ef4444';
         dotEl.style.boxShadow = '0 0 6px #ef4444';
       } else {
@@ -122,7 +124,9 @@
         alive: event.detail.status === 'alive',
         count: event.detail.keepAliveCount || 0,
         lastResp: event.detail.lastResponse || '?',
-        noCapSec: event.detail.noCaptureSec || 0
+        noCaptureSec: event.detail.noCaptureSec || 0,
+        recovering: event.detail.status === 'recovering',
+        recoverCount: event.detail.recoverCount || 0
       };
       refreshStatus();
     }
@@ -143,12 +147,12 @@
     panel.style.cssText = 'pointer-events:auto;background:rgba(0,0,0,0.92);border:1px solid #22c55e;border-radius:10px;padding:10px 14px;color:white;max-width:300px;min-width:220px;';
     panel.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">' +
       '<div id="rw-dot" style="width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 6px #22c55e;"></div>' +
-      '<span style="font-size:11px;font-weight:600;color:#e4e4e7;">RollerWin Capture v4.8</span>' +
+      '<span style="font-size:11px;font-weight:600;color:#e4e4e7;">RollerWin Capture v4.9</span>' +
       '<span style="font-size:9px;color:#71717a;margin-left:auto;">MAIN world</span></div>';
 
     statusEl = document.createElement('div');
     statusEl.style.cssText = 'font-size:10px;color:#a1a1aa;white-space:pre-line;line-height:1.5;';
-    statusEl.textContent = 'MOTOR v6.0 | Betfury-aware keep-alive\n' +
+    statusEl.textContent = 'MOTOR v6.0 | Auto-recover v4.9\n' +
       'Esperando resultados del iframe...\n\n' +
       'Servidor: ' + SERVER_URL;
 
@@ -200,5 +204,5 @@
     });
   }
 
-  console.log('[RollerWin] Content Script v4.8 activo [PARENT]', location.hostname);
+  console.log('[RollerWin] Content Script v4.9 activo [PARENT]', location.hostname);
 })();
