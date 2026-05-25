@@ -66,18 +66,19 @@ function writeEntries(entries: CaptureEntry[]) {
 }
 
 // ── IN-MEMORY DEDUP CACHE ──
-// This is the PRIMARY dedup mechanism. It survives within the process lifetime
-// and eliminates race conditions because it's synchronous (no I/O needed).
-// Map<number, lastTimestamp>
+// Minimal dedup: ONLY prevents race conditions when multiple hooks (WS/Fetch/XHR/DOM)
+// detect the SAME spin result within milliseconds. Window is intentionally SHORT (3s)
+// so legitimate repeated numbers (e.g. 31, 31, 31) are NEVER blocked.
+// Spins are ~18s apart, so 3s is safe — it only catches true duplicates.
 const _dedupCache = new Map<number, number>()
-const DEDUP_WINDOW_MS = 15000 // 15 seconds — covers one full roulette spin (~18s) with margin
+const DEDUP_WINDOW_MS = 3000 // 3 seconds — only blocks true race-condition duplicates
 
 function isDuplicate(number: number): boolean {
   const lastSeen = _dedupCache.get(number)
   if (lastSeen !== undefined) {
     const elapsed = Date.now() - lastSeen
     if (elapsed < DEDUP_WINDOW_MS) {
-      return true // Duplicate within 15s
+      return true // True duplicate within 3s (race condition from multiple hooks)
     }
   }
   return false
@@ -105,10 +106,11 @@ export function pushCapture(number: number) {
     return
   }
 
-  // SECONDARY: File-based dedup as fallback (for cross-process safety)
+  // SECONDARY: File-based dedup fallback (for cross-process safety on Render)
+  // Same 3s window — only catches race-condition duplicates, never blocks legit repeats
   const entries = readEntries()
   const now = Date.now()
-  const checkCount = Math.min(entries.length, 5)
+  const checkCount = Math.min(entries.length, 3)
   for (let i = entries.length - checkCount; i < entries.length; i++) {
     if (entries[i].number === number && now - entries[i].timestamp < DEDUP_WINDOW_MS) {
       markSeen(number) // Also update cache
