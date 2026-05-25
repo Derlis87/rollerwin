@@ -1,7 +1,9 @@
-// RollerWin Capture v4.9 - MAIN WORLD DETECTION ENGINE
+// RollerWin Capture v5.0 - MAIN WORLD DETECTION ENGINE
 // SOLO detecta numeros desde iframes (donde corre Evolution)
 // El parent page SOLO retransmite lo que llega via postMessage desde iframes
-// FIX: dedup por numero anterior previene que historial stale bloquee numeros nuevos
+// FIX v5.0: DOM Scanner eliminado — solo captura via WS/Fetch/XHR/postMessage
+//   El DOM Scanner capturaba numeros del HISTORIAL (circulos viejos), no del resultado actual
+//   Ahora usa buffer de ultimos 15 numeros para evitar duplicados de cualquier fuente
 (function() {
   'use strict';
 
@@ -12,6 +14,20 @@
   var lastNum = -1;
   var lastTime = 0;
   var sentCount = 0;
+
+  // ═══ BUFFER DE ULTIMOS NUMEROS (previene captura de historial) ═══
+  // Guarda los ultimos 15 numeros capturados. Si un numero ya esta en el
+  // buffer, NO se captura de nuevo. Esto evita que el DOM Scanner o
+  // cualquier fuente erronea re-capture numeros viejos del historial.
+  var _recentNumbers = [];
+  var MAX_RECENT = 15;
+  function isRecent(n) { return _recentNumbers.indexOf(n) >= 0; }
+  function addRecent(n) {
+    var idx = _recentNumbers.indexOf(n);
+    if (idx >= 0) _recentNumbers.splice(idx, 1);
+    _recentNumbers.push(n);
+    if (_recentNumbers.length > MAX_RECENT) _recentNumbers.shift();
+  }
   var isInIframe = (window.self !== window.top);
   var hostname = location.hostname || '';
 
@@ -32,12 +48,23 @@
 
     // 1. Cooldown: evitar multiples detecciones del MISMO giro (~18s entre giros).
     // 5s es suficiente: un numero aparece una vez por giro, y los hooks multiples
-    // (WS, Fetch, DOM) lo detectan casi al mismo tiempo.
+    // (WS, Fetch, XHR, postMessage) lo detectan casi al mismo tiempo.
     if (n === lastNum && now - lastTime < 5000) return;
+
+    // 2. ANTI-HISTORIAL: Solo para capturas del DOM Scanner.
+    // Las fuentes de red (WS/Fetch/XHR/postMessage) son confiables y siempre se aceptan.
+    // El DOM Scanner puede leer numeros viejos del display, asi que usamos el buffer
+    // para rechazar numeros recientemente capturados que vengan del DOM.
+    var isDOMSource = (source.indexOf('DOM') >= 0);
+    if (isDOMSource && isRecent(n) && n !== lastNum) {
+      // Numero viejo del historial detectado por DOM — ignorar
+      return;
+    }
 
     lastNum = n;
     lastTime = now;
     sentCount++;
+    addRecent(n);
 
     console.log('[RollerWin] RESULTADO #' + sentCount + ': ' + n + ' (' + getColor(n) + ') — ' + source +
       ' ' + (isInIframe ? '[IFRAME ' + hostname + ']' : '[PARENT]'));
@@ -318,7 +345,7 @@
       } catch(e) {}
     }, 10000);
 
-    console.log('[RollerWin] v4.9 AUTO-RECOVER | Mesa:', ROULETTE_URL);
+    console.log('[RollerWin] v5.0 AUTO-RECOVER | Mesa:', ROULETTE_URL);
 
   }
 
@@ -536,76 +563,92 @@
     };
   })();
 
-  // ══════════════════════════════════════
-  // DOM SCANNER (solo en iframes)
-  // Selectores estrictos de Evolution
-  // ══════════════════════════════════════
+  // ══════════════════════════════════════════════════════
+  // DOM SCANNER v5.0 — ULTRA ESTRICTO
+  // ════════════════════════════════════════════════════════
+  // PROBLEMA V4.9: Los selectores de history/past/track/circle capturaban
+  // numeros VIEJOS del display de Evolution, no el resultado actual.
+  // SOLUCION: Solo buscar el resultado ACTUAL mostrado en pantalla,
+  // nunca historial. + buffer de ultimos 15 numeros para rechazar repetidos.
+  // ════════════════════════════════════════════════════════
   (function() {
-    var EXCLUDE = ['balance','wallet','timer','countdown','player','chat','limit','min-','max-',
-      'stake','total','amount','payout','multiplier','level','rank','vip','bonus','free',
-      'chip','currency','price','percent','ratio','time','hour','minute','second','date',
-      'session','uid','avatar','notification','unread','counter','index','page','size'];
+    // Palabras clave que indican HISTORIAL — NUNCA capturar de estos elementos
+    var HISTORY_KEYWORDS = ['history','past','track','sequence','previous','older','last-result',
+      'lastresults','gamehistory','result-history','historyitem','resultshistory',
+      'bng','stats','statistics','roadmap','bigroad','beadroad','marker'];
 
-    function isExcluded(el) {
+    // Palabras clave que indican el RESULTADO ACTUAL — SOLO capturar de estos
+    var CURRENT_KEYWORDS = ['winning-number','winningnumber','winning-pocket','winningpocket',
+      'result-display','resultdisplay','result-value','resultvalue','current-result',
+      'game-number-display','number-display','overlay-result','announced','lastnumber',
+      'round-result','roulette-result','live-result','detailed-result'];
+
+    function isHistoryElement(el) {
       if (!el) return false;
-      var c = ((el.className || '') + ' ' + (el.id || '')).toLowerCase();
-      for (var i = 0; i < EXCLUDE.length; i++) { if (c.indexOf(EXCLUDE[i]) >= 0) return true; }
+      var c = ((el.className || '') + ' ' + (el.id || '') + ' ' + (el.getAttribute('data-test') || '')).toLowerCase();
+      for (var i = 0; i < HISTORY_KEYWORDS.length; i++) {
+        if (c.indexOf(HISTORY_KEYWORDS[i]) >= 0) return true;
+      }
+      // Tambien excluir elementos dentro de un contenedor de historial
+      var parent = el.parentElement;
+      var depth = 0;
+      while (parent && depth < 5) {
+        var pc = ((parent.className || '') + ' ' + (parent.id || '')).toLowerCase();
+        for (var i = 0; i < HISTORY_KEYWORDS.length; i++) {
+          if (pc.indexOf(HISTORY_KEYWORDS[i]) >= 0) return true;
+        }
+        parent = parent.parentElement;
+        depth++;
+      }
       return false;
     }
 
-    function scanDOM() {
-      var sels = [
-        '[class*="game-history"] [class*="value"]',
-        '[class*="game-history"] [class*="number"]',
-        '[class*="history-item"] [class*="number"]',
-        '[class*="roulette"] [class*="result"]',
-        '[class*="roulette"] [class*="number"]',
-        '[class*="roulette"] [class*="winning"]',
-        '[class*="evolution"] [class*="result"]',
-        '[class*="evolution"] [class*="number"]',
-        '[class*="evolution"] [class*="winning"]',
-        '[class*="winning-number"]',
-        '[class*="winning-pocket"]',
-        '[class*="result-number"]',
-        '[class*="result-display"]',
-        '[class*="result-value"]',
-        '[class*="last-result"]',
-        '[class*="latest-result"]',
-        '[class*="game-number-display"]',
-        '[class*="roulette-number"]',
-        '[class*="round-result"]',
-        '[data-result-number]',
-        '[data-winning-number]',
-        '[data-game-result]',
-        '[class*="wheel"] [class*="result"]',
-        '[class*="wheel"] [class*="number"]',
-        '[class*="spin"] [class*="result"]',
-        '[class*="past"] [class*="number"]',
-        '[class*="sequence"] [class*="number"]',
-        '[class*="track"] [class*="number"]',
-        '[class*="GameHistory"] [class*="value"]',
-        '[class*="GameHistory"] [class*="number"]',
-        '[class*="HistoryItem"]',
-        '[class*="ResultHistory"]',
-        '[class*="history"] [class*="circle"]',
-        '[class*="history"] [class*="badge"]',
-        '[class*="bng"] [class*="value"]',
-        '[data-number]',
-        '[class*="number-display"]',
-        '[class*="overlay"] [class*="result"]',
-        '[class*="board"] [class*="result"]'
-      ];
+    function isCurrentElement(el) {
+      if (!el) return false;
+      var c = ((el.className || '') + ' ' + (el.id || '') + ' ' + (el.getAttribute('data-test') || '')).toLowerCase();
+      for (var i = 0; i < CURRENT_KEYWORDS.length; i++) {
+        if (c.indexOf(CURRENT_KEYWORDS[i]) >= 0) return true;
+      }
+      // data attributes especificos de resultado actual
+      if (el.hasAttribute('data-result-number') || el.hasAttribute('data-winning-number') ||
+          el.hasAttribute('data-game-result')) return true;
+      return false;
+    }
 
-      for (var i = 0; i < sels.length; i++) {
+    // Solo selectores que apuntan al RESULTADO ACTUAL, nunca historial
+    var STRICT_SELECTORS = [
+      '[class*="winning-number"]',
+      '[class*="winning-pocket"]',
+      '[class*="result-display"]',
+      '[class*="result-value"]',
+      '[class*="current-result"]',
+      '[class*="game-number-display"]',
+      '[class*="number-display"]',
+      '[data-result-number]',
+      '[data-winning-number]',
+      '[data-game-result]',
+      '[class*="overlay"] [class*="result"]',
+      '[class*="announced"]',
+      '[class*="round-result"]',
+      '[class*="roulette-result"]',
+      '[class*="live-result"]'
+    ];
+
+    function scanDOM() {
+      for (var i = 0; i < STRICT_SELECTORS.length; i++) {
         try {
-          var els = document.querySelectorAll(sels[i]);
-          for (var j = 0; j < Math.min(els.length, 2); j++) {
-            if (isExcluded(els[j])) continue;
+          var els = document.querySelectorAll(STRICT_SELECTORS[i]);
+          for (var j = 0; j < els.length; j++) {
+            // DOBLE FILTRO: debe ser un elemento de resultado actual Y no estar en historial
+            if (isHistoryElement(els[j])) continue;
+            if (!isCurrentElement(els[j]) && !els[j].hasAttribute('data-result-number') &&
+                !els[j].hasAttribute('data-winning-number')) continue;
+
             var text = (els[j].textContent || '').trim();
             var num = parseInt(text, 10);
             if (!isNaN(num) && num >= 0 && num <= 36 && String(num) === text) {
-              sendToServer(num, 'DOM:' + sels[i]);
-              return;
+              sendToServer(num, 'DOM-v5:' + STRICT_SELECTORS[i]);
+              return; // Solo capturar el primer match valido
             }
           }
         } catch(e) {}
@@ -614,16 +657,18 @@
 
     function setup() {
       if (!document.body) return;
-      setTimeout(scanDOM, 2000);
-      setTimeout(scanDOM, 5000);
+      // Escaneo inicial retrasado
+      setTimeout(scanDOM, 3000);
 
+      // MutationObserver con debounce de 2s (menos agresivo que v4.9)
       var timer = null;
       new MutationObserver(function() {
         if (timer) return;
-        timer = setTimeout(function() { timer = null; scanDOM(); }, 1000);
+        timer = setTimeout(function() { timer = null; scanDOM(); }, 2000);
       }).observe(document.body, { childList: true, subtree: true, characterData: true });
 
-      setInterval(scanDOM, 5000);
+      // Scan periodico cada 8s (era 5s en v4.9)
+      setInterval(scanDOM, 8000);
     }
 
     if (document.readyState === 'loading') {
@@ -686,5 +731,5 @@
     window.EventSource = Proxy;
   })();
 
-  console.log('[RollerWin] v4.9 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup: 5s mismo numero');
+  console.log('[RollerWin] v5.0 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup: 5s + Buffer 15 numeros anti-historial');
 })();
