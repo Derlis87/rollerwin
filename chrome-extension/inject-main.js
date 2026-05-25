@@ -1,9 +1,13 @@
-// RollerWin Capture v5.0 - MAIN WORLD DETECTION ENGINE
+// RollerWin Capture v5.1 - MAIN WORLD DETECTION ENGINE
 // SOLO detecta numeros desde iframes (donde corre Evolution)
 // El parent page SOLO retransmite lo que llega via postMessage desde iframes
-// FIX v5.0: DOM Scanner eliminado — solo captura via WS/Fetch/XHR/postMessage
-//   El DOM Scanner capturaba numeros del HISTORIAL (circulos viejos), no del resultado actual
-//   Ahora usa buffer de ultimos 15 numeros para evitar duplicados de cualquier fuente
+// FIX v5.0: DOM Scanner capturaba numeros del historial (circulos viejos)
+// FIX v5.1: Buffer GLOBAL anti-historial para TODAS las fuentes (WS/Fetch/XHR/DOM)
+//   + extractObj toma ULTIMO elemento de arrays (no primero)
+//   + extractFromText solo toma ULTIMO match
+//   + Arrays > 5 elementos ignorados (son historial)
+//   + Fetch/XHR excluyen URLs con "history"/"state"
+//   + WS solo procesa eventos result/complete/win/round/spin
 (function() {
   'use strict';
 
@@ -15,12 +19,9 @@
   var lastTime = 0;
   var sentCount = 0;
 
-  // ═══ BUFFER DE ULTIMOS NUMEROS (previene captura de historial) ═══
-  // Guarda los ultimos 15 numeros capturados. Si un numero ya esta en el
-  // buffer, NO se captura de nuevo. Esto evita que el DOM Scanner o
-  // cualquier fuente erronea re-capture numeros viejos del historial.
+  // Buffer de ultimos numeros capturados (previene duplicados de historial)
   var _recentNumbers = [];
-  var MAX_RECENT = 15;
+  var MAX_RECENT = 20; // Buffer grande: 20 numeros cubre mas de medio giro completo
   function isRecent(n) { return _recentNumbers.indexOf(n) >= 0; }
   function addRecent(n) {
     var idx = _recentNumbers.indexOf(n);
@@ -47,17 +48,14 @@
     var now = Date.now();
 
     // 1. Cooldown: evitar multiples detecciones del MISMO giro (~18s entre giros).
-    // 5s es suficiente: un numero aparece una vez por giro, y los hooks multiples
-    // (WS, Fetch, XHR, postMessage) lo detectan casi al mismo tiempo.
     if (n === lastNum && now - lastTime < 5000) return;
 
-    // 2. ANTI-HISTORIAL: Solo para capturas del DOM Scanner.
-    // Las fuentes de red (WS/Fetch/XHR/postMessage) son confiables y siempre se aceptan.
-    // El DOM Scanner puede leer numeros viejos del display, asi que usamos el buffer
-    // para rechazar numeros recientemente capturados que vengan del DOM.
-    var isDOMSource = (source.indexOf('DOM') >= 0);
-    if (isDOMSource && isRecent(n) && n !== lastNum) {
-      // Numero viejo del historial detectado por DOM — ignorar
+    // 2. ANTI-HISTORIAL GLOBAL: aplica a TODAS las fuentes (WS, Fetch, XHR, DOM, postMessage).
+    // Si el numero ya fue capturado recientemente, es probablemente del historial.
+    // La ruleta tiene 37 numeros (0-36), un buffer de 20 cubre mas de medio giro completo.
+    // Excepcion: se permite si es el MISMO numero que el ultimo capturado (repeticion legitima).
+    if (isRecent(n) && n !== lastNum) {
+      console.log('[RollerWin] BLOCKED ' + n + ' — en buffer reciente (' + source + ')');
       return;
     }
 
@@ -345,7 +343,7 @@
       } catch(e) {}
     }, 10000);
 
-    console.log('[RollerWin] v5.0 AUTO-RECOVER | Mesa:', ROULETTE_URL);
+    console.log('[RollerWin] v5.1 AUTO-RECOVER | Mesa:', ROULETTE_URL);
 
   }
 
@@ -386,18 +384,23 @@
   }
 
   function extractObj(obj, depth, path) {
-    if (!obj || typeof obj !== 'object' || depth > 6) return;
+    if (!obj || typeof obj !== 'object' || depth > 4) return;
 
     if (Array.isArray(obj)) {
+      // FIX v5.0.1: Solo procesar arrays que representen UN resultado (length 1)
+      // o tomar el ULTIMO elemento (mas reciente, no el mas viejo como antes).
+      // Ignorar arrays largos que son claramente historial (length > 5).
+      if (obj.length === 0) return;
+      if (obj.length > 5) return; // Historial = mas de 5 resultados, ignorar
+
       var pathLow = path.toLowerCase();
-      if (pathLow.indexOf('result') >= 0 || pathLow.indexOf('history') >= 0 ||
-          pathLow.indexOf('number') >= 0 || pathLow.indexOf('winning') >= 0 ||
+      if (pathLow.indexOf('result') >= 0 || pathLow.indexOf('winning') >= 0 ||
           pathLow.indexOf('outcome') >= 0 || pathLow.indexOf('pocket') >= 0) {
-        if (obj.length > 0) {
-          var n = tryNum(obj[0]);
-          if (n !== null) { sendToServer(n, 'array@' + path); return; }
-          if (typeof obj[0] === 'object') extractObj(obj[0], depth + 1, path + '[0]');
-        }
+        // Tomar el ULTIMO elemento (resultado mas reciente)
+        var last = obj[obj.length - 1];
+        var n = tryNum(last);
+        if (n !== null) { sendToServer(n, 'array@' + path); return; }
+        if (typeof last === 'object') extractObj(last, depth + 1, path + '[' + (obj.length-1) + ']');
       }
       return;
     }
@@ -419,6 +422,7 @@
   }
 
   // Regex selectivo para texto de red
+  // FIX v5.0.1: Solo tomar el ULTIMO match (resultado mas reciente, no historial)
   function extractFromText(text, source) {
     if (!text || typeof text !== 'string' || text.length > 200000) return;
     var patterns = [
@@ -433,13 +437,16 @@
       /"displayNumber"\s*:\s*(\d{1,2})\b/gi,
       /"winningPocket"\s*:\s*(\d{1,2})\b/gi
     ];
+    var lastMatch = null;
     for (var i = 0; i < patterns.length; i++) {
       var m; patterns[i].lastIndex = 0;
       while ((m = patterns[i].exec(text)) !== null) {
         var n = parseInt(m[1], 10);
-        if (n >= 0 && n <= 36) sendToServer(n, 'regex@' + source);
+        if (n >= 0 && n <= 36) lastMatch = n;
       }
     }
+    // Solo enviar el ULTIMO match encontrado (resultado mas reciente)
+    if (lastMatch !== null) sendToServer(lastMatch, 'regex-last@' + source);
   }
 
   // ══════════════════════════════════════
@@ -469,10 +476,10 @@
               var p = JSON.parse(data.substring(2));
               if (Array.isArray(p) && p.length >= 2 && typeof p[1] === 'object') {
                 var evt = String(p[0] || '');
+                // FIX v5.0.1: Solo eventos de resultado NUEVO, no updates/states con historial
                 if (evt.indexOf('result') >= 0 || evt.indexOf('complete') >= 0 ||
-                    evt.indexOf('win') >= 0 || evt.indexOf('game') >= 0 ||
-                    evt.indexOf('round') >= 0 || evt.indexOf('spin') >= 0 ||
-                    evt.indexOf('update') >= 0 || evt.indexOf('number') >= 0) {
+                    evt.indexOf('win') >= 0 ||
+                    evt.indexOf('round') >= 0 || evt.indexOf('spin') >= 0) {
                   extractObj(p[1], 0, 'sio.' + evt);
                   extractFromText(data, 'sio.' + evt);
                 }
@@ -517,10 +524,14 @@
       var promise = origFetch.apply(this, arguments);
 
       var urlLow = url.toLowerCase();
-      if (urlLow.indexOf('game') >= 0 || urlLow.indexOf('result') >= 0 ||
+      // FIX v5.0.1: Excluir URLs de historial y estado — solo procesar resultados
+      if (urlLow.indexOf('result') >= 0 ||
           urlLow.indexOf('roulette') >= 0 || urlLow.indexOf('evolution') >= 0 ||
-          urlLow.indexOf('history') >= 0 || urlLow.indexOf('round') >= 0 ||
-          urlLow.indexOf('wheel') >= 0 || urlLow.indexOf('state') >= 0) {
+          urlLow.indexOf('round') >= 0 || urlLow.indexOf('wheel') >= 0) {
+        // EXCLUIR: URLs que contienen history o state (son datos historicos, no resultado actual)
+        if (urlLow.indexOf('history') >= 0 || urlLow.indexOf('state') >= 0 || urlLow.indexOf('stats') >= 0) {
+          return promise; // No procesar — es historial
+        }
 
         promise.then(function(r) {
           try {
@@ -549,10 +560,11 @@
       var self = this;
       this.addEventListener('load', function() {
         var u = (self._rwUrl || '').toLowerCase();
-        if (u.indexOf('game') >= 0 || u.indexOf('result') >= 0 ||
+        // FIX v5.0.1: Excluir historial y estado
+        if (u.indexOf('result') >= 0 ||
             u.indexOf('roulette') >= 0 || u.indexOf('evolution') >= 0 ||
-            u.indexOf('history') >= 0 || u.indexOf('round') >= 0 ||
-            u.indexOf('wheel') >= 0 || u.indexOf('state') >= 0) {
+            u.indexOf('round') >= 0 || u.indexOf('wheel') >= 0) {
+          if (u.indexOf('history') >= 0 || u.indexOf('state') >= 0 || u.indexOf('stats') >= 0) return;
           try {
             var t = self.responseText;
             if (t) { try { extractObj(JSON.parse(t), 0, 'xhr'); } catch(e) {} extractFromText(t, 'xhr'); }
@@ -731,5 +743,5 @@
     window.EventSource = Proxy;
   })();
 
-  console.log('[RollerWin] v5.0 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup: 5s + Buffer 15 numeros anti-historial');
+  console.log('[RollerWin] v5.1 MOTOR ACTIVO en IFRAME ' + hostname + ' | Buffer global 20 numeros anti-historial');
 })();

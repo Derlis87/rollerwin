@@ -1,6 +1,6 @@
-// RollerWin Capture v5.0 - Content Script (ISOLATED world, SOLO parent page)
+// RollerWin Capture v5.1 - Content Script (ISOLATED world, SOLO parent page)
 // Crea la UI flotante y recibe numeros via postMessage y CustomEvent
-// v5.0: DOM Scanner ultra-estricto + buffer anti-historial
+// v5.1: Buffer GLOBAL anti-historial + extraction estricta
 (function() {
   'use strict';
   if (window.__rwContentV4) return;
@@ -58,7 +58,7 @@
     if (!statusEl) return;
 
     var lines = [];
-    lines.push('MOTOR v6.0 | Anti-hist v5.0');
+    lines.push('MOTOR v6.0 | Anti-hist v5.1');
     lines.push('Keep-alive: #' + _kaStatus.count + ' | HTTP: ' + _kaStatus.lastResp);
 
     if (_kaStatus.recovering) {
@@ -147,12 +147,12 @@
     panel.style.cssText = 'pointer-events:auto;background:rgba(0,0,0,0.92);border:1px solid #22c55e;border-radius:10px;padding:10px 14px;color:white;max-width:300px;min-width:220px;';
     panel.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">' +
       '<div id="rw-dot" style="width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 6px #22c55e;"></div>' +
-      '<span style="font-size:11px;font-weight:600;color:#e4e4e7;">RollerWin Capture v5.0</span>' +
+      '<span style="font-size:11px;font-weight:600;color:#e4e4e7;">RollerWin Capture v5.1</span>' +
       '<span style="font-size:9px;color:#71717a;margin-left:auto;">MAIN world</span></div>';
 
     statusEl = document.createElement('div');
     statusEl.style.cssText = 'font-size:10px;color:#a1a1aa;white-space:pre-line;line-height:1.5;';
-    statusEl.textContent = 'MOTOR v6.0 | Anti-hist v5.0\n' +
+    statusEl.textContent = 'MOTOR v6.0 | Anti-hist v5.1\n' +
       'Esperando resultados del iframe...\n\n' +
       'Servidor: ' + SERVER_URL;
 
@@ -204,5 +204,5 @@
     });
   }
 
-  console.log('[RollerWin] Content Script v5.0 activo [PARENT]', location.hostname);
+  console.log('[RollerWin] Content Script v5.1 activo [PARENT]', location.hostname);
 })();
