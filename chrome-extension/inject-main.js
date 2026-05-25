@@ -1,13 +1,12 @@
-// RollerWin Capture v5.1 - MAIN WORLD DETECTION ENGINE
+// RollerWin Capture v5.2 - MAIN WORLD DETECTION ENGINE
 // SOLO detecta numeros desde iframes (donde corre Evolution)
 // El parent page SOLO retransmite lo que llega via postMessage desde iframes
 // FIX v5.0: DOM Scanner capturaba numeros del historial (circulos viejos)
-// FIX v5.1: Buffer GLOBAL anti-historial para TODAS las fuentes (WS/Fetch/XHR/DOM)
-//   + extractObj toma ULTIMO elemento de arrays (no primero)
-//   + extractFromText solo toma ULTIMO match
-//   + Arrays > 5 elementos ignorados (son historial)
-//   + Fetch/XHR excluyen URLs con "history"/"state"
-//   + WS solo procesa eventos result/complete/win/round/spin
+// FIX v5.1: extractObj toma ULTIMO elemento, regex ultimo match, excluye URLs historial
+// FIX v5.2: Buffer GLOBAL eliminado — bloqueaba repeticiones legitimas de ruleta
+//   El buffer de 20 numeros bloqueaba numeros que caian de nuevo naturalmente
+//   Ahora: solo cooldown 5s mismo numero (dedup multi-hook del mismo giro)
+//   + proteccion anti-historial en la EXTRACCION (no en el envio)
 (function() {
   'use strict';
 
@@ -19,16 +18,6 @@
   var lastTime = 0;
   var sentCount = 0;
 
-  // Buffer de ultimos numeros capturados (previene duplicados de historial)
-  var _recentNumbers = [];
-  var MAX_RECENT = 20; // Buffer grande: 20 numeros cubre mas de medio giro completo
-  function isRecent(n) { return _recentNumbers.indexOf(n) >= 0; }
-  function addRecent(n) {
-    var idx = _recentNumbers.indexOf(n);
-    if (idx >= 0) _recentNumbers.splice(idx, 1);
-    _recentNumbers.push(n);
-    if (_recentNumbers.length > MAX_RECENT) _recentNumbers.shift();
-  }
   var isInIframe = (window.self !== window.top);
   var hostname = location.hostname || '';
 
@@ -47,22 +36,13 @@
 
     var now = Date.now();
 
-    // 1. Cooldown: evitar multiples detecciones del MISMO giro (~18s entre giros).
+    // Cooldown: evitar multiples detecciones del MISMO giro.
+    // 5s es suficiente: WS/Fetch/XHR/DOM detectan el mismo numero casi al mismo tiempo.
     if (n === lastNum && now - lastTime < 5000) return;
-
-    // 2. ANTI-HISTORIAL GLOBAL: aplica a TODAS las fuentes (WS, Fetch, XHR, DOM, postMessage).
-    // Si el numero ya fue capturado recientemente, es probablemente del historial.
-    // La ruleta tiene 37 numeros (0-36), un buffer de 20 cubre mas de medio giro completo.
-    // Excepcion: se permite si es el MISMO numero que el ultimo capturado (repeticion legitima).
-    if (isRecent(n) && n !== lastNum) {
-      console.log('[RollerWin] BLOCKED ' + n + ' — en buffer reciente (' + source + ')');
-      return;
-    }
 
     lastNum = n;
     lastTime = now;
     sentCount++;
-    addRecent(n);
 
     console.log('[RollerWin] RESULTADO #' + sentCount + ': ' + n + ' (' + getColor(n) + ') — ' + source +
       ' ' + (isInIframe ? '[IFRAME ' + hostname + ']' : '[PARENT]'));
@@ -343,7 +323,7 @@
       } catch(e) {}
     }, 10000);
 
-    console.log('[RollerWin] v5.1 AUTO-RECOVER | Mesa:', ROULETTE_URL);
+    console.log('[RollerWin] v5.2 AUTO-RECOVER | Mesa:', ROULETTE_URL);
 
   }
 
@@ -743,5 +723,5 @@
     window.EventSource = Proxy;
   })();
 
-  console.log('[RollerWin] v5.1 MOTOR ACTIVO en IFRAME ' + hostname + ' | Buffer global 20 numeros anti-historial');
+  console.log('[RollerWin] v5.2 MOTOR ACTIVO en IFRAME ' + hostname + ' | Cooldown 5s + Extraccion estricta');
 })();
