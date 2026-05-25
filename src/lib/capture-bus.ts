@@ -63,26 +63,45 @@ function writeEntries(entries: CaptureEntry[]) {
 
 // ── Public API (stateless — reads/writes file on every call) ──
 
+// Simple file-based write lock to prevent race conditions
+let _writeLock = false
+function withLock<T>(fn: () => T): T {
+  if (_writeLock) return undefined as unknown as T
+  _writeLock = true
+  try {
+    return fn()
+  } finally {
+    _writeLock = false
+  }
+}
+
 /** Push a new number */
 export function pushCapture(number: number) {
   if (number < 0 || number > 36) return
 
-  const entries = readEntries()
+  return withLock(() => {
+    const entries = readEntries()
 
-  // Dedup: same number within 8 seconds (giros son ~18s apart, 8s es seguro)
-  const recent = entries[entries.length - 1]
-  if (recent && recent.number === number && Date.now() - recent.timestamp < 8000) {
-    return
-  }
+    // Dedup: check against LAST 3 entries (not just 1)
+    // Multiple hooks (WS, Fetch, DOM) can fire within ms of each other.
+    // 15s window covers: ~18s between spins, with margin for slight timing.
+    const now = Date.now()
+    const checkCount = Math.min(entries.length, 3)
+    for (let i = entries.length - checkCount; i < entries.length; i++) {
+      if (entries[i].number === number && now - entries[i].timestamp < 15000) {
+        return // Duplicate within 15s — skip
+      }
+    }
 
-  entries.push({
-    number,
-    color: getColor(number),
-    timestamp: Date.now(),
-    id: `cap-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    entries.push({
+      number,
+      color: getColor(number),
+      timestamp: now,
+      id: `cap-${now}-${Math.random().toString(36).slice(2, 6)}`
+    })
+
+    writeEntries(entries)
   })
-
-  writeEntries(entries)
 }
 
 /** Get entries newer than afterId */

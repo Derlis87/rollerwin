@@ -55,14 +55,10 @@ export function useRouletteCapturer(options: UseRouletteCapturerOptions = {}) {
   const startPolling = useCallback(async () => {
     if (pollRef.current) return
 
-    // Reset the bus so we start fresh (no stale numbers)
-    try {
-      await fetch('/api/capture/reset', { method: 'POST' })
-    } catch {
-      // Non-critical
-    }
+    // DO NOT reset the capture bus on connect — this would delete all captured numbers!
+    // The bus persists across dashboard reconnects.
+    // Only reset if explicitly requested by the user.
 
-    lastIdRef.current = ''
     setTotalCaptured(0)
     setIsConnected(true)
     setIsCapturing(true)
