@@ -1,4 +1,4 @@
-// RollerWin Capture v6.0 - MAIN WORLD DETECTION ENGINE
+// RollerWin Capture v6.2 - MAIN WORLD DETECTION ENGINE
 // SOLO detecta numeros desde iframes (donde corre Evolution)
 // El parent page SOLO retransmite lo que llega via postMessage desde iframes
 // FIX v5.0: DOM Scanner capturaba numeros del historial (circulos viejos)
@@ -11,6 +11,14 @@
 //   - checkPlayButton SIEMPRE activo (no depende de _recovering)
 //   - Click OK primero, esperar cierre, luego navegar
 //   - Deteccion de pagina "Jugar" sin depender de estado
+// FIX v6.2: RECOVERY ULTRA-RAPIDO (objetivo <8s total):
+//   - Modal detect cada 400ms (era 1s) + MutationObserver instantaneo
+//   - Boton Jugar cada 400ms (era 1s)
+//   - Keep-alive 401/403 navigate en 150ms (era 500ms)
+//   - Post-load check a los 100ms (era 500ms)
+//   - Keep-alive cada 45s (era 60s)
+//   - Sin capturas >35s (era 45s) con check cada 5s (era 10s)
+//   - Deteccion de iframe muerto: reconnect sin reload completo
 (function() {
   'use strict';
 
@@ -160,18 +168,18 @@
     });
 
     // ╔══════════════════════════════════════════════════════════════════╗
-    // ║  v6.1: AUTO-RECOVERY INSTANTÁNEO                               ║
-    // ║  OBJETIVO: Recovery completo en <10 segundos                    ║
+    // ║  v6.2: AUTO-RECOVERY ULTRA-RAPIDO                              ║
+    // ║  OBJETIVO: Recovery completo en <8 segundos                     ║
     // ║  (los giros duran ~18s, necesitamos volver antes del próximo)   ║
     // ║                                                                ║
-    // ║  Cambios vs v6.0:                                               ║
-    // ║  - NAVEGAR DIRECTO sin esperar a cerrar modal (ahorra 1.5s)    ║
-    // ║  - Detección cada 1s en vez de 2s (ahorra 1s)                 ║
-    // ║  - Botón Jugar cada 1s en vez de 2s (ahorra 1s)               ║
-    // ║  - Post-load check sin delays (ahorra 4s)                      ║
-    // ║  - Detecta modal SALDO BAJO → click CERRAR                    ║
-    // ║  - Click Jugar inmediato al cargar (sin esperar iframe)         ║
-    // ║  - Keep-alive cada 60s (mas agresivo)                           ║
+    // ║  Cambios vs v6.1:                                               ║
+    // ║  - Modal detect cada 400ms (era 1s) + MutationObserver          ║
+    // ║  - Boton Jugar cada 400ms (era 1s)                             ║
+    // ║  - Keep-alive 401/403 → navigate en 150ms (era 500ms)          ║
+    // ║  - Post-load check a los 100ms (era 500ms)                     ║
+    // ║  - Sin capturas >35s (era 45s) con check cada 5s (era 10s)    ║
+    // ║  - Keep-alive cada 45s (era 60s)                               ║
+    // ║  - Deteccion de iframe desconectado (reconnect rapido)          ║
     // ╚══════════════════════════════════════════════════════════════════╝
 
     var _keepAliveCount = 0;
@@ -260,13 +268,13 @@
           console.log('[RollerWin] Keep-alive ' + r.status + ' — SESION EXPIRADA detectada via API!');
           _sessionExpired = true;
           _saveState();
-          // Forzar recovery inmediato
-          setTimeout(function() { navigateToGame('keepalive-' + r.status); }, 500);
+          // Forzar recovery ULTRA-RAPIDO
+          setTimeout(function() { navigateToGame('keepalive-' + r.status); }, 150); // v6.2: era 500ms
         }
       }).catch(function() {});
     }
-    setTimeout(betfuryKeepAlive, 2000);
-    setInterval(betfuryKeepAlive, 60000); // cada 60s
+    setTimeout(betfuryKeepAlive, 1500);
+    setInterval(betfuryKeepAlive, 45000); // cada 45s (v6.2: era 60s)
 
     // ════════════════════════════════════════════════════════
     // 2. BUSQUEDA AMPLIA de botones (button/div/span/a)
@@ -362,7 +370,7 @@
       return false;
     }
 
-    setInterval(detectAndCloseAnyModal, 1000); // cada 1s (era 2s)
+    setInterval(detectAndCloseAnyModal, 400); // v6.2: cada 400ms (era 1s)
     try {
       new MutationObserver(function() { detectAndCloseAnyModal(); }).observe(document.body, { childList: true, subtree: true });
     } catch(e) {}
@@ -395,26 +403,60 @@
       return false;
     }
 
-    setInterval(checkPlayButton, 1000); // cada 1s (era 2s)
+    setInterval(checkPlayButton, 400); // v6.2: cada 400ms (era 1s)
 
     // ════════════════════════════════════════════════════════
-    // 6. IFRAME MUERTO: sin capturas >45s → reload
+    // 6. IFRAME MUERTO: sin capturas >35s → reload
+    //    v6.2: umbral 35s (era 45s), check cada 5s (era 10s)
     // ════════════════════════════════════════════════════════
     setInterval(function() {
       var noCap = Date.now() - _lastCaptureTime;
       var onGame = location.href.indexOf('/casino/games/') !== -1;
 
-      // Si estamos en la pagina del juego y no hay capturas en 45s
-      if (onGame && noCap > 45000 && !_recoveryInProgress) { // era 60000
+      // Si estamos en la pagina del juego y no hay capturas en 35s
+      if (onGame && noCap > 35000 && !_recoveryInProgress) { // v6.2: era 45000
         console.log('[RollerWin] Sin capturas ' + Math.round(noCap/1000) + 's — reload...');
         _isRecovering = true;
         _saveState();
         location.reload();
       }
-    }, 10000); // check cada 10s (era 15000)
+    }, 5000); // v6.2: check cada 5s (era 10s)
+
+    // ════════════════════════════════════════════════════════
+    // 6c. IFRAME RECONNECT: sin capturas >20s pero <35s
+    //     Intentar reconectar el iframe SIN reload completo
+    //     Busca iframes de Evolution y les hace reload individual
+    // ════════════════════════════════════════════════════════
+    var _iframeReconnectAttempted = false;
+    setInterval(function() {
+      var noCap = Date.now() - _lastCaptureTime;
+      var onGame = location.href.indexOf('/casino/games/') !== -1;
+
+      // Si estamos en juego sin capturas 20-35s: intentar reconnect de iframe
+      if (onGame && noCap > 20000 && noCap < 35000 && !_recoveryInProgress && !_iframeReconnectAttempted) {
+        console.log('[RollerWin] Sin capturas ' + Math.round(noCap/1000) + 's — intentando reconnect de iframe...');
+        _iframeReconnectAttempted = true;
+        var iframes = document.querySelectorAll('iframe');
+        for (var i = 0; i < iframes.length; i++) {
+          var src = (iframes[i].src || '').toLowerCase();
+          if (src.indexOf('evolution') !== -1 || src.indexOf('game') !== -1 || src.indexOf('casino') !== -1) {
+            console.log('[RollerWin] Reloading iframe:', src.substring(0, 80));
+            try { iframes[i].contentWindow.location.reload(); } catch(e) {
+              // Cross-origin: forzar recarga via src
+              var originalSrc = iframes[i].src;
+              iframes[i].src = '';
+              setTimeout(function(iframe, s) { iframe.src = s; }, 100, iframes[i], originalSrc);
+            }
+          }
+        }
+        // Reset flag despues de 30s para permitir otro intento si sigue sin capturas
+        setTimeout(function() { _iframeReconnectAttempted = false; }, 30000);
+      }
+    }, 5000);
 
     // ════════════════════════════════════════════════════════
     // 6b. DETECCIÓN AL CARGAR: ya venimos de un recovery?
+    //     v6.2: Ejecutar a los 100ms (era 500ms)
     // ════════════════════════════════════════════════════════
     setTimeout(function() {
       if (_isRecovering || _sessionExpired || _recoverCount > 0) {
@@ -432,12 +474,19 @@
         checkPlayButton();
         detectAndCloseAnyModal();
         
+        // Segundo intento mas rapido (v6.2: 600ms era 1500ms)
         setTimeout(function() {
           checkPlayButton();
           detectAndCloseAnyModal();
-        }, 1500);
+        }, 600);
+        
+        // Tercer intento (v6.2: nuevo)
+        setTimeout(function() {
+          checkPlayButton();
+          detectAndCloseAnyModal();
+        }, 1200);
       }
-    }, 500); // ejecutar a los 500ms (era 1000ms)
+    }, 100); // v6.2: ejecutar a los 100ms (era 500ms)
 
     // ════════════════════════════════════════════════════════
     // 7. VISIBILITY + FOCUS
@@ -482,7 +531,7 @@
       } catch(e) {}
     }, 10000);
 
-    console.log('[RollerWin] v6.1 AUTO-RECOVERY RAPIDO | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
+    console.log('[RollerWin] v6.2 AUTO-RECOVERY ULTRA-RAPIDO | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
 
   }
 
@@ -882,5 +931,5 @@
     window.EventSource = Proxy;
   })();
 
-  console.log('[RollerWin] v6.0 MOTOR ACTIVO en IFRAME ' + hostname + ' | Cooldown 5s + Extraccion estricta');
+  console.log('[RollerWin] v6.2 MOTOR ACTIVO en IFRAME ' + hostname + ' | Cooldown 5s + Extraccion estricta');
 })();
