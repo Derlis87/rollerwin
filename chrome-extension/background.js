@@ -1,4 +1,4 @@
-// RollerWin Capture v5.2 — Background Service Worker
+// RollerWin Capture v6.0 — Background Service Worker
 // Inyecta el script de deteccion en MUNDO PRINCIPAL en TODOS los frames
 var lastNumber = null;
 var totalCaptured = 0;
