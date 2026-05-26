@@ -22,6 +22,37 @@
   var lastTime = 0;
   var sentCount = 0;
 
+  // ═══ DEDUP v6.1: Map de numeros recientes ═══
+  // Problema v5.2/v6.0: lastNum solo recordaba el ULTIMO numero.
+  // Si un numero diferente llegaba en el medio, el cooldown se reseteaba
+  // y permitia duplicados del mismo giro.
+  // Fix: Map<numero, timestamp> — recuerda TODOS los numeros enviados.
+  // Ventana 12s: los giros duran ~18s, asi que 12s nunca bloquea
+  // repetidos legitimas de giros diferentes, pero SI bloquea multiples
+  // detecciones del MISMO giro por hooks diferentes (WS/Fetch/XHR/DOM).
+  var _sentNumbers = {};   // { number: timestamp }
+  var _DEDUP_WINDOW = 12000; // 12 segundos
+
+  function _isDuplicate(n) {
+    var now = Date.now();
+    var lastSent = _sentNumbers[n];
+    if (lastSent !== undefined && now - lastSent < _DEDUP_WINDOW) {
+      return true; // Mismo numero enviado en los ultimos 12s = mismo giro
+    }
+    return false;
+  }
+
+  function _markSent(n) {
+    var now = Date.now();
+    _sentNumbers[n] = now;
+    // Limpiar entradas viejas cada vez que se envia
+    for (var num in _sentNumbers) {
+      if (now - _sentNumbers[num] > _DEDUP_WINDOW) {
+        delete _sentNumbers[num];
+      }
+    }
+  }
+
   var isInIframe = (window.self !== window.top);
   var hostname = location.hostname || '';
 
@@ -40,10 +71,15 @@
 
     var now = Date.now();
 
-    // Cooldown: evitar multiples detecciones del MISMO giro.
-    // 5s es suficiente: WS/Fetch/XHR/DOM detectan el mismo numero casi al mismo tiempo.
-    if (n === lastNum && now - lastTime < 5000) return;
+    // DEDUP v6.1: Map de TODOS los numeros recientes (no solo lastNum).
+    // Si el numero fue enviado en los ultimos 12s, es el mismo giro → bloquear.
+    // Los giros duran ~18s, asi que 12s jamas bloquea repetidos legitimas.
+    if (_isDuplicate(n)) {
+      console.log('[RollerWin] DEDUP: ' + n + ' bloqueado (' + Math.round(now - _sentNumbers[n]) + 's ago) — ' + source);
+      return;
+    }
 
+    _markSent(n);
     lastNum = n;
     lastTime = now;
     sentCount++;

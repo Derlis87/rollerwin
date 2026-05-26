@@ -69,16 +69,17 @@ function writeEntries(entries: CaptureEntry[]) {
 // Minimal dedup: ONLY prevents race conditions when multiple hooks (WS/Fetch/XHR/DOM)
 // detect the SAME spin result within milliseconds. Window is intentionally SHORT (3s)
 // so legitimate repeated numbers (e.g. 31, 31, 31) are NEVER blocked.
-// Spins are ~18s apart, so 3s is safe — it only catches true duplicates.
+// Spins are ~18s apart, so 8s is safe — it only catches true duplicates.
+// Extension dedup (12s) is the primary guard. Server 8s is a safety net.
 const _dedupCache = new Map<number, number>()
-const DEDUP_WINDOW_MS = 3000 // 3 seconds — only blocks true race-condition duplicates
+const DEDUP_WINDOW_MS = 8000 // 8 seconds — safety net for edge cases
 
 function isDuplicate(number: number): boolean {
   const lastSeen = _dedupCache.get(number)
   if (lastSeen !== undefined) {
     const elapsed = Date.now() - lastSeen
     if (elapsed < DEDUP_WINDOW_MS) {
-      return true // True duplicate within 3s (race condition from multiple hooks)
+      return true // True duplicate within 8s (race condition from multiple hooks)
     }
   }
   return false
