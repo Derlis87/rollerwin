@@ -17,8 +17,8 @@
 //   - Keep-alive 401/403 navigate en 150ms (era 500ms)
 //   - Post-load check a los 100ms (era 500ms)
 //   - Keep-alive cada 45s (era 60s)
-//   - Sin capturas >35s (era 45s) con check cada 5s (era 10s)
-//   - Deteccion de iframe muerto: reconnect sin reload completo
+//   - Reload solo si sesion expirada + >90s sin capturas (safety net)
+//   - ELIMINADO: iframe reconnect a 20s (reiniciaba mesa con sesion OK)
 (function() {
   'use strict';
 
@@ -177,9 +177,9 @@
     // ║  - Boton Jugar cada 400ms (era 1s)                             ║
     // ║  - Keep-alive 401/403 → navigate en 150ms (era 500ms)          ║
     // ║  - Post-load check a los 100ms (era 500ms)                     ║
-    // ║  - Sin capturas >35s (era 45s) con check cada 5s (era 10s)    ║
     // ║  - Keep-alive cada 45s (era 60s)                               ║
-    // ║  - Deteccion de iframe desconectado (reconnect rapido)          ║
+    // ║  - Reload solo si sesion expirada + >90s sin capturas          ║
+    // ║  - ELIMINADO: iframe reconnect (reiniciaba mesa con sesion OK)  ║
     // ╚══════════════════════════════════════════════════════════════════╝
 
     var _keepAliveCount = 0;
@@ -406,53 +406,24 @@
     setInterval(checkPlayButton, 400); // v6.2: cada 400ms (era 1s)
 
     // ════════════════════════════════════════════════════════
-    // 6. IFRAME MUERTO: sin capturas >35s → reload
-    //    v6.2: umbral 35s (era 45s), check cada 5s (era 10s)
+    // 6. IFRAME MUERTO: sin capturas >90s → reload COMPLETO
+    //    v6.2 FIX: 90s (era 35s que reiniciaba con sesion activa)
+    //    ESTO ES ULTIMO RECURSO — solo si el iframe esta completamente muerto.
+    //    El recovery normal se activa por: keep-alive 401/403 o modal sesion.
+    //    NO debe reiniciar si la sesion esta activa y simplemente no captura.
     // ════════════════════════════════════════════════════════
     setInterval(function() {
       var noCap = Date.now() - _lastCaptureTime;
       var onGame = location.href.indexOf('/casino/games/') !== -1;
 
-      // Si estamos en la pagina del juego y no hay capturas en 35s
-      if (onGame && noCap > 35000 && !_recoveryInProgress) { // v6.2: era 45000
-        console.log('[RollerWin] Sin capturas ' + Math.round(noCap/1000) + 's — reload...');
+      // Solo reload si estamos en juego Y sin capturas >90s Y sesion expirada
+      if (onGame && noCap > 90000 && !_recoveryInProgress && (_sessionExpired || _keepAliveCount === 0)) {
+        console.log('[RollerWin] Sin capturas ' + Math.round(noCap/1000) + 's + sesion expirada — reload completo...');
         _isRecovering = true;
         _saveState();
         location.reload();
       }
-    }, 5000); // v6.2: check cada 5s (era 10s)
-
-    // ════════════════════════════════════════════════════════
-    // 6c. IFRAME RECONNECT: sin capturas >20s pero <35s
-    //     Intentar reconectar el iframe SIN reload completo
-    //     Busca iframes de Evolution y les hace reload individual
-    // ════════════════════════════════════════════════════════
-    var _iframeReconnectAttempted = false;
-    setInterval(function() {
-      var noCap = Date.now() - _lastCaptureTime;
-      var onGame = location.href.indexOf('/casino/games/') !== -1;
-
-      // Si estamos en juego sin capturas 20-35s: intentar reconnect de iframe
-      if (onGame && noCap > 20000 && noCap < 35000 && !_recoveryInProgress && !_iframeReconnectAttempted) {
-        console.log('[RollerWin] Sin capturas ' + Math.round(noCap/1000) + 's — intentando reconnect de iframe...');
-        _iframeReconnectAttempted = true;
-        var iframes = document.querySelectorAll('iframe');
-        for (var i = 0; i < iframes.length; i++) {
-          var src = (iframes[i].src || '').toLowerCase();
-          if (src.indexOf('evolution') !== -1 || src.indexOf('game') !== -1 || src.indexOf('casino') !== -1) {
-            console.log('[RollerWin] Reloading iframe:', src.substring(0, 80));
-            try { iframes[i].contentWindow.location.reload(); } catch(e) {
-              // Cross-origin: forzar recarga via src
-              var originalSrc = iframes[i].src;
-              iframes[i].src = '';
-              setTimeout(function(iframe, s) { iframe.src = s; }, 100, iframes[i], originalSrc);
-            }
-          }
-        }
-        // Reset flag despues de 30s para permitir otro intento si sigue sin capturas
-        setTimeout(function() { _iframeReconnectAttempted = false; }, 30000);
-      }
-    }, 5000);
+    }, 10000); // check cada 10s
 
     // ════════════════════════════════════════════════════════
     // 6b. DETECCIÓN AL CARGAR: ya venimos de un recovery?
