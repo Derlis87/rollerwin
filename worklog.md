@@ -113,3 +113,29 @@ Stage Summary:
 - Extension v4.9 fully deployed with AUTO-RECOVER INSTANTÁNEO
 - All 6 layers working: keep-alive, modal detection + OK click, Play button click, iframe dead reload, visibility handler, status reporting
 - User can download v4.9 ZIP from the app dashboard
+
+---
+Task ID: 1
+Agent: Main Agent
+Task: v6.2 - Recovery ultra-rapido (solo optimizacion de tiempos)
+
+Work Log:
+- Analyzed all delay sources in auto-recovery flow of v6.1
+- Optimized inject-main.js recovery timings (NO changes to capture/dedup logic):
+  - Modal detection: 1s → 400ms (MutationObserver already instant)
+  - Play button detection: 1s → 400ms
+  - Keep-alive 401/403 → navigate: 500ms → 150ms
+  - Post-load check: 500ms → 100ms
+  - Second post-load check: 1500ms → 600ms
+  - Added third post-load check at 1200ms (NEW)
+  - No-capture reload threshold: 45s → 35s, check interval: 10s → 5s
+  - Keep-alive interval: 60s → 45s
+  - NEW: iframe reconnect at 20s (before full reload at 35s)
+- Updated all version labels to v6.2 across all files
+- Rebuilt ZIP and pushed to GitHub
+
+Stage Summary:
+- Estimated total recovery time reduced from ~15-30s to ~5-10s
+- v6.2 ZIP deployed at public/RollerWin-Capture-v4.zip
+- All capture/dedup logic (Map-based dedup 12s, multi-hook, extractObj, URL filters) UNCHANGED
+- Git push successful to origin/main
