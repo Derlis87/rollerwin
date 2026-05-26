@@ -160,18 +160,18 @@
     });
 
     // ╔══════════════════════════════════════════════════════════════════╗
-    // ║  v6.0: AUTO-RECOVERY COMPLETO                                  ║
+    // ║  v6.1: AUTO-RECOVERY INSTANTÁNEO                               ║
+    // ║  OBJETIVO: Recovery completo en <10 segundos                    ║
+    // ║  (los giros duran ~18s, necesitamos volver antes del próximo)   ║
     // ║                                                                ║
-    // ║  Cuando Betfury muestra "SESIÓN FINALIZADA":                   ║
-    // ║  1. Click OK para cerrar el modal (busca button/div/span/a)     ║
-    // ║  2. Esperar 1.5s para que el modal se cierre                   ║
-    // ║  3. Navegar a la mesa de ruleta                                ║
-    // ║  4. Si hay botón "Jugar" → click automático                   ║
-    // ║  5. El iframe carga y captura resume                           ║
-    // ║                                                                ║
-    // ║  Estado persistido en localStorage (sobrevive recargas)         ║
-    // ║  Keep-alive detecta 401/403 = sesión expirada                  ║
-    // ║  checkPlayButton SIEMPRE activo (no depende de estado)          ║
+    // ║  Cambios vs v6.0:                                               ║
+    // ║  - NAVEGAR DIRECTO sin esperar a cerrar modal (ahorra 1.5s)    ║
+    // ║  - Detección cada 1s en vez de 2s (ahorra 1s)                 ║
+    // ║  - Botón Jugar cada 1s en vez de 2s (ahorra 1s)               ║
+    // ║  - Post-load check sin delays (ahorra 4s)                      ║
+    // ║  - Detecta modal SALDO BAJO → click CERRAR                    ║
+    // ║  - Click Jugar inmediato al cargar (sin esperar iframe)         ║
+    // ║  - Keep-alive cada 60s (mas agresivo)                           ║
     // ╚══════════════════════════════════════════════════════════════════╝
 
     var _keepAliveCount = 0;
@@ -261,13 +261,12 @@
           _sessionExpired = true;
           _saveState();
           // Forzar recovery inmediato
-          setTimeout(function() { triggerFullRecovery('keepalive-' + r.status); }, 500);
+          setTimeout(function() { navigateToGame('keepalive-' + r.status); }, 500);
         }
       }).catch(function() {});
     }
-    setTimeout(betfuryKeepAlive, 3000);
-    setInterval(betfuryKeepAlive, 300000); // cada 5 min
-    setInterval(betfuryKeepAlive, 120000); // tambien cada 2 min (mas agresivo)
+    setTimeout(betfuryKeepAlive, 2000);
+    setInterval(betfuryKeepAlive, 60000); // cada 60s
 
     // ════════════════════════════════════════════════════════
     // 2. BUSQUEDA AMPLIA de botones (button/div/span/a)
@@ -309,85 +308,67 @@
     }
 
     // ════════════════════════════════════════════════════════
-    // 3. FULL RECOVERY: Detectar + OK + Esperar + Navegar
+    // 3. NAVIGATE TO GAME: Directo, sin esperar modal
     // ════════════════════════════════════════════════════════
     var _recoveryInProgress = false;
 
-    function triggerFullRecovery(reason) {
+    function navigateToGame(reason) {
       if (_recoveryInProgress) return;
       _recoveryInProgress = true;
       _isRecovering = true;
       _recoverCount++;
       _saveState();
 
-      console.log('[RollerWin] FULL RECOVERY #' + _recoverCount + ' (razon: ' + reason + ')');
-
-      // PASO 1: Buscar y cerrar modal de sesion expirada
-      var foundModal = false;
-      var allEls = document.querySelectorAll('div, p, span, h1, h2, h3');
-      for (var i = 0; i < allEls.length; i++) {
-        var txt = (allEls[i].textContent || '');
-        var txtLow = txt.toLowerCase();
-        var isExpired = (txt.indexOf('SESI') !== -1 && txt.indexOf('FINALIZADA') !== -1) ||
-                        (txtLow.indexOf('session') !== -1 && (txtLow.indexOf('expired') !== -1 || txtLow.indexOf('ended') !== -1));
-        if (isExpired) {
-          foundModal = true;
-          console.log('[RollerWin] Modal sesion expirada detectado');
-          break;
-        }
-      }
-
-      if (foundModal) {
-        // Click en OK con busqueda amplia
-        var okClicked = clickAnyButtonByText(['OK', 'Ok', 'ok', 'Aceptar', 'Accept', 'ACEPTAR']);
-        console.log('[RollerWin] Click OK: ' + (okClicked ? 'EXITOSO' : 'NO ENCONTRADO'));
-
-        // Esperar 1.5s para que el modal se cierre ANTES de navegar
-        setTimeout(function() {
-          navigateToGame(reason);
-        }, 1500);
-      } else {
-        // No hay modal visible pero la sesion expiro — navegar directo
-        console.log('[RollerWin] Sin modal visible — navegando directo...');
-        navigateToGame(reason);
-      }
-    }
-
-    function navigateToGame(reason) {
       var targetUrl = ROULETTE_URL;
       if (_gameUrl && _gameUrl.indexOf('/casino/games/') !== -1 && _gameUrl.indexOf('roulette') !== -1) {
         targetUrl = _gameUrl;
       }
 
-      console.log('[RollerWin] Navegando a mesa: ' + targetUrl + ' (razon: ' + reason + ')');
-      _recoveryInProgress = false;
+      console.log('[RollerWin] RECOVERY #' + _recoverCount + ' → ' + targetUrl + ' (' + reason + ')');
       location.href = targetUrl;
     }
 
-    // Detector de modal cada 2s
-    function detectExpiredModal() {
+    // ════════════════════════════════════════════════════════
+    // 4. DETECT AND CLOSE ANY MODAL (sesion + saldo bajo)
+    // ════════════════════════════════════════════════════════
+    function detectAndCloseAnyModal() {
       if (_recoveryInProgress) return false;
       var allEls = document.querySelectorAll('div, p, span, h1, h2, h3');
+
       for (var i = 0; i < allEls.length; i++) {
         var txt = (allEls[i].textContent || '');
         var txtLow = txt.toLowerCase();
+
+        // SESIÓN FINALIZADA → navegar directo (no esperar OK)
         var isExpired = (txt.indexOf('SESI') !== -1 && txt.indexOf('FINALIZADA') !== -1) ||
                         (txtLow.indexOf('session') !== -1 && (txtLow.indexOf('expired') !== -1 || txtLow.indexOf('ended') !== -1));
         if (isExpired) {
-          triggerFullRecovery('modal-detect');
+          console.log('[RollerWin] SESION FINALIZADA → navegando directo...');
+          navigateToGame('modal-sesion');
           return true;
+        }
+
+        // SALDO BAJO → solo cerrar modal, no navegar
+        var isLowBalance = (txtLow.indexOf('saldo') !== -1 && txtLow.indexOf('bajo') !== -1) ||
+                           (txtLow.indexOf('balance') !== -1 && txtLow.indexOf('low') !== -1) ||
+                           (txtLow.indexOf('insufficient') !== -1 && txtLow.indexOf('balance') !== -1);
+        if (isLowBalance) {
+          if (clickAnyButtonByText(['CERRAR', 'Cerrar', 'cerrar', 'CLOSE', 'Close', 'OK', 'Ok', 'ok'])) {
+            console.log('[RollerWin] Modal SALDO BAJO → CERRAR');
+            return true;
+          }
         }
       }
       return false;
     }
 
-    setInterval(detectExpiredModal, 2000);
+    setInterval(detectAndCloseAnyModal, 1000); // cada 1s (era 2s)
     try {
-      new MutationObserver(function() { detectExpiredModal(); }).observe(document.body, { childList: true, subtree: true });
+      new MutationObserver(function() { detectAndCloseAnyModal(); }).observe(document.body, { childList: true, subtree: true });
     } catch(e) {}
 
     // ════════════════════════════════════════════════════════
-    // 4. CLICK AUTOMÁTICO en botón "Jugar" — SIEMPRE ACTIVO
+    // 5. CLICK AUTOMÁTICO en botón "Jugar" — SIEMPRE ACTIVO
     // Ya NO depende de _isRecovering. Siempre busca el boton
     // "Jugar" cuando estamos en la pagina del juego (preview)
     // ════════════════════════════════════════════════════════
@@ -405,7 +386,7 @@
         if (bt === 'jugar' || bt === 'play' || bt === 'play now' || bt === 'spin' || bt === 'start') {
           console.log('[RollerWin] Boton JUGAR encontrado [' + btns[i].tagName.toLowerCase() + '] — click!');
           btns[i].click();
-          _playButtonCooldown = Date.now() + 10000; // Cooldown 10s para no hacer click repetido
+          _playButtonCooldown = Date.now() + 5000; // Cooldown 5s (era 10s)
           _isRecovering = true;
           _saveState();
           return true;
@@ -414,63 +395,49 @@
       return false;
     }
 
-    setInterval(checkPlayButton, 2000);
+    setInterval(checkPlayButton, 1000); // cada 1s (era 2s)
 
     // ════════════════════════════════════════════════════════
-    // 5. IFRAME MUERTO: sin capturas >60s → reload
+    // 6. IFRAME MUERTO: sin capturas >45s → reload
     // ════════════════════════════════════════════════════════
     setInterval(function() {
       var noCap = Date.now() - _lastCaptureTime;
       var onGame = location.href.indexOf('/casino/games/') !== -1;
 
-      // Si estamos en la pagina del juego y no hay capturas en 60s
-      if (onGame && noCap > 60000 && !_recoveryInProgress) {
+      // Si estamos en la pagina del juego y no hay capturas en 45s
+      if (onGame && noCap > 45000 && !_recoveryInProgress) { // era 60000
         console.log('[RollerWin] Sin capturas ' + Math.round(noCap/1000) + 's — reload...');
         _isRecovering = true;
         _saveState();
         location.reload();
       }
-    }, 15000);
+    }, 10000); // check cada 10s (era 15000)
 
     // ════════════════════════════════════════════════════════
-    // 6. DETECCIÓN AL CARGAR: ya venimos de un recovery?
+    // 6b. DETECCIÓN AL CARGAR: ya venimos de un recovery?
     // ════════════════════════════════════════════════════════
     setTimeout(function() {
-      // Si venimos de un recovery y estamos en la pagina del juego
       if (_isRecovering || _sessionExpired || _recoverCount > 0) {
-        console.log('[RollerWin] Post-load check: recovering=' + _isRecovering +
+        console.log('[RollerWin] Post-load: recovering=' + _isRecovering +
           ' expired=' + _sessionExpired + ' count=' + _recoverCount);
 
-        // Si NO estamos en la pagina de juego → ir a la mesa
         if (location.href.indexOf('/casino/games/') === -1) {
-          console.log('[RollerWin] No en pagina de juego — navegando a mesa...');
-          setTimeout(function() { navigateToGame('post-load-redirect'); }, 1000);
+          console.log('[RollerWin] No en pagina de juego — navegando...');
+          navigateToGame('post-load-redirect');
           return;
         }
 
-        // Si estamos en la pagina de juego pero no hay iframe de Evolution
+        // Click Jugar inmediato + cerrar modales
+        console.log('[RollerWin] En pagina de juego — click Jugar + cerrar modales...');
+        checkPlayButton();
+        detectAndCloseAnyModal();
+        
         setTimeout(function() {
-          var iframes = document.querySelectorAll('iframe');
-          var hasEvolution = false;
-          for (var i = 0; i < iframes.length; i++) {
-            if (iframes[i].src && (iframes[i].src.indexOf('evolution') !== -1 ||
-                iframes[i].src.indexOf('livecasino') !== -1)) {
-              hasEvolution = true;
-              break;
-            }
-          }
-          if (!hasEvolution) {
-            console.log('[RollerWin] Sin iframe Evolution — buscando boton Jugar...');
-            checkPlayButton();
-          } else {
-            console.log('[RollerWin] Iframe Evolution detectado — captura deberia reanudarse');
-            _isRecovering = false;
-            _sessionExpired = false;
-            _saveState();
-          }
-        }, 3000); // Esperar 3s a que cargue el iframe
+          checkPlayButton();
+          detectAndCloseAnyModal();
+        }, 1500);
       }
-    }, 1000);
+    }, 500); // ejecutar a los 500ms (era 1000ms)
 
     // ════════════════════════════════════════════════════════
     // 7. VISIBILITY + FOCUS
@@ -478,23 +445,21 @@
     document.addEventListener('visibilitychange', function() {
       if (!document.hidden) {
         betfuryKeepAlive();
-        // Si no estamos en la pagina de juego pero ya tuvimos capturas antes
         if (location.href.indexOf('/casino/games/') === -1 && _recoverCount > 0) {
-          console.log('[RollerWin] Tab visible, no en juego — volviendo a mesa...');
           navigateToGame('visibility');
         }
-        // Si estamos en la pagina de juego, verificar que el iframe este vivo
         if (location.href.indexOf('/casino/games/') !== -1) {
-          setTimeout(checkPlayButton, 1000);
+          checkPlayButton();
+          detectAndCloseAnyModal();
         }
       }
     });
 
     window.addEventListener('focus', function() {
       betfuryKeepAlive();
-      // Verificar boton Jugar cuando el tab recibe foco
       if (location.href.indexOf('/casino/games/') !== -1) {
-        setTimeout(checkPlayButton, 500);
+        checkPlayButton();
+        detectAndCloseAnyModal();
       }
     });
 
@@ -517,7 +482,7 @@
       } catch(e) {}
     }, 10000);
 
-    console.log('[RollerWin] v6.0 AUTO-RECOVERY | Mesa:', ROULETTE_URL, '| RecoverCount:', _recoverCount);
+    console.log('[RollerWin] v6.1 AUTO-RECOVERY RAPIDO | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
 
   }
 
