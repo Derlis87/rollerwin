@@ -30,16 +30,14 @@
   var lastTime = 0;
   var sentCount = 0;
 
-  // ═══ DEDUP v6.1: Map de numeros recientes ═══
-  // Problema v5.2/v6.0: lastNum solo recordaba el ULTIMO numero.
-  // Si un numero diferente llegaba en el medio, el cooldown se reseteaba
-  // y permitia duplicados del mismo giro.
-  // Fix: Map<numero, timestamp> — recuerda TODOS los numeros enviados.
-  // Ventana 12s: los giros duran ~18s, asi que 12s nunca bloquea
-  // repetidos legitimas de giros diferentes, pero SI bloquea multiples
-  // detecciones del MISMO giro por hooks diferentes (WS/Fetch/XHR/DOM).
+  // ═══ DEDUP v6.2: Map de numeros recientes ═══
+  // Map<numero, timestamp> — recuerda TODOS los numeros enviados.
+  // Ventana 8s: Los hooks (WS/Fetch/XHR/DOM) detectan el mismo giro
+  // en 0-3s maximo. 8s bloquea duplicados del MISMO giro pero NUNCA
+  // bloquea repeticiones legitimas (los giros duran ~18s).
+  // Server dedup (10s) es el safety net adicional.
   var _sentNumbers = {};   // { number: timestamp }
-  var _DEDUP_WINDOW = 12000; // 12 segundos
+  var _DEDUP_WINDOW = 8000; // 8 segundos (era 12s — 12s era riesgoso si giros <15s)
 
   function _isDuplicate(n) {
     var now = Date.now();
@@ -247,12 +245,21 @@
     });
 
     // ════════════════════════════════════════════════════════
-    // 1. KEEP-ALIVE: Fetch reales + deteccion de sesion expirada
+    // 1. KEEP-ALIVE + DETECCION DE SESION
+    //    v6.2 FIX: Los endpoints /api/user/* NO EXISTEN en Betfury
+    //    (devuelven 404). Usar endpoints reales que Betfury si tiene.
+    //    Tambien: detectar por RESPUESTA de contenido, no solo status code.
     // ════════════════════════════════════════════════════════
     function betfuryKeepAlive() {
       _keepAliveCount++;
-      var endpoints = ['/api/user/balance', '/api/user/profile', '/api/user/session', '/api/user/settings'];
-      var ep = endpoints[Math.floor(Math.random() * endpoints.length)];
+      // Endpoints reales de Betfury (no ficticios)
+      var endpoints = [
+        '/api/casino/games/roulette-live-by-evolution',
+        '/api/casino/categories',
+        '/api/user/wallet',
+        '/api/promotions/list'
+      ];
+      var ep = endpoints[_keepAliveCount % endpoints.length];
       fetch(ep, {
         method: 'GET',
         credentials: 'include',
@@ -261,20 +268,33 @@
       }).then(function(r) {
         _lastKeepAliveResponse = r.status;
         if (_keepAliveCount % 3 === 0) {
-          console.log('[RollerWin] Keep-alive #' + _keepAliveCount + ' HTTP ' + r.status);
+          console.log('[RollerWin] Keep-alive #' + _keepAliveCount + ' HTTP ' + r.status + ' (' + ep + ')');
         }
-        // DETECTAR sesion expirada por keep-alive (401/403)
+        // DETECTAR sesion expirada:
+        // Betfury puede devolver 200 con redirect a login, o 401/403
         if (r.status === 401 || r.status === 403) {
-          console.log('[RollerWin] Keep-alive ' + r.status + ' — SESION EXPIRADA detectada via API!');
+          console.log('[RollerWin] Keep-alive ' + r.status + ' — SESION EXPIRADA!');
           _sessionExpired = true;
           _saveState();
-          // Forzar recovery ULTRA-RAPIDO
-          setTimeout(function() { navigateToGame('keepalive-' + r.status); }, 150); // v6.2: era 500ms
+          setTimeout(function() { navigateToGame('keepalive-' + r.status); }, 150);
+          return;
         }
-      }).catch(function() {});
+        // Tambien detectar si la respuesta es HTML de login (redirect 200)
+        // Si el endpoint de API devuelve HTML, la sesion expiro
+        var ct = r.headers.get('content-type') || '';
+        if (ct.indexOf('text/html') !== -1 && ep.indexOf('/api/') !== -1) {
+          console.log('[RollerWin] Keep-alive HTML response — posible sesion expirada!');
+          _sessionExpired = true;
+          _saveState();
+          setTimeout(function() { navigateToGame('keepalive-html'); }, 150);
+        }
+      }).catch(function(e) {
+        // Error de red tambien puede indicar problemas
+        console.log('[RollerWin] Keep-alive error:', e.message);
+      });
     }
     setTimeout(betfuryKeepAlive, 1500);
-    setInterval(betfuryKeepAlive, 45000); // cada 45s (v6.2: era 60s)
+    setInterval(betfuryKeepAlive, 45000);
 
     // ════════════════════════════════════════════════════════
     // 2. BUSQUEDA AMPLIA de botones (button/div/span/a)
@@ -327,6 +347,14 @@
       _recoverCount++;
       _saveState();
 
+      // v6.2 FIX: Resetear _recoveryInProgress despues de 30s
+      // Si la navegacion falla o tarda, no quedarse bloqueado para siempre
+      setTimeout(function() {
+        console.log('[RollerWin] Reset _recoveryInProgress (safety timeout)');
+        _recoveryInProgress = false;
+        _saveState();
+      }, 30000);
+
       var targetUrl = ROULETTE_URL;
       if (_gameUrl && _gameUrl.indexOf('/casino/games/') !== -1 && _gameUrl.indexOf('roulette') !== -1) {
         targetUrl = _gameUrl;
@@ -340,7 +368,8 @@
     // 4. DETECT AND CLOSE ANY MODAL (sesion + saldo bajo)
     // ════════════════════════════════════════════════════════
     function detectAndCloseAnyModal() {
-      if (_recoveryInProgress) return false;
+      // v6.2 FIX: NO bloquear si _recoveryInProgress —
+      // necesitamos poder cerrar modales en CUALQUIER momento
       var allEls = document.querySelectorAll('div, p, span, h1, h2, h3');
 
       for (var i = 0; i < allEls.length; i++) {

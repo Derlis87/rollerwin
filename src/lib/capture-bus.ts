@@ -9,7 +9,7 @@
  *   2. Dashboard polls /api/capture/latest → reads from capture-data.json
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, writeFileSync as writeAtomic } from 'fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, writeFileSync as writeAtomicSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -65,21 +65,48 @@ function writeEntries(entries: CaptureEntry[]) {
   }
 }
 
+// ── WRITE LOCK (prevents race conditions on multi-process) ──
+// Uses a lock file with PID + timestamp. If lock is older than 3s, it's stale.
+const _writeLockActive = new Map<string, number>() // in-memory lock per number
+const WRITE_LOCK_TTL = 3000
+
+function acquireWriteLock(number: number): boolean {
+  const key = String(number)
+  const now = Date.now()
+  const lastLock = _writeLockActive.get(key)
+  if (lastLock !== undefined && now - lastLock < WRITE_LOCK_TTL) {
+    return false // Another write for this number is in progress
+  }
+  _writeLockActive.set(key, now)
+  return true
+}
+
+function releaseWriteLock(number: number): void {
+  _writeLockActive.delete(String(number))
+  // Cleanup
+  if (_writeLockActive.size > 50) {
+    const now = Date.now()
+    for (const [k, ts] of _writeLockActive) {
+      if (now - ts > WRITE_LOCK_TTL * 2) _writeLockActive.delete(k)
+    }
+  }
+}
+
 // ── IN-MEMORY DEDUP CACHE ──
-// Minimal dedup: ONLY prevents race conditions when multiple hooks (WS/Fetch/XHR/DOM)
-// detect the SAME spin result within milliseconds. Window is intentionally SHORT (3s)
-// so legitimate repeated numbers (e.g. 31, 31, 31) are NEVER blocked.
-// Spins are ~18s apart, so 8s is safe — it only catches true duplicates.
-// Extension dedup (12s) is the primary guard. Server 8s is a safety net.
+// Prevents race conditions when multiple hooks (WS/Fetch/XHR/DOM)
+// detect the SAME spin result. Window is 15s to catch all edge cases.
+// Extension dedup (8s) is the primary guard. Server 10s is a safety net.
+// IMPORTANT: On Render with multiple workers, in-memory cache is per-process.
+// The file-based dedup (below) provides cross-process safety.
 const _dedupCache = new Map<number, number>()
-const DEDUP_WINDOW_MS = 8000 // 8 seconds — safety net for edge cases
+const DEDUP_WINDOW_MS = 10000 // 10 seconds — catches all multi-hook duplicates
 
 function isDuplicate(number: number): boolean {
   const lastSeen = _dedupCache.get(number)
   if (lastSeen !== undefined) {
     const elapsed = Date.now() - lastSeen
     if (elapsed < DEDUP_WINDOW_MS) {
-      return true // True duplicate within 8s (race condition from multiple hooks)
+      return true // True duplicate within 15s (race condition from multiple hooks)
     }
   }
   return false
@@ -107,30 +134,41 @@ export function pushCapture(number: number) {
     return
   }
 
-  // SECONDARY: File-based dedup fallback (for cross-process safety on Render)
-  // Same 3s window — only catches race-condition duplicates, never blocks legit repeats
-  const entries = readEntries()
-  const now = Date.now()
-  const checkCount = Math.min(entries.length, 3)
-  for (let i = entries.length - checkCount; i < entries.length; i++) {
-    if (entries[i].number === number && now - entries[i].timestamp < DEDUP_WINDOW_MS) {
-      markSeen(number) // Also update cache
-      return
-    }
+  // Write lock: prevent race conditions from simultaneous requests
+  if (!acquireWriteLock(number)) {
+    console.log('[CaptureBus] Write lock active for', number, '— skipping')
+    return
   }
 
-  // Write to file
-  entries.push({
-    number,
-    color: getColor(number),
-    timestamp: now,
-    id: `cap-${now}-${Math.random().toString(36).slice(2, 6)}`
-  })
+  try {
+    // SECONDARY: File-based dedup fallback (for cross-process safety on Render)
+    // Checks LAST 5 entries (not just 3) with 10s window.
+    // This catches duplicates that slip through in-memory cache on multi-process deployments.
+    const entries = readEntries()
+    const now = Date.now()
+    const checkCount = Math.min(entries.length, 5) // Check last 5 (was 3)
+    for (let i = entries.length - checkCount; i < entries.length; i++) {
+      if (entries[i].number === number && now - entries[i].timestamp < DEDUP_WINDOW_MS) {
+        markSeen(number) // Also update cache
+        return
+      }
+    }
 
-  writeEntries(entries)
+    // Write to file
+    entries.push({
+      number,
+      color: getColor(number),
+      timestamp: now,
+      id: `cap-${now}-${Math.random().toString(36).slice(2, 6)}`
+    })
 
-  // Mark in memory cache AFTER successful write
-  markSeen(number)
+    writeEntries(entries)
+
+    // Mark in memory cache AFTER successful write
+    markSeen(number)
+  } finally {
+    releaseWriteLock(number)
+  }
 }
 
 /** Get entries newer than afterId */
