@@ -164,3 +164,26 @@ Stage Summary:
 - Extension ZIP rebuilt and pushed
 - Server capture-bus.ts updated with write-lock
 - Git push successful: 93239a6
+---
+Task ID: 1
+Agent: Main Agent
+Task: Fix duplicates and session recovery in RollerWin Chrome extension v6.3
+
+Work Log:
+- Analyzed screenshots showing number 26 duplicated consecutively in sequence
+- Deep-dived into inject-main.js to trace all capture hooks and dedup mechanisms
+- Identified ROOT CAUSE of duplicates: iframe reload loses client dedup state (_sentNumbers, _lastDomNumber reset), DOM Scanner re-sends old visible number after dedup window expires
+- Identified 4 critical bugs in session recovery: infinite navigation loop, keep-alive blind to redirects, case-sensitive modal text, rw-number resetting recovery state
+- Applied triple dedup protection: _lastSentNumber (sequence-based), 15s time window, parent↔iframe sync
+- Applied server-side sequence dedup + 15s window
+- Fixed keep-alive to detect redirects (response.redirected) and HTML login pages
+- Fixed modal text detection to be case-insensitive for Spanish
+- Persisted recoveryTimestamp in localStorage to prevent infinite loops
+- Guarded rw-number event from resetting recovery state during active recovery
+- Built, ZIPped, committed and pushed to Render
+
+Stage Summary:
+- v6.3 deployed to Render with all fixes
+- Triple dedup: sequence-based + 15s time window + parent↔iframe sync + server sequence check
+- Session recovery: redirect detection + case-insensitive modal + persisted cooldown + recovery state protection
+- ZIP updated at /public/RollerWin-Capture-v4.zip
