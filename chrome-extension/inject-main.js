@@ -1,4 +1,4 @@
-// RollerWin Capture v6.3 - MAIN WORLD DETECTION ENGINE
+// RollerWin Capture v6.4 - MAIN WORLD DETECTION ENGINE
 // SOLO detecta numeros desde iframes (donde corre Evolution)
 // El parent page SOLO retransmite lo que llega via postMessage desde iframes
 // FIX v5.0: DOM Scanner capturaba numeros del historial (circulos viejos)
@@ -11,15 +11,13 @@
 //   - checkPlayButton SIEMPRE activo (no depende de _recovering)
 //   - Click OK primero, esperar cierre, luego navegar
 //   - Deteccion de pagina "Jugar" sin depender de estado
-// FIX v6.3: TRIPLE DEDUP contra duplicados + RECOVERY:
-//   - _lastSentNumber: bloquea mismo número consecutivo (sobrevive iframe reload)
-//   - _DEDUP_WINDOW 15s: cubre ciclo completo de giro
-//   - Sync parent↔iframe: el iframe recargado recibe el último número del parent
-//   - Modal detect cada 400ms + MutationObserver instantaneo
-//   - Boton Jugar cada 400ms
-//   - Keep-alive intercept + navigate
-//   - Post-load check a los 100ms
-//   - Reload solo si sesion expirada + >90s sin capturas (safety net)
+// FIX v6.4: DEDUP DEFINITIVO — 100% fiel a la secuencia real:
+//   - ELIMINADO _lastSentNumber: bloqueaba repetidos legitimas (ej: 15, 15)
+//   - DEDUP por tiempo 9s: bloquea multiples hooks del MISMO giro unicamente
+//   - DOM Scanner con change-detect + 15s: mismo numero visible >15s = nuevo giro
+//   - Sync parent↔iframe: popula _sentNumbers (no _lastSentNumber)
+//   - Repeticiones legitimas (15, 15, 15) SIEMPRE capturadas correctamente
+//   - Duplicados de un mismo giro (WS + Fetch + DOM) SIEMPRE bloqueados
 (function() {
   'use strict';
 
@@ -31,32 +29,29 @@
   var lastTime = 0;
   var sentCount = 0;
 
-  // ═══ DEDUP v6.3: Triple protección contra duplicados ═══
-  // Capa 1: _lastSentNumber — si el último número enviado fue X, jamás enviar X
-  //         de nuevo hasta que se envíe un número diferente. Esto sobrevive
-  //         a recargas del iframe porque cada nuevo contexto hereda el último
-  //         número desde postMessage del parent.
-  // Capa 2: Map<numero, timestamp> con ventana 15s — cubre todo el ciclo de
-  //         un giro (~18s) para capturar detecciones retrasadas.
-  // Capa 3: Server dedup (15s + secuencia) es el safety net final.
-  // NOTA: Repeticiones legitimas consecutivas (ej: 26, 26) son bloqueadas.
-  // Esto es CORRECTO para un sistema de predicción: un duplicado corrompe
-  // toda la secuencia, mientras que un número faltante solo afecta 1 predicción.
+  // ═══ DEDUP v6.4: Dedup por TIEMPO — 100% fiel a la secuencia real ═══
+  // REGLA: Un numero se envía UNA VEZ por giro, sin importar su valor.
+  // Si el mismo numero cae en giros consecutivos (ej: 15, 15), AMBOS se capturan.
+  // Solo se bloquea si multiples hooks (WS, Fetch, XHR, DOM) detectan el
+  // MISMO giro — dedup por tiempo de 9s cubre esto.
+  //
+  // Por que 9s? Los giros duran ~18s. El hook mas rapido (WS) detecta al
+  // inicio (T=0). El DOM Scanner corre cada 8s, max deteccion del mismo
+  // giro es T=8s (8-0=8s < 9s → bloqueado). El proximo giro a T=18s:
+  // 18-0=18s > 9s → permitido, incluso si es el mismo numero.
+  //
+  // DOM Scanner: usa change-detect con limite de 15s. Si el mismo numero
+  // lleva >15s visible en pantalla, es un NUEVO giro → permite re-enviar.
   var _sentNumbers = {};   // { number: timestamp }
-  var _DEDUP_WINDOW = 15000; // 15 segundos (cubre ciclo completo de giro ~18s)
-  var _lastSentNumber = -1; // Capa 1: último número enviado por CUALQUIER hook
+  var _DEDUP_WINDOW = 9000;  // 9s — cubre multiples hooks del mismo giro
 
   function _isDuplicate(n) {
-    // CAPA 1: Sequence dedup — jamás enviar el mismo número que el último enviado
-    if (n === _lastSentNumber) {
-      console.log('[RollerWin] SEQ-DUP: ' + n + ' bloqueado (mismo que último enviado)');
-      return true;
-    }
-    // CAPA 2: Time-based dedup — bloquear si fue enviado en los últimos 15s
+    // Time-based dedup — si este numero fue enviado en los ultimos 9s,
+  // es el MISMO giro detectado por otro hook → bloquear
     var now = Date.now();
     var lastSent = _sentNumbers[n];
     if (lastSent !== undefined && now - lastSent < _DEDUP_WINDOW) {
-      console.log('[RollerWin] TIME-DUP: ' + n + ' bloqueado (' + Math.round(now - lastSent) + 's ago)');
+      console.log('[RollerWin] DUP: ' + n + ' bloqueado (' + Math.round(now - lastSent) + 's ago)');
       return true;
     }
     return false;
@@ -65,20 +60,20 @@
   function _markSent(n) {
     var now = Date.now();
     _sentNumbers[n] = now;
-    _lastSentNumber = n; // Actualizar última número de la secuencia
-    // Limpiar entradas viejas cada vez que se envia
+    // Limpiar entradas viejas (+5s de buffer)
     for (var num in _sentNumbers) {
-      if (now - _sentNumbers[num] > _DEDUP_WINDOW) {
+      if (now - _sentNumbers[num] > _DEDUP_WINDOW + 5000) {
         delete _sentNumbers[num];
       }
     }
   }
 
-  // Función para sincronizar _lastSentNumber desde el parent (sobrevive recargas de iframe)
+  // Sincronizar desde el parent (sobrevive recargas de iframe)
+  // Popula _sentNumbers para que el iframe recargado no re-envie el ultimo numero
   function syncLastNumber(n) {
     if (n >= 0 && n <= 36) {
-      _lastSentNumber = n;
-      console.log('[RollerWin] SYNC: _lastSentNumber = ' + n + ' (desde parent)');
+      _sentNumbers[n] = Date.now();
+      console.log('[RollerWin] SYNC: numero ' + n + ' marcado como enviado (desde parent)');
     }
   }
 
@@ -172,7 +167,7 @@
   if (!isInIframe) {
     console.log('[RollerWin] PARENT page — esperando numeros de iframes via postMessage');
 
-    // v6.3: Guardar el último número recibido para sincronizar con iframes recargados
+    // v6.4: Guardar el último número recibido para sincronizar con iframes recargados
     var _parentLastNumber = -1;
 
     window.addEventListener('message', function(event) {
@@ -189,7 +184,7 @@
             }));
           } catch(e) {}
         }
-        // v6.3: Sincronizar _lastSentNumber con iframe que se recarga
+        // v6.4: Sincronizar con iframe que se recarga (popula _sentNumbers)
         if (data && data.source === 'rollerwin-sync' && typeof data.lastNumber === 'number') {
           // El iframe pide sincronización — enviarle el último número
           try {
@@ -675,7 +670,7 @@
       } catch(e) {}
     }, 10000);
 
-    console.log('[RollerWin] v6.3 TRIPLE-DEDUP + AUTO-RECOVERY | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
+    console.log('[RollerWin] v6.4 DEDUP-DEFINITIVO + AUTO-RECOVERY | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
 
   }
 
@@ -685,9 +680,9 @@
   // ══════════════════════════════════════
   console.log('[RollerWin] IFRAME detectado:', hostname, '— activando deteccion');
 
-  // v6.3: Solicitar sincronización del último número al parent
-  // Esto previene que el DOM Scanner re-envíe el último resultado
-  // después de una recarga del iframe
+  // v6.4: Solicitar sincronización del último número al parent
+  // Esto previene que cualquier hook re-envíe el último resultado
+  // después de una recarga del iframe (popula _sentNumbers)
   try {
     window.parent.postMessage({ source: 'rollerwin-sync' }, '*');
     window.addEventListener('message', function syncHandler(e) {
@@ -1003,10 +998,16 @@
       '[class*="live-result"]'
     ];
 
-    // v6.2 FIX: Track last DOM number to prevent re-sending same number
-    // The DOM display shows the same number until the next spin.
-    // Without this, the 8s DOM scan interval would re-send the same number.
+    // v6.4 FIX: Change-detect con limite de tiempo para DOM Scanner
+    // El DOM muestra el mismo numero hasta el proximo giro (~18s).
+    // Sin esto, el scan cada 8s re-enviaria el mismo numero.
+    // REGLA: Si el numero CAMBIO → enviar. Si es el MISMO numero pero lleva
+    // >15s visible → es un NUEVO giro → tambien enviar.
+    // Esto permite capturar repeticiones legitimas (ej: 15, 15 consecutivos)
+    // mientras bloquea re-envios del mismo giro.
     var _lastDomNumber = -1;
+    var _lastDomNumberTime = 0;
+    var _DOM_REPEAT_LIMIT = 15000; // 15s — si el mismo numero lleva >15s, es nuevo giro
 
     function scanDOM() {
       for (var i = 0; i < STRICT_SELECTORS.length; i++) {
@@ -1021,10 +1022,12 @@
             var text = (els[j].textContent || '').trim();
             var num = parseInt(text, 10);
             if (!isNaN(num) && num >= 0 && num <= 36 && String(num) === text) {
-              // SOLO enviar si el numero CAMBIO desde la ultima vez que lo vimos en el DOM
-              if (num === _lastDomNumber) return; // Mismo numero, ya fue enviado
+              var now = Date.now();
+              // Enviar si: numero CAMBIO, o mismo numero visible >15s (nuevo giro)
+              if (num === _lastDomNumber && now - _lastDomNumberTime < _DOM_REPEAT_LIMIT) return;
               _lastDomNumber = num;
-              sendToServer(num, 'DOM-v5:' + STRICT_SELECTORS[i]);
+              _lastDomNumberTime = now;
+              sendToServer(num, 'DOM-v6.4:' + STRICT_SELECTORS[i]);
               return; // Solo capturar el primer match valido
             }
           }
@@ -1108,5 +1111,5 @@
     window.EventSource = Proxy;
   })();
 
-  console.log('[RollerWin] v6.2 MOTOR ACTIVO en IFRAME ' + hostname + ' | Cooldown 5s + Extraccion estricta');
+  console.log('[RollerWin] v6.4 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup 9s + Extraccion estricta');
 })();
