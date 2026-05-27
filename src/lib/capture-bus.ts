@@ -95,13 +95,25 @@ function releaseWriteLock(number: number): void {
 // ── IN-MEMORY DEDUP CACHE ──
 // Prevents race conditions when multiple hooks (WS/Fetch/XHR/DOM)
 // detect the SAME spin result. Window is 15s to catch all edge cases.
-// Extension dedup (8s) is the primary guard. Server 10s is a safety net.
+// Extension dedup (15s) is the primary guard. Server 15s is a safety net.
 // IMPORTANT: On Render with multiple workers, in-memory cache is per-process.
 // The file-based dedup (below) provides cross-process safety.
 const _dedupCache = new Map<number, number>()
-const DEDUP_WINDOW_MS = 10000 // 10 seconds — catches all multi-hook duplicates
+const DEDUP_WINDOW_MS = 15000 // 15 seconds — catches all multi-hook duplicates
+
+// ── SEQUENCE DEDUP ──
+// v6.3: Tracks the LAST number that was successfully written.
+// If the incoming number equals the last written number, it's ALWAYS a duplicate
+// (regardless of timing). This catches duplicates from iframe reloads where
+// the client-side dedup state is lost.
+let _lastWrittenNumber = -1
 
 function isDuplicate(number: number): boolean {
+  // v6.3: SEQUENCE dedup — if same as last written number, ALWAYS block
+  if (number === _lastWrittenNumber) {
+    return true
+  }
+  // TIME-based dedup
   const lastSeen = _dedupCache.get(number)
   if (lastSeen !== undefined) {
     const elapsed = Date.now() - lastSeen
@@ -154,6 +166,17 @@ export function pushCapture(number: number) {
       }
     }
 
+    // v6.3: SEQUENCE dedup — check if incoming equals the VERY LAST entry
+    // This catches duplicates from iframe reloads where client state is lost
+    if (entries.length > 0) {
+      const lastEntry = entries[entries.length - 1]
+      if (lastEntry.number === number) {
+        markSeen(number)
+        console.log('[CaptureBus] SEQ-DUP:', number, '(mismo que último en archivo)')
+        return
+      }
+    }
+
     // Write to file
     entries.push({
       number,
@@ -166,6 +189,7 @@ export function pushCapture(number: number) {
 
     // Mark in memory cache AFTER successful write
     markSeen(number)
+    _lastWrittenNumber = number // v6.3: Update sequence tracker
   } finally {
     releaseWriteLock(number)
   }

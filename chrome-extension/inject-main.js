@@ -1,4 +1,4 @@
-// RollerWin Capture v6.2 - MAIN WORLD DETECTION ENGINE
+// RollerWin Capture v6.3 - MAIN WORLD DETECTION ENGINE
 // SOLO detecta numeros desde iframes (donde corre Evolution)
 // El parent page SOLO retransmite lo que llega via postMessage desde iframes
 // FIX v5.0: DOM Scanner capturaba numeros del historial (circulos viejos)
@@ -11,14 +11,15 @@
 //   - checkPlayButton SIEMPRE activo (no depende de _recovering)
 //   - Click OK primero, esperar cierre, luego navegar
 //   - Deteccion de pagina "Jugar" sin depender de estado
-// FIX v6.2: RECOVERY ULTRA-RAPIDO (objetivo <8s total):
-//   - Modal detect cada 400ms (era 1s) + MutationObserver instantaneo
-//   - Boton Jugar cada 400ms (era 1s)
-//   - Keep-alive 401/403 navigate en 150ms (era 500ms)
-//   - Post-load check a los 100ms (era 500ms)
-//   - Keep-alive cada 45s (era 60s)
+// FIX v6.3: TRIPLE DEDUP contra duplicados + RECOVERY:
+//   - _lastSentNumber: bloquea mismo número consecutivo (sobrevive iframe reload)
+//   - _DEDUP_WINDOW 15s: cubre ciclo completo de giro
+//   - Sync parent↔iframe: el iframe recargado recibe el último número del parent
+//   - Modal detect cada 400ms + MutationObserver instantaneo
+//   - Boton Jugar cada 400ms
+//   - Keep-alive intercept + navigate
+//   - Post-load check a los 100ms
 //   - Reload solo si sesion expirada + >90s sin capturas (safety net)
-//   - ELIMINADO: iframe reconnect a 20s (reiniciaba mesa con sesion OK)
 (function() {
   'use strict';
 
@@ -30,20 +31,33 @@
   var lastTime = 0;
   var sentCount = 0;
 
-  // ═══ DEDUP v6.2: Map de numeros recientes ═══
-  // Map<numero, timestamp> — recuerda TODOS los numeros enviados.
-  // Ventana 8s: Los hooks (WS/Fetch/XHR/DOM) detectan el mismo giro
-  // en 0-3s maximo. 8s bloquea duplicados del MISMO giro pero NUNCA
-  // bloquea repeticiones legitimas (los giros duran ~18s).
-  // Server dedup (10s) es el safety net adicional.
+  // ═══ DEDUP v6.3: Triple protección contra duplicados ═══
+  // Capa 1: _lastSentNumber — si el último número enviado fue X, jamás enviar X
+  //         de nuevo hasta que se envíe un número diferente. Esto sobrevive
+  //         a recargas del iframe porque cada nuevo contexto hereda el último
+  //         número desde postMessage del parent.
+  // Capa 2: Map<numero, timestamp> con ventana 15s — cubre todo el ciclo de
+  //         un giro (~18s) para capturar detecciones retrasadas.
+  // Capa 3: Server dedup (15s + secuencia) es el safety net final.
+  // NOTA: Repeticiones legitimas consecutivas (ej: 26, 26) son bloqueadas.
+  // Esto es CORRECTO para un sistema de predicción: un duplicado corrompe
+  // toda la secuencia, mientras que un número faltante solo afecta 1 predicción.
   var _sentNumbers = {};   // { number: timestamp }
-  var _DEDUP_WINDOW = 8000; // 8 segundos (era 12s — 12s era riesgoso si giros <15s)
+  var _DEDUP_WINDOW = 15000; // 15 segundos (cubre ciclo completo de giro ~18s)
+  var _lastSentNumber = -1; // Capa 1: último número enviado por CUALQUIER hook
 
   function _isDuplicate(n) {
+    // CAPA 1: Sequence dedup — jamás enviar el mismo número que el último enviado
+    if (n === _lastSentNumber) {
+      console.log('[RollerWin] SEQ-DUP: ' + n + ' bloqueado (mismo que último enviado)');
+      return true;
+    }
+    // CAPA 2: Time-based dedup — bloquear si fue enviado en los últimos 15s
     var now = Date.now();
     var lastSent = _sentNumbers[n];
     if (lastSent !== undefined && now - lastSent < _DEDUP_WINDOW) {
-      return true; // Mismo numero enviado en los ultimos 12s = mismo giro
+      console.log('[RollerWin] TIME-DUP: ' + n + ' bloqueado (' + Math.round(now - lastSent) + 's ago)');
+      return true;
     }
     return false;
   }
@@ -51,11 +65,20 @@
   function _markSent(n) {
     var now = Date.now();
     _sentNumbers[n] = now;
+    _lastSentNumber = n; // Actualizar última número de la secuencia
     // Limpiar entradas viejas cada vez que se envia
     for (var num in _sentNumbers) {
       if (now - _sentNumbers[num] > _DEDUP_WINDOW) {
         delete _sentNumbers[num];
       }
+    }
+  }
+
+  // Función para sincronizar _lastSentNumber desde el parent (sobrevive recargas de iframe)
+  function syncLastNumber(n) {
+    if (n >= 0 && n <= 36) {
+      _lastSentNumber = n;
+      console.log('[RollerWin] SYNC: _lastSentNumber = ' + n + ' (desde parent)');
     }
   }
 
@@ -149,17 +172,31 @@
   if (!isInIframe) {
     console.log('[RollerWin] PARENT page — esperando numeros de iframes via postMessage');
 
+    // v6.3: Guardar el último número recibido para sincronizar con iframes recargados
+    var _parentLastNumber = -1;
+
     window.addEventListener('message', function(event) {
       try {
         var data = event.data;
         if (data && data.source === 'rollerwin-capture' && typeof data.number === 'number') {
           console.log('[RollerWin] Recibido de iframe:', data.number, '(' + data.hostname + ')');
+          _parentLastNumber = data.number; // Guardar para sincronizar iframes recargados
           // El iframe ya envio al servidor, no reenviar
           // Solo actualizar la UI del widget
           try {
             document.dispatchEvent(new CustomEvent('rw-number', {
               detail: { number: data.number, color: data.color }
             }));
+          } catch(e) {}
+        }
+        // v6.3: Sincronizar _lastSentNumber con iframe que se recarga
+        if (data && data.source === 'rollerwin-sync' && typeof data.lastNumber === 'number') {
+          // El iframe pide sincronización — enviarle el último número
+          try {
+            window.postMessage({
+              source: 'rollerwin-sync-reply',
+              lastNumber: _parentLastNumber
+            }, '*');
           } catch(e) {}
         }
       } catch(e) {}
@@ -204,6 +241,7 @@
           sessionExpired: _sessionExpired,
           lastCaptureTime: _lastCapturePersisted,
           gameUrl: _gameUrl,
+ recoveryTimestamp: _recoveryTimestamp,
           timestamp: Date.now()
         }));
       } catch(e) {}
@@ -236,22 +274,27 @@
     }, 10000);
 
     // Recibir timestamp de última captura
+    // v6.3 FIX: NO resetear estado de recovery durante una recuperación activa
+    // Si el iframe envía un número mientras estamos recuperando, no debemos
+    // cancelar la recuperación porque el número puede ser viejo (del iframe anterior)
     document.addEventListener('rw-number', function() {
       _lastCaptureTime = Date.now();
       _lastCapturePersisted = _lastCaptureTime;
-      _isRecovering = false;
-      _sessionExpired = false;
+      // Solo resetear recovery si NO estamos en recovery activo
+      if (!_recoveryInProgress) {
+        _isRecovering = false;
+        _sessionExpired = false;
+      }
       _saveState();
     });
 
     // ════════════════════════════════════════════════════════
     // 1. KEEP-ALIVE + DETECCION DE SESION
-    //    v6.2 FIX DEFINITIVO: NO inventar endpoints.
-    //    Interceptamos las peticiones FETCH/XHR que la propia pagina de Betfury
-    //    ya hace. Si alguna devuelve 401/403 = sesion expirada.
-    //    Para mantener viva la sesion, hacemos fetch a la pagina actual.
+    //    v6.3 FIX: Detectar redirect a login (response.redirected + URL check)
+    //    Betfury NO devuelve 401/403 — redirige a /login con status 200.
+    //    La API fetch sigue redirects por defecto, así que response.redirected=true
+    //    y response.url cambia a la URL de login.
     // ════════════════════════════════════════════════════════
-    var _betfuryApiStatus = {};  // { url: lastStatus }
     
     // Interceptar TODOS los fetch de la pagina principal para detectar sesion expirada
     var _origFetch = window.fetch;
@@ -263,7 +306,17 @@
         var promise = _origFetch.apply(this, arguments);
         if (promise && url) {
           promise.then(function(r) {
-            _betfuryApiStatus[url] = r.status;
+            // v6.3 FIX: Detectar redirect a login (Betfury redirige, no 401/403)
+            if (r.redirected) {
+              var respUrl = (r.url || '').toLowerCase();
+              if (respUrl.indexOf('login') !== -1 || respUrl.indexOf('signin') !== -1 || respUrl.indexOf('auth') !== -1) {
+                console.log('[RollerWin] Fetch REDIRIGIDO a login — SESION EXPIRADA!');
+                _sessionExpired = true;
+                _saveState();
+                handleSessionExpired('fetch-redirect-' + respUrl);
+                return;
+              }
+            }
             if (r.status === 401 || r.status === 403) {
               console.log('[RollerWin] Fetch interceptado ' + r.status + ' — SESION EXPIRADA!');
               _sessionExpired = true;
@@ -288,6 +341,15 @@
       XMLHttpRequest.prototype.send = function() {
         var self = this;
         this.addEventListener('load', function() {
+          // v6.3 FIX: Detectar redirect via responseURL
+          var respUrl = (self.responseURL || '').toLowerCase();
+          if (respUrl.indexOf('login') !== -1 || respUrl.indexOf('signin') !== -1) {
+            console.log('[RollerWin] XHR REDIRIGIDO a login — SESION EXPIRADA!');
+            _sessionExpired = true;
+            _saveState();
+            handleSessionExpired('xhr-redirect-login');
+            return;
+          }
           if (self.status === 401 || self.status === 403) {
             console.log('[RollerWin] XHR interceptado ' + self.status + ' — SESION EXPIRADA!');
             _sessionExpired = true;
@@ -300,17 +362,44 @@
     }
 
     // Keep-alive: fetch a la pagina actual para mantener la cookie activa
+    // v6.3 FIX: Usar GET (no HEAD) para poder detectar redirect + contenido HTML de login
     function betfuryKeepAlive() {
       _keepAliveCount++;
       fetch(location.pathname || '/', {
-        method: 'HEAD',
+        method: 'GET',
         credentials: 'include',
-        keepalive: true
+        redirect: 'follow'
       }).then(function(r) {
         _lastKeepAliveResponse = r.status;
         if (_keepAliveCount % 3 === 0) {
-          console.log('[RollerWin] Keep-alive #' + _keepAliveCount + ' HTTP ' + r.status);
+          console.log('[RollerWin] Keep-alive #' + _keepAliveCount + ' HTTP ' + r.status + (r.redirected ? ' (REDIRIGIDO a ' + r.url + ')' : ''));
         }
+        // v6.3 FIX: Detectar redirect a login
+        if (r.redirected) {
+          var respUrl = (r.url || '').toLowerCase();
+          if (respUrl.indexOf('login') !== -1 || respUrl.indexOf('signin') !== -1) {
+            console.log('[RollerWin] Keep-alive REDIRIGIDO a login — SESION EXPIRADA!');
+            _sessionExpired = true;
+            _saveState();
+            handleSessionExpired('keepalive-redirect');
+            return;
+          }
+        }
+        // v6.3 FIX: Detectar si la respuesta es HTML de login (sin redirect)
+        // Algunas APIs retornan 200 con HTML de login embebido
+        r.clone().text().then(function(text) {
+          if (text && text.length < 5000 && text.indexOf('<') !== -1) {
+            var textLow = text.toLowerCase();
+            if ((textLow.indexOf('login') !== -1 || textLow.indexOf('sign in') !== -1) &&
+                textLow.indexOf('password') !== -1) {
+              console.log('[RollerWin] Keep-alive devolvió HTML de login — SESION EXPIRADA!');
+              _sessionExpired = true;
+              _saveState();
+              handleSessionExpired('keepalive-html-login');
+              return;
+            }
+          }
+        }).catch(function() {});
         if (r.status === 401 || r.status === 403) {
           console.log('[RollerWin] Keep-alive ' + r.status + ' — SESION EXPIRADA!');
           _sessionExpired = true;
@@ -322,7 +411,7 @@
       });
     }
     setTimeout(betfuryKeepAlive, 1500);
-    setInterval(betfuryKeepAlive, 30000); // cada 30s (mas agresivo)
+    setInterval(betfuryKeepAlive, 30000); // cada 30s
 
     // ════════════════════════════════════════════════════════
     // 2. BUSQUEDA AMPLIA de botones (button/div/span/a)
@@ -370,14 +459,18 @@
     //    3) Navegar a la mesa de ruleta
     // ════════════════════════════════════════════════════════
     var _recoveryInProgress = false;
-    var _recoveryTimestamp = 0;
+    // v6.3 FIX: Persistir recoveryTimestamp en localStorage para evitar loop infinito
+    // Si no se persiste, al recargar la página se resetea a 0 y el cooldown de 10s no funciona
+    var _recoveryTimestamp = _rwState.recoveryTimestamp || 0;
 
     function handleSessionExpired(reason) {
       if (_recoveryInProgress) return;
-      if (Date.now() - _recoveryTimestamp < 10000) return; // No spam: 1 recovery cada 10s min
+      var now = Date.now();
+      // v6.3 FIX: Cooldown persistido — previene loop infinito entre paginas
+      if (now - _recoveryTimestamp < 15000) return; // 15s cooldown (persistido en localStorage)
       
       _recoveryInProgress = true;
-      _recoveryTimestamp = Date.now();
+      _recoveryTimestamp = now;
       _isRecovering = true;
       _sessionExpired = true;
       _recoverCount++;
@@ -401,29 +494,35 @@
         location.href = targetUrl;
       }, clicked ? 500 : 100);
 
-      // PASO 3: Safety timeout — resetear despues de 20s
+      // PASO 3: Safety timeout — resetear despues de 25s
+      // v6.3: Aumentado a 25s. Nota: este codigo es dead despues de location.href
+      // (la pagina se descarga antes de que el timeout fuego). Pero sirve
+      // por si la navegacion falla o se queda en la misma pagina (SPA).
       setTimeout(function() {
         console.log('[RollerWin] Reset recovery (safety timeout)');
         _recoveryInProgress = false;
         _saveState();
-      }, 20000);
+      }, 25000);
     }
 
     // ════════════════════════════════════════════════════════
     // 4. DETECT AND CLOSE ANY MODAL (sesion + saldo bajo)
     // ════════════════════════════════════════════════════════
     function detectAndCloseAnyModal() {
-      // v6.2 FIX: NO bloquear si _recoveryInProgress —
+      // v6.3 FIX: NO bloquear si _recoveryInProgress —
       // necesitamos poder cerrar modales en CUALQUIER momento
-      var allEls = document.querySelectorAll('div, p, span, h1, h2, h3');
+      // v6.3 FIX: Selectores ampliados (dialog, section, article, etc.)
+      var allEls = document.querySelectorAll('div, p, span, h1, h2, h3, dialog, section, article, main, li, label, td, th');
 
       for (var i = 0; i < allEls.length; i++) {
         var txt = (allEls[i].textContent || '');
         var txtLow = txt.toLowerCase();
 
-        // SESIÓN FINALIZADA → click OK primero, luego navegar
-        var isExpired = (txt.indexOf('SESI') !== -1 && txt.indexOf('FINALIZADA') !== -1) ||
-                        (txtLow.indexOf('session') !== -1 && (txtLow.indexOf('expired') !== -1 || txtLow.indexOf('ended') !== -1));
+        // v6.3 FIX: SESIÓN FINALIZADA — case-insensitive para español también
+        // Antes: txt.indexOf('SESI') fallaba si Betfury usaba "Sesión finalizada"
+        var isExpired = (txtLow.indexOf('sesi') !== -1 && txtLow.indexOf('finalizada') !== -1) ||
+                        (txtLow.indexOf('session') !== -1 && (txtLow.indexOf('expired') !== -1 || txtLow.indexOf('ended') !== -1)) ||
+                        (txtLow.indexOf('sesión') !== -1 && txtLow.indexOf('finalizada') !== -1);
         if (isExpired) {
           console.log('[RollerWin] SESION FINALIZADA detectada → handleSessionExpired');
           handleSessionExpired('modal-sesion');
@@ -576,7 +675,7 @@
       } catch(e) {}
     }, 10000);
 
-    console.log('[RollerWin] v6.2 AUTO-RECOVERY ULTRA-RAPIDO | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
+    console.log('[RollerWin] v6.3 TRIPLE-DEDUP + AUTO-RECOVERY | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
 
   }
 
@@ -585,6 +684,31 @@
   // AQUI es donde se detectan los numeros
   // ══════════════════════════════════════
   console.log('[RollerWin] IFRAME detectado:', hostname, '— activando deteccion');
+
+  // v6.3: Solicitar sincronización del último número al parent
+  // Esto previene que el DOM Scanner re-envíe el último resultado
+  // después de una recarga del iframe
+  try {
+    window.parent.postMessage({ source: 'rollerwin-sync' }, '*');
+    window.addEventListener('message', function syncHandler(e) {
+      try {
+        if (e.data && e.data.source === 'rollerwin-sync-reply' && typeof e.data.lastNumber === 'number') {
+          syncLastNumber(e.data.lastNumber);
+          window.removeEventListener('message', syncHandler);
+        }
+      } catch(err) {}
+    });
+    // Timeout: si no hay respuesta en 2s, continuar sin sync
+    setTimeout(function() {
+      window.removeEventListener('message', syncHandler);
+    }, 2000);
+  } catch(e) {}
+  // Re-solicitar sync cada 30s (por si el parent también recarga)
+  setInterval(function() {
+    try {
+      window.parent.postMessage({ source: 'rollerwin-sync' }, '*');
+    } catch(e) {}
+  }, 30000);
 
   // Campos de resultado de ruleta (alta confianza)
   var RESULT_FIELDS = [
