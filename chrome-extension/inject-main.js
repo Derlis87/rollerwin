@@ -834,6 +834,11 @@
       '[class*="live-result"]'
     ];
 
+    // v6.2 FIX: Track last DOM number to prevent re-sending same number
+    // The DOM display shows the same number until the next spin.
+    // Without this, the 8s DOM scan interval would re-send the same number.
+    var _lastDomNumber = -1;
+
     function scanDOM() {
       for (var i = 0; i < STRICT_SELECTORS.length; i++) {
         try {
@@ -847,6 +852,9 @@
             var text = (els[j].textContent || '').trim();
             var num = parseInt(text, 10);
             if (!isNaN(num) && num >= 0 && num <= 36 && String(num) === text) {
+              // SOLO enviar si el numero CAMBIO desde la ultima vez que lo vimos en el DOM
+              if (num === _lastDomNumber) return; // Mismo numero, ya fue enviado
+              _lastDomNumber = num;
               sendToServer(num, 'DOM-v5:' + STRICT_SELECTORS[i]);
               return; // Solo capturar el primer match valido
             }
