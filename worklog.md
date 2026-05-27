@@ -139,3 +139,28 @@ Stage Summary:
 - v6.2 ZIP deployed at public/RollerWin-Capture-v4.zip
 - All capture/dedup logic (Map-based dedup 12s, multi-hook, extractObj, URL filters) UNCHANGED
 - Git push successful to origin/main
+
+---
+Task ID: 1
+Agent: Main Agent
+Task: v6.2 FIX DEFINITIVO — 3 bugs criticos resueltos
+
+Work Log:
+- Analized 4 screenshots to identify root causes
+- Screenshot 1 showed: SESION FINALIZADA modal + HTTP 404 + Recovers: 0
+- BUG 1: Keep-alive endpoints (/api/user/balance, etc.) don't exist in Betfury → always 404 → never detected session expiry
+- BUG 2: No write-lock on server → race conditions → duplicates. Server dedup 8s too short.
+- BUG 3: _recoveryInProgress never reset → detectAndCloseAnyModal blocked permanently
+
+Fixes applied:
+- Keep-alive: Changed to real Betfury endpoints + HTML content-type detection
+- Server dedup: 8s → 10s, check last 5 entries (was 3), added write-lock per number
+- Client dedup: 12s → 8s (safer for spins <15s)
+- _recoveryInProgress: Added 30s safety timeout reset
+- detectAndCloseAnyModal: Removed _recoveryInProgress guard
+
+Stage Summary:
+- 3 critical bugs fixed in single commit
+- Extension ZIP rebuilt and pushed
+- Server capture-bus.ts updated with write-lock
+- Git push successful: 93239a6
