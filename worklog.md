@@ -220,3 +220,24 @@ Stage Summary:
 CON SKIPs: 53.0% accuracy, +67 units net, ROI 7.21%, max error streak 10, 1 bust
 SIN SKIPs: 49.5% accuracy (random), -168 units net, ROI -1.10%, max error streak 17, 651 busts
 Motor V6.0 is PROFITABLE when SKIPs are respected. The key problem is user betting on ALL predictions.
+
+---
+Task ID: 1
+Agent: Main Agent
+Task: v6.5 — Corregir 3 bugs definitivos (Duplicados, Skips, Session Recovery)
+
+Work Log:
+- Analizó todo el código v6.4: inject-main.js, capture-bus.ts, content.js, background.js
+- BUG 1 (Duplicados/Skips): Encontró causa raíz en capture-bus.ts — SEQUENCE dedup (_lastWrittenNumber + lastEntry.number check) bloqueaba repeticiones legítimas consecutivas (ej: 15, 15, 15). Eliminado ambas verificaciones.
+- BUG 2 (Skips): WS hook solo matcheaba 5 keywords. Ampliado a 10 (agregó game, end, finish, update, new, bet). Más importante: added fallback extractFromText para TODOS los demás eventos socket.io.
+- BUG 3 (Session Recovery): _recoveryInProgress NO se persistía en localStorage. Al recargar, se reseteaba a false, causando loops de recovery infinitos. Ahora persistido. Added safety reset si recovery >60s bloqueado. Cooldown 15s → 12s.
+- Actualizó versiones a v6.5 en todos los archivos: manifest.json, content.js, background.js, inject-main.js
+- Reconstruido ZIP en public/RollerWin-Capture-v4.zip
+- Git push exitoso a Render: commit c998ab1
+
+Stage Summary:
+- v6.5 desplegada con 3 bugs corregidos
+- Server: capture-bus.ts ahora usa solo dedup por tiempo (15s), permite repeticiones legítimas
+- Client: WS hook ampliado con fallback para todos los eventos socket.io
+- Client: _recoveryInProgress persistido en localStorage, loops de recovery eliminados
+- ZIP actualizado en public/RollerWin-Capture-v4.zip
