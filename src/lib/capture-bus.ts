@@ -95,25 +95,20 @@ function releaseWriteLock(number: number): void {
 // ── IN-MEMORY DEDUP CACHE ──
 // Prevents race conditions when multiple hooks (WS/Fetch/XHR/DOM)
 // detect the SAME spin result. Window is 15s to catch all edge cases.
-// Extension dedup (15s) is the primary guard. Server 15s is a safety net.
+// Extension dedup (9s) is the primary guard. Server 15s is a safety net.
 // IMPORTANT: On Render with multiple workers, in-memory cache is per-process.
 // The file-based dedup (below) provides cross-process safety.
+//
+// v6.5 FIX: ELIMINADO SEQUENCE dedup (_lastWrittenNumber).
+// El sequence dedup BLOQUEABA repeticiones legítimas consecutivas (ej: 15, 15, 15).
+// Ahora solo se usa dedup por TIEMPO: si el mismo número fue visto en los últimos 15s,
+// es el mismo giro detectado por otro hook → bloquear. Si pasó >15s, es un nuevo giro.
 const _dedupCache = new Map<number, number>()
 const DEDUP_WINDOW_MS = 15000 // 15 seconds — catches all multi-hook duplicates
 
-// ── SEQUENCE DEDUP ──
-// v6.3: Tracks the LAST number that was successfully written.
-// If the incoming number equals the last written number, it's ALWAYS a duplicate
-// (regardless of timing). This catches duplicates from iframe reloads where
-// the client-side dedup state is lost.
-let _lastWrittenNumber = -1
-
 function isDuplicate(number: number): boolean {
-  // v6.3: SEQUENCE dedup — if same as last written number, ALWAYS block
-  if (number === _lastWrittenNumber) {
-    return true
-  }
-  // TIME-based dedup
+  // v6.5: TIME-based dedup ONLY — no sequence dedup
+  // Permite repeticiones legítimas (15, 15) siempre que estén separadas >15s
   const lastSeen = _dedupCache.get(number)
   if (lastSeen !== undefined) {
     const elapsed = Date.now() - lastSeen
@@ -154,25 +149,14 @@ export function pushCapture(number: number) {
 
   try {
     // SECONDARY: File-based dedup fallback (for cross-process safety on Render)
-    // Checks LAST 5 entries (not just 3) with 10s window.
-    // This catches duplicates that slip through in-memory cache on multi-process deployments.
+    // v6.5 FIX: ELIMINADO sequence dedup — solo dedup por TIEMPO (15s).
+    // Permite repeticiones legítimas consecutivas (ej: 15, 15, 15).
     const entries = readEntries()
     const now = Date.now()
-    const checkCount = Math.min(entries.length, 5) // Check last 5 (was 3)
+    const checkCount = Math.min(entries.length, 5)
     for (let i = entries.length - checkCount; i < entries.length; i++) {
       if (entries[i].number === number && now - entries[i].timestamp < DEDUP_WINDOW_MS) {
         markSeen(number) // Also update cache
-        return
-      }
-    }
-
-    // v6.3: SEQUENCE dedup — check if incoming equals the VERY LAST entry
-    // This catches duplicates from iframe reloads where client state is lost
-    if (entries.length > 0) {
-      const lastEntry = entries[entries.length - 1]
-      if (lastEntry.number === number) {
-        markSeen(number)
-        console.log('[CaptureBus] SEQ-DUP:', number, '(mismo que último en archivo)')
         return
       }
     }
@@ -189,7 +173,6 @@ export function pushCapture(number: number) {
 
     // Mark in memory cache AFTER successful write
     markSeen(number)
-    _lastWrittenNumber = number // v6.3: Update sequence tracker
   } finally {
     releaseWriteLock(number)
   }

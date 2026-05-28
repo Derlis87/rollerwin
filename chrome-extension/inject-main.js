@@ -1,4 +1,4 @@
-// RollerWin Capture v6.4 - MAIN WORLD DETECTION ENGINE
+// RollerWin Capture v6.5 - MAIN WORLD DETECTION ENGINE
 // SOLO detecta numeros desde iframes (donde corre Evolution)
 // El parent page SOLO retransmite lo que llega via postMessage desde iframes
 // FIX v5.0: DOM Scanner capturaba numeros del historial (circulos viejos)
@@ -16,8 +16,14 @@
 //   - DEDUP por tiempo 9s: bloquea multiples hooks del MISMO giro unicamente
 //   - DOM Scanner con change-detect + 15s: mismo numero visible >15s = nuevo giro
 //   - Sync parent↔iframe: popula _sentNumbers (no _lastSentNumber)
-//   - Repeticiones legitimas (15, 15, 15) SIEMPRE capturadas correctamente
-//   - Duplicados de un mismo giro (WS + Fetch + DOM) SIEMPRE bloqueados
+// FIX v6.5: 3 BUGS DEFINITIVOS:
+//   - BUG 1 (Duplicados/Skips): Servidor ELIMINO sequence dedup. Solo dedup por tiempo.
+//     Las repeticiones legitimas (15, 15, 15) AHORA se capturan correctamente.
+//   - BUG 2 (Skips): WS hook ampliado — ahora matchea TODOS los eventos sio,
+//     no solo los que contienen 'result/complete/win/round/spin'.
+//     Se anade fallback con extractFromText para ANY socket.io message.
+//   - BUG 3 (Session Recovery): _recoveryInProgress PERSISTIDO en localStorage.
+//     Antes se reseteaba a false al recargar, causando loops. Cooldown 12s.
 (function() {
   'use strict';
 
@@ -236,7 +242,8 @@
           sessionExpired: _sessionExpired,
           lastCaptureTime: _lastCapturePersisted,
           gameUrl: _gameUrl,
- recoveryTimestamp: _recoveryTimestamp,
+          recoveryTimestamp: _recoveryTimestamp,
+          recoveryInProgress: _recoveryInProgress,
           timestamp: Date.now()
         }));
       } catch(e) {}
@@ -453,16 +460,25 @@
     //    2) Esperar 500ms
     //    3) Navegar a la mesa de ruleta
     // ════════════════════════════════════════════════════════
-    var _recoveryInProgress = false;
+    // v6.5 FIX: _recoveryInProgress PERSISTIDO en localStorage.
+    // Antes era solo `var _recoveryInProgress = false` que se reseteaba al recargar.
+    // Esto causaba que al volver de una navegacion, el cooldown no funcionara
+    // y se iniciara un loop infinito de recoveries.
+    var _recoveryInProgress = !!_rwState.recoveryInProgress;
     // v6.3 FIX: Persistir recoveryTimestamp en localStorage para evitar loop infinito
-    // Si no se persiste, al recargar la página se resetea a 0 y el cooldown de 10s no funciona
     var _recoveryTimestamp = _rwState.recoveryTimestamp || 0;
+    // v6.5: Safety reset — si recovery lleva >60s activo, forzar reset
+    // Esto previene que un recovery fallido quede bloqueado permanentemente
+    if (_recoveryInProgress && Date.now() - _recoveryTimestamp > 60000) {
+      console.log('[RollerWin] Reset recovery bloqueado >60s');
+      _recoveryInProgress = false;
+    }
 
     function handleSessionExpired(reason) {
       if (_recoveryInProgress) return;
       var now = Date.now();
-      // v6.3 FIX: Cooldown persistido — previene loop infinito entre paginas
-      if (now - _recoveryTimestamp < 15000) return; // 15s cooldown (persistido en localStorage)
+      // v6.5 FIX: Cooldown 12s (era 15s) — respuesta mas rapida
+      if (now - _recoveryTimestamp < 12000) return; // 12s cooldown (persistido en localStorage)
       
       _recoveryInProgress = true;
       _recoveryTimestamp = now;
@@ -489,15 +505,13 @@
         location.href = targetUrl;
       }, clicked ? 500 : 100);
 
-      // PASO 3: Safety timeout — resetear despues de 25s
-      // v6.3: Aumentado a 25s. Nota: este codigo es dead despues de location.href
-      // (la pagina se descarga antes de que el timeout fuego). Pero sirve
-      // por si la navegacion falla o se queda en la misma pagina (SPA).
+      // PASO 3: Safety timeout — resetear despues de 20s
+      // v6.5: Reducido a 20s. El estado se persiste para sobreviver recargas.
       setTimeout(function() {
-        console.log('[RollerWin] Reset recovery (safety timeout)');
+        console.log('[RollerWin] Reset recovery (safety timeout 20s)');
         _recoveryInProgress = false;
         _saveState();
-      }, 25000);
+      }, 20000);
     }
 
     // ════════════════════════════════════════════════════════
@@ -670,7 +684,7 @@
       } catch(e) {}
     }, 10000);
 
-    console.log('[RollerWin] v6.4 DEDUP-DEFINITIVO + AUTO-RECOVERY | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
+    console.log('[RollerWin] v6.5 3-BUGS-FIX | DEDUP + AUTO-RECOVERY | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
 
   }
 
@@ -828,12 +842,25 @@
               var p = JSON.parse(data.substring(2));
               if (Array.isArray(p) && p.length >= 2 && typeof p[1] === 'object') {
                 var evt = String(p[0] || '');
-                // FIX v5.0.1: Solo eventos de resultado NUEVO, no updates/states con historial
+                // v6.5 FIX: Procesar TODOS los eventos socket.io, no solo los que
+                // contienen 'result/complete/win/round/spin'. Evolution puede cambiar
+                // los nombres de eventos. extractObj solo extrae si encuentra campos
+                // de resultado (isResultField), y extractFromText busca patterns
+                // especificos de ruleta. No hay falsos positivos.
+                // FIX: Primero intentar con eventos conocidos (prioridad alta)
                 if (evt.indexOf('result') >= 0 || evt.indexOf('complete') >= 0 ||
                     evt.indexOf('win') >= 0 ||
-                    evt.indexOf('round') >= 0 || evt.indexOf('spin') >= 0) {
+                    evt.indexOf('round') >= 0 || evt.indexOf('spin') >= 0 ||
+                    evt.indexOf('game') >= 0 || evt.indexOf('end') >= 0 ||
+                    evt.indexOf('finish') >= 0 || evt.indexOf('update') >= 0 ||
+                    evt.indexOf('new') >= 0 || evt.indexOf('bet') >= 0) {
                   extractObj(p[1], 0, 'sio.' + evt);
                   extractFromText(data, 'sio.' + evt);
+                } else {
+                  // v6.5: Fallback — intentar regex en TODOS los demas eventos.
+                  // Solo extractFromText (no extractObj) para evitar falsos positivos.
+                  // Esto cubre cualquier evento que contenga "resultNumber", etc.
+                  extractFromText(data, 'sio-fallback.' + evt);
                 }
               }
             } catch(err) {}
@@ -1111,5 +1138,5 @@
     window.EventSource = Proxy;
   })();
 
-  console.log('[RollerWin] v6.4 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup 9s + Extraccion estricta');
+  console.log('[RollerWin] v6.5 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup 9s + WS-Fallback + Extraccion estricta');
 })();
