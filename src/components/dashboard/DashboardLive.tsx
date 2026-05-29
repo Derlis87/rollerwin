@@ -2260,7 +2260,7 @@ export function DashboardLive() {
                                 </span>
                               </div>
                               <span className="text-zinc-600 text-[9px]">
-                                {peak.timestamp.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                                {peak.timestamp.toLocaleString('es', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' })}
                               </span>
                             </div>
                           ))}
@@ -2642,8 +2642,8 @@ export function DashboardLive() {
                                 {peak.resultNumber}
                               </span>
                             </div>
-                            <span className="text-zinc-600">
-                              {peak.timestamp.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                            <span className="text-zinc-600 text-[9px]">
+                              {peak.timestamp.toLocaleString('es', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' })}
                             </span>
                           </div>
                         ))}

@@ -285,6 +285,7 @@ export function PeakLevelCharts({ inputNumbers, peakHistory: peakHistoryFromPare
                     index: i + 1,
                     height: p.height,
                     resultNumber: p.resultNumber,
+                    timestamp: p.timestamp,
                     category: p.height <= 3 ? 'Bajo' : p.height <= 6 ? 'Medio' : 'Alto'
                   }))}
                   margin={{ top: 30, right: 20, left: 0, bottom: 10 }}
@@ -316,6 +317,9 @@ export function PeakLevelCharts({ inputNumbers, peakHistory: peakHistoryFromPare
                               data.category === 'Bajo' ? 'text-teal-400' : 
                               data.category === 'Medio' ? 'text-amber-400' : 'text-red-400'
                             }`}>{data.category}</span></div>
+                            {data.timestamp && (
+                              <div>Fecha/Hora: <span className="text-white font-semibold">{data.timestamp.toLocaleString('es', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit' })}</span></div>
+                            )}
                           </div>
                         </div>
                       )
