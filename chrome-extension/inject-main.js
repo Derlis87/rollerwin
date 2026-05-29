@@ -1,4 +1,4 @@
-// RollerWin Capture v6.5 - MAIN WORLD DETECTION ENGINE
+// RollerWin Capture v6.6 - MAIN WORLD DETECTION ENGINE
 // SOLO detecta numeros desde iframes (donde corre Evolution)
 // El parent page SOLO retransmite lo que llega via postMessage desde iframes
 // FIX v5.0: DOM Scanner capturaba numeros del historial (circulos viejos)
@@ -18,12 +18,16 @@
 //   - Sync parent↔iframe: popula _sentNumbers (no _lastSentNumber)
 // FIX v6.5: 3 BUGS DEFINITIVOS:
 //   - BUG 1 (Duplicados/Skips): Servidor ELIMINO sequence dedup. Solo dedup por tiempo.
-//     Las repeticiones legitimas (15, 15, 15) AHORA se capturan correctamente.
-//   - BUG 2 (Skips): WS hook ampliado — ahora matchea TODOS los eventos sio,
-//     no solo los que contienen 'result/complete/win/round/spin'.
-//     Se anade fallback con extractFromText para ANY socket.io message.
+//   - BUG 2 (Skips): WS hook ampliado + fallback extractFromText.
 //   - BUG 3 (Session Recovery): _recoveryInProgress PERSISTIDO en localStorage.
-//     Antes se reseteaba a false al recargar, causando loops. Cooldown 12s.
+// FIX v6.6: IFRAME SESSION RECOVERY — el bug que causaba "Recovers: 0":
+//   - El modal "SESIÓN FINALIZADA" aparece DENTRO del iframe (Evolution),
+//     NO en el parent. El parent NO puede ver el DOM del iframe.
+//   - Antes: parent buscaba modal en su propio DOM → nunca lo encontraba.
+//   - Ahora: iframe detecta modal → postMessage al parent → recovery.
+//   - Reload si sin capturas >120s sin importar keep-alive (iframe muerto).
+//   - iframe tambien detecta fetch 401/403 y notifica al parent.
+//   - iframe detecta falta de actividad >90s y notifica al parent.
 (function() {
   'use strict';
 
@@ -288,6 +292,21 @@
         _sessionExpired = false;
       }
       _saveState();
+    });
+
+    // v6.6 FIX: Escuchar postMessage del iframe para sesion expirada
+    // El iframe NO puede ver el DOM del parent y viceversa.
+    // Si el iframe detecta "SESIÓN FINALIZADA" o pierde conexion,
+    // envia postMessage al parent para activar recovery.
+    window.addEventListener('message', function(e) {
+      try {
+        if (e.data && e.data.source === 'rollerwin-session-expired') {
+          console.log('[RollerWin] IFRAME notifico sesion expirada: ' + e.data.reason);
+          _sessionExpired = true;
+          _saveState();
+          handleSessionExpired(e.data.reason);
+        }
+      } catch(err) {}
     });
 
     // ════════════════════════════════════════════════════════
@@ -588,20 +607,23 @@
     setInterval(checkPlayButton, 400); // v6.2: cada 400ms (era 1s)
 
     // ════════════════════════════════════════════════════════
-    // 6. IFRAME MUERTO: sin capturas >90s → reload COMPLETO
+    // 6. IFRAME MUERTO: sin capturas >120s → reload COMPLETO
     //    v6.2 FIX: 90s (era 35s que reiniciaba con sesion activa)
-    //    ESTO ES ULTIMO RECURSO — solo si el iframe esta completamente muerto.
-    //    El recovery normal se activa por: keep-alive 401/403 o modal sesion.
-    //    NO debe reiniciar si la sesion esta activa y simplemente no captura.
+    //    v6.6 FIX: Relajada la condicion — si no hay capturas >120s,
+    //    el iframe esta claramente muerto sin importar si la sesion
+    //    del parent esta activa (keep-alive chekea parent, no iframe).
     // ════════════════════════════════════════════════════════
     setInterval(function() {
       var noCap = Date.now() - _lastCaptureTime;
       var onGame = location.href.indexOf('/casino/games/') !== -1;
 
-      // Solo reload si estamos en juego Y sin capturas >90s Y sesion expirada
-      if (onGame && noCap > 90000 && !_recoveryInProgress && (_sessionExpired || _keepAliveCount === 0)) {
-        console.log('[RollerWin] Sin capturas ' + Math.round(noCap/1000) + 's + sesion expirada — reload completo...');
+      // v6.6: Reload si estamos en juego Y sin capturas >120s
+      // La condicion anterior (_sessionExpired || _keepAliveCount === 0) fallaba
+      // porque el keep-alive del parent devuelve 200 aun cuando el iframe murio.
+      if (onGame && noCap > 120000 && !_recoveryInProgress) {
+        console.log('[RollerWin] Sin capturas ' + Math.round(noCap/1000) + 's — iframe muerto, reload completo...');
         _isRecovering = true;
+        _sessionExpired = true;
         _saveState();
         location.reload();
       }
@@ -684,7 +706,7 @@
       } catch(e) {}
     }, 10000);
 
-    console.log('[RollerWin] v6.5 3-BUGS-FIX | DEDUP + AUTO-RECOVERY | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
+    console.log('[RollerWin] v6.6 IFRAME-RECOVERY-FIX | DEDUP + AUTO-RECOVERY | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
 
   }
 
@@ -693,6 +715,76 @@
   // AQUI es donde se detectan los numeros
   // ══════════════════════════════════════
   console.log('[RollerWin] IFRAME detectado:', hostname, '— activando deteccion');
+
+  // v6.6 FIX: Detectar modal "SESIÓN FINALIZADA" dentro del iframe
+  // El parent NO puede ver el DOM del iframe, asi que el iframe debe
+  // detectar el modal y notificar al parent via postMessage
+  var _iframeModalNotified = false;
+  function detectIframeModal() {
+    var allEls = document.querySelectorAll('div, p, span, h1, h2, h3, dialog, section, article, main, li, label, td, th');
+    for (var i = 0; i < allEls.length; i++) {
+      var txt = (allEls[i].textContent || '');
+      var txtLow = txt.toLowerCase();
+      // "SESIÓN FINALIZADA" / "session ended" / "session expired"
+      if ((txtLow.indexOf('sesi') !== -1 && txtLow.indexOf('finalizada') !== -1) ||
+          (txtLow.indexOf('sesión') !== -1 && txtLow.indexOf('finalizada') !== -1) ||
+          (txtLow.indexOf('session') !== -1 && (txtLow.indexOf('ended') !== -1 || txtLow.indexOf('expired') !== -1))) {
+        if (!_iframeModalNotified) {
+          _iframeModalNotified = true;
+          console.log('[RollerWin] IFRAME: SESION FINALIZADA detectada → notificando parent');
+          try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-modal-detected' }, '*'); } catch(e) {}
+        }
+        // Intentar click OK dentro del iframe tambien
+        var okBtns = allEls[i].closest('div, dialog') ? allEls[i].closest('div, dialog').querySelectorAll('button, a, [role="button"], div[onclick], span[onclick]') : [];
+        for (var j = 0; j < okBtns.length; j++) {
+          var bt = (okBtns[j].textContent || '').trim();
+          if (bt === 'OK' || bt === 'Ok' || bt === 'ok' || bt === 'ACEPTAR' || bt === 'Aceptar') {
+            console.log('[RollerWin] IFRAME: Click OK en modal sesion');
+            okBtns[j].click();
+          }
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+  setInterval(detectIframeModal, 500);
+  try { new MutationObserver(function() { detectIframeModal(); }).observe(document.body, { childList: true, subtree: true }); } catch(e) {}
+
+  // v6.6 FIX: Detectar si el iframe pierde conexion (no hay eventos WS por >60s)
+  var _iframeLastActivity = Date.now();
+  var _iframeDeadNotified = false;
+
+  // Hook fetch/XHR dentro del iframe para detectar sesion expirada
+  var _ifOrigFetch = window.fetch;
+  if (_ifOrigFetch && !_ifOrigFetch._rwIframeSess) {
+    _ifOrigFetch._rwIframeSess = true;
+    window.fetch = function(input, init) {
+      _iframeLastActivity = Date.now();
+      var promise = _ifOrigFetch.apply(this, arguments);
+      if (promise) {
+        promise.then(function(r) {
+          if (r.status === 401 || r.status === 403 || r.redirected) {
+            var respUrl = (r.url || '').toLowerCase();
+            if (r.status === 401 || r.status === 403 || respUrl.indexOf('login') !== -1) {
+              console.log('[RollerWin] IFRAME: Fetch sesion expirada ' + r.status);
+              try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-fetch-' + r.status }, '*'); } catch(e) {}
+            }
+          }
+        }).catch(function() {});
+      }
+      return promise;
+    };
+  }
+
+  // Notificar parent si el iframe esta muerto (sin actividad >90s)
+  setInterval(function() {
+    if (!_iframeDeadNotified && Date.now() - _iframeLastActivity > 90000) {
+      _iframeDeadNotified = true;
+      console.log('[RollerWin] IFRAME: Sin actividad >90s → notificando parent');
+      try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-dead-90s' }, '*'); } catch(e) {}
+    }
+  }, 15000);
 
   // v6.4: Solicitar sincronización del último número al parent
   // Esto previene que cualquier hook re-envíe el último resultado
