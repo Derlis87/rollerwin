@@ -1,4 +1,4 @@
-// RollerWin Capture v6.6 - MAIN WORLD DETECTION ENGINE
+// RollerWin Capture v6.7 - MAIN WORLD DETECTION ENGINE
 // SOLO detecta numeros desde iframes (donde corre Evolution)
 // El parent page SOLO retransmite lo que llega via postMessage desde iframes
 // FIX v5.0: DOM Scanner capturaba numeros del historial (circulos viejos)
@@ -28,6 +28,15 @@
 //   - Reload si sin capturas >120s sin importar keep-alive (iframe muerto).
 //   - iframe tambien detecta fetch 401/403 y notifica al parent.
 //   - iframe detecta falta de actividad >90s y notifica al parent.
+// FIX v6.7: 3 BUGS CRITICOS:
+//   - BUG 1 (Números saltados): DEDUP por VALOR bloqueaba repeticiones legítimas
+//     (ej: 15,15). Ahora dedup por TIEMPO GLOBAL: solo bloquea si se envió
+//     CUALQUIER número en los últimos 9s, sin importar el valor.
+//   - BUG 2 (Nueva pestaña): checkPlayButton clickeaba <a target="_blank">
+//     al recuperar sesión. Ahora IGNORA elementos con target="_blank".
+//     location.href → location.replace() para forzar misma pestaña.
+//   - BUG 3 (Duplicados): syncLastNumber mejorado + dedup global previene
+//     re-envío del último número cuando el iframe se recarga.
 (function() {
   'use strict';
 
@@ -52,16 +61,22 @@
   //
   // DOM Scanner: usa change-detect con limite de 15s. Si el mismo numero
   // lleva >15s visible en pantalla, es un NUEVO giro → permite re-enviar.
-  var _sentNumbers = {};   // { number: timestamp }
-  var _DEDUP_WINDOW = 9000;  // 9s — cubre multiples hooks del mismo giro
+  // v6.7 FIX: DEDUP por secuencia, NO por valor.
+  // Antes: _sentNumbers = { number: timestamp } — si cae 15,15 legítimos,
+  // el segundo 15 se bloqueaba porque el primero estaba en el mapa.
+  // Ahora: _lastSentTimestamp global — solo bloquea si CUALQUIER numero fue
+  // enviado en los ultimos 9s (independiente del valor). Los giros duran ~18s.
+  var _lastSentTimestamp = 0;
+  var _DEDUP_WINDOW = 9000;  // 9s
+  var _sentNumbersSet = {}; // Set de numeros enviados (para sync, no para dedup)
 
   function _isDuplicate(n) {
-    // Time-based dedup — si este numero fue enviado en los ultimos 9s,
-  // es el MISMO giro detectado por otro hook → bloquear
     var now = Date.now();
-    var lastSent = _sentNumbers[n];
-    if (lastSent !== undefined && now - lastSent < _DEDUP_WINDOW) {
-      console.log('[RollerWin] DUP: ' + n + ' bloqueado (' + Math.round(now - lastSent) + 's ago)');
+    // v6.7: Solo dedup por TIEMPO GLOBAL — si se envio CUALQUIER numero
+    // en los ultimos 9s, este hook detecta el mismo giro → bloquear.
+    // Esto permite repetidos legítimos (15,15) si estan separados >9s.
+    if (now - _lastSentTimestamp < _DEDUP_WINDOW) {
+      console.log('[RollerWin] DUP: ' + n + ' bloqueado (ultimo envio hace ' + Math.round(now - _lastSentTimestamp) + 's)');
       return true;
     }
     return false;
@@ -69,11 +84,12 @@
 
   function _markSent(n) {
     var now = Date.now();
-    _sentNumbers[n] = now;
+    _lastSentTimestamp = now;
+    _sentNumbersSet[n] = now;
     // Limpiar entradas viejas (+5s de buffer)
-    for (var num in _sentNumbers) {
-      if (now - _sentNumbers[num] > _DEDUP_WINDOW + 5000) {
-        delete _sentNumbers[num];
+    for (var num in _sentNumbersSet) {
+      if (now - _sentNumbersSet[num] > _DEDUP_WINDOW + 5000) {
+        delete _sentNumbersSet[num];
       }
     }
   }
@@ -82,7 +98,12 @@
   // Popula _sentNumbers para que el iframe recargado no re-envie el ultimo numero
   function syncLastNumber(n) {
     if (n >= 0 && n <= 36) {
-      _sentNumbers[n] = Date.now();
+      var now = Date.now();
+      _sentNumbersSet[n] = now;
+      // v6.7: Tambien marcar timestamp global para prevenir re-envio inmediato
+      if (now - _lastSentTimestamp > _DEDUP_WINDOW) {
+        _lastSentTimestamp = now;
+      }
       console.log('[RollerWin] SYNC: numero ' + n + ' marcado como enviado (desde parent)');
     }
   }
@@ -515,13 +536,15 @@
       }
 
       // PASO 2: Esperar 500ms y navegar
+      // v6.7 FIX: Usar location.replace() en vez de location.href para
+      // forzar navegacion en la MISMA pestaña (no abre nueva pestaña)
       setTimeout(function() {
         var targetUrl = ROULETTE_URL;
         if (_gameUrl && _gameUrl.indexOf('/casino/games/') !== -1 && _gameUrl.indexOf('roulette') !== -1) {
           targetUrl = _gameUrl;
         }
-        console.log('[RollerWin] Navegando a mesa: ' + targetUrl);
-        location.href = targetUrl;
+        console.log('[RollerWin] Navegando a mesa (same tab): ' + targetUrl);
+        location.replace(targetUrl);
       }, clicked ? 500 : 100);
 
       // PASO 3: Safety timeout — resetear despues de 20s
@@ -583,6 +606,8 @@
     // ════════════════════════════════════════════════════════
     var _playButtonCooldown = 0;
 
+    // v6.7 FIX: checkPlayButton NUNCA clickea elementos con target="_blank"
+    // Eso causaba que se abriera una nueva pestaña al recuperar la sesion.
     function checkPlayButton() {
       if (_playButtonCooldown > Date.now()) return false;
       var onGamePage = location.href.indexOf('/casino/games/') !== -1;
@@ -593,6 +618,16 @@
       for (var i = 0; i < btns.length; i++) {
         var bt = (btns[i].textContent || '').trim().toLowerCase();
         if (bt === 'jugar' || bt === 'play' || bt === 'play now' || bt === 'spin' || bt === 'start') {
+          // v6.7: NUNCA clickear si tiene target="_blank" (abriria nueva pestaña)
+          if (btns[i].getAttribute('target') === '_blank') {
+            console.log('[RollerWin] Boton JUGAR IGNORADO (target=_blank) [' + btns[i].tagName.toLowerCase() + ']');
+            continue;
+          }
+          // v6.7: Si es un <a href> con target diferente, ignorar
+          if (btns[i].tagName.toLowerCase() === 'a' && btns[i].getAttribute('target')) {
+            console.log('[RollerWin] Boton JUGAR IGNORADO (es link con target) [' + btns[i].tagName.toLowerCase() + ']');
+            continue;
+          }
           console.log('[RollerWin] Boton JUGAR encontrado [' + btns[i].tagName.toLowerCase() + '] — click!');
           btns[i].click();
           _playButtonCooldown = Date.now() + 5000; // Cooldown 5s (era 10s)
@@ -625,7 +660,7 @@
         _isRecovering = true;
         _sessionExpired = true;
         _saveState();
-        location.reload();
+        location.reload(); // reload en la misma pestaña
       }
     }, 10000); // check cada 10s
 
@@ -706,7 +741,7 @@
       } catch(e) {}
     }, 10000);
 
-    console.log('[RollerWin] v6.6 IFRAME-RECOVERY-FIX | DEDUP + AUTO-RECOVERY | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
+    console.log('[RollerWin] v6.7 DEDUP-GLOBAL+NO-NEWTAB | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
 
   }
 
