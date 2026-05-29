@@ -218,6 +218,12 @@ export function DashboardLive() {
   const [signalPeak, setSignalPeak] = useState(1)
   const [signalPeakHistory, setSignalPeakHistory] = useState<EnginePeakRecord[]>([])
   const signalPeakRef = useRef(1)
+
+  // LIVE-only signal peak tracking — ONLY records peaks from live play
+  // (NOT populated by import or backtesting — starts empty when data is loaded)
+  const [liveSignalPeakHistory, setLiveSignalPeakHistory] = useState<EnginePeakRecord[]>([])
+  const liveSignalPeakRef = useRef<EnginePeakRecord[]>([])
+  const livePeakIndexRef = useRef(0)
   
   // UI state
   const [copiedUrl, setCopiedUrl] = useState(false)
@@ -822,6 +828,20 @@ export function DashboardLive() {
         setSignalPeakHistory(prev => [...prev, signalPeakRecord])
         setSignalPeak(1)
         signalPeakRef.current = 1
+
+        // === LIVE-ONLY SIGNAL PEAK TRACKING ===
+        // Only record peaks from live play (not from import/backtesting)
+        livePeakIndexRef.current++
+        const livePeakRecord: EnginePeakRecord = {
+          id: `live-${livePeakIndexRef.current}-${Date.now().toString()}`,
+          height: signalPeakValue,
+          prediction: { type: prediction.type, value: prediction.value },
+          resultNumber: num,
+          resultColor: getNumberColor(num),
+          timestamp: new Date()
+        }
+        setLiveSignalPeakHistory(prev => [...prev, livePeakRecord])
+        liveSignalPeakRef.current = [...liveSignalPeakRef.current, livePeakRecord]
         
         // === CALCULATOR TRACKING ===
         if (calcIsActiveRef.current) {
@@ -1147,6 +1167,10 @@ export function DashboardLive() {
     setSignalPeakHistory([])
     setSignalPeak(1)
     signalPeakRef.current = 1
+    // Reset live-only peak tracking
+    setLiveSignalPeakHistory([])
+    liveSignalPeakRef.current = []
+    livePeakIndexRef.current = 0
     setCurrentPrediction(null)
     currentPredictionRef.current = null
     setConfidence(0)
@@ -1204,6 +1228,10 @@ export function DashboardLive() {
     currentPeakRef.current = 1
     setSignalPeak(1)
     signalPeakRef.current = 1
+    // Clear live-only peaks on import (live play hasn't started yet)
+    setLiveSignalPeakHistory([])
+    liveSignalPeakRef.current = []
+    livePeakIndexRef.current = 0
     setCurrentPrediction(null)
     currentPredictionRef.current = null
     setConfidence(0)
@@ -1276,6 +1304,10 @@ export function DashboardLive() {
         setSignalPeakHistory(v60result.peaks)
         setSignalPeak(1)
         signalPeakRef.current = 1
+        // Clear live-only peaks on bet type change (recalculation context changed)
+        setLiveSignalPeakHistory([])
+        liveSignalPeakRef.current = []
+        livePeakIndexRef.current = 0
         setTotalSignals(v60result.signals)
         setTotalSkips(v60result.skips)
         totalSignalsRef.current = v60result.signals
@@ -1284,6 +1316,9 @@ export function DashboardLive() {
         setSignalPeakHistory([])
         setSignalPeak(1)
         signalPeakRef.current = 1
+        setLiveSignalPeakHistory([])
+        liveSignalPeakRef.current = []
+        livePeakIndexRef.current = 0
       }
 
       setCurrentPrediction(null)
@@ -2327,11 +2362,11 @@ export function DashboardLive() {
                   </Card>
                 ) : null}
 
-                {/* ═══ Histograma de Picos V6.0 ═══ */}
-                {signalPeakHistory.length > 0 && (
+                {/* ═══ Historial de Picos — En Vivo ═══ */}
+                {liveSignalPeakHistory.length > 0 && (
                   <div className="mt-4">
                     <PeakLevelCharts
-                      peakHistory={signalPeakHistory}
+                      peakHistory={liveSignalPeakHistory}
                       currentPeak={signalPeak}
                       betTypeLabel={selectedBetType === 'color' ? 'Color (R/N)' : selectedBetType === 'parity' ? 'Par/Impar' : selectedBetType === 'dozen' ? 'Docenas' : 'Columnas'}
                     />

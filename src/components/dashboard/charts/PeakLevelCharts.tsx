@@ -230,7 +230,7 @@ export function PeakLevelCharts({ inputNumbers, peakHistory: peakHistoryFromPare
           <CardTitle className="text-white flex items-center justify-between text-lg">
             <span className="flex items-center gap-2">
               <History className="w-5 h-5 text-purple-500" />
-              Historial de Picos — Señales V6.0
+              Historial de Picos — En Vivo
             </span>
             <div className="flex items-center gap-2">
               <div className="bg-zinc-700 text-white px-2 py-1 rounded text-xs font-bold">
@@ -243,7 +243,7 @@ export function PeakLevelCharts({ inputNumbers, peakHistory: peakHistoryFromPare
           {peakHistory.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-zinc-500">
               <History className="w-10 h-10 mb-2" />
-              <span className="text-sm">Sin registros de picos aún</span>
+              <span className="text-sm">Sin picos en vivo aún — empieza a jugar para registrar</span>
             </div>
           ) : (
             <>
