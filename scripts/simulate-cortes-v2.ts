@@ -286,7 +286,7 @@ function simulate(numbers: number[], config: CorteConfig): SimResult {
 function printResults(results: SimResult[]) {
   console.log('\n' + '═'.repeat(85))
   console.log('  SIMULACIÓN DE STRESS-TEST — Motor V6.0 SIN MODIFICACIONES')
-  console.log('  Datos: 14,489 números reales combinados (3 secuencias)')
+  console.log(`  Datos: ${results[0].totalNumbers} números reales del usuario`)
   console.log('═'.repeat(85))
 
   for (const r of results) {
