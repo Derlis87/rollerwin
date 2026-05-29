@@ -790,18 +790,19 @@
   // Esto previene que cualquier hook re-envíe el último resultado
   // después de una recarga del iframe (popula _sentNumbers)
   try {
-    window.parent.postMessage({ source: 'rollerwin-sync' }, '*');
-    window.addEventListener('message', function syncHandler(e) {
+    var _syncHandler = function(e) {
       try {
         if (e.data && e.data.source === 'rollerwin-sync-reply' && typeof e.data.lastNumber === 'number') {
           syncLastNumber(e.data.lastNumber);
-          window.removeEventListener('message', syncHandler);
+          window.removeEventListener('message', _syncHandler);
         }
       } catch(err) {}
-    });
+    };
+    window.parent.postMessage({ source: 'rollerwin-sync' }, '*');
+    window.addEventListener('message', _syncHandler);
     // Timeout: si no hay respuesta en 2s, continuar sin sync
     setTimeout(function() {
-      window.removeEventListener('message', syncHandler);
+      window.removeEventListener('message', _syncHandler);
     }, 2000);
   } catch(e) {}
   // Re-solicitar sync cada 30s (por si el parent también recarga)
