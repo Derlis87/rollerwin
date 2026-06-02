@@ -2067,11 +2067,11 @@ export function DashboardLive() {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => window.open('/RollerWin-Capture-v4.zip', '_blank')}
+                            onClick={() => window.open('/RollerWin-Capture-v7.3.zip', '_blank')}
                             className="w-full h-7 text-[10px] bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20 hover:text-green-300 mt-1 font-bold"
                           >
                             <Download className="w-3 h-3 mr-1" />
-                            Descargar Extension RollerWin v6.7 (ZIP)
+                            Descargar Extension RollerWin v7.3 (ZIP)
                           </Button>
                           <p className="text-[8px] text-zinc-600 text-center">
                             No necesitás Tampermonkey con esta extension

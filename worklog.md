@@ -241,3 +241,26 @@ Stage Summary:
 - Client: WS hook ampliado con fallback para todos los eventos socket.io
 - Client: _recoveryInProgress persistido en localStorage, loops de recovery eliminados
 - ZIP actualizado en public/RollerWin-Capture-v4.zip
+
+---
+Task ID: 1
+Agent: Main Agent
+Task: v7.3 — Fix duplicados al activar captura automática + Recovery v7 (90s no-capture detection + 3-step auto-click)
+
+Work Log:
+- Fixed duplicate number on auto-capture activation: added processedIdsRef Set in useRouletteCapturer.ts to dedup by entry ID, preventing race condition between sync and first poll
+- Added defensive dedup in DashboardLive.tsx with _lastAutoCaptureIdRef
+- Rewrote recovery system in inject-main.js (Recovery v7):
+  - Detection: 90-second timer after ≥3 captures, if no new capture in 90s triggers recovery
+  - 3-step auto-click after reload: (1) dismiss overlay, (2) find game card, (3) click JUGAR/PLAY/JOGAR
+  - Removed old keyword scanning, attachShadow hook, iframe modal scanning
+- Updated content.js widget to show recovery countdown and auto-click step
+- Updated manifest.json version
+- Built RollerWin-Capture-v7.3.zip
+- Updated DashboardLive.tsx download link from v4 to v7.3
+
+Stage Summary:
+- v7.3 ZIP deployed at public/RollerWin-Capture-v7.3.zip
+- Download link in DashboardLive updated to serve v7.3
+- Recovery v7 with 90s detection + 3-step auto-click (NOT YET TESTED by user)
+- Auto-capture dedup fix prevents duplicate numbers on toggle
