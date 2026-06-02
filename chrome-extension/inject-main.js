@@ -832,21 +832,22 @@
     }
   }, 15000);
 
-  // v7.4 FIX: Dedup por SECUENCIA ABSOLUTA — previene re-envío post-recovery
+  // v7.4 FIX: Dedup por SECUENCIA — previene re-envío post-recovery
   // La dedup por tiempo (9s) no basta cuando el iframe se recarga: _lastSentTimestamp
   // se resetea a 0, y el DOM Scanner re-lee el número viejo visible en la mesa.
   // Secuencia guarda los últimos 5 números enviados con timestamp.
-  // Si un número ya está en la secuencia y pasó <20s, es el mismo giro → bloquear.
-  // Si pasó >20s, es un giro nuevo legítimo (ruleta puede repetir).
+  // Ventana de 14s: los giros duran ~18s, así que 14s NUNCA bloquea repeticiones
+  // legítimas (15,15 consecutivos = 18s aparte > 14s → permitido).
+  // Pero SI bloquea re-envíos post-recovery que ocurren en 1-5s.
   var _sentSequence = []; // Array de {number, timestamp}
   var _SEQUENCE_MAX = 5;
-  var _SEQUENCE_WINDOW = 20000; // 20s — entre giros de ruleta (~18s)
+  var _SEQUENCE_WINDOW = 14000; // 14s — MENOR que duración de giro (18s)
 
   function _checkSequenceDup(n) {
     for (var i = 0; i < _sentSequence.length; i++) {
       if (_sentSequence[i].number === n) {
         if (Date.now() - _sentSequence[i].timestamp < _SEQUENCE_WINDOW) {
-          return true; // Mismo número en secuencia reciente → duplicado
+          return true; // Mismo número dentro de 14s → duplicado post-recovery
         }
       }
     }
