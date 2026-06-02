@@ -264,3 +264,25 @@ Stage Summary:
 - Download link in DashboardLive updated to serve v7.3
 - Recovery v7 with 90s detection + 3-step auto-click (NOT YET TESTED by user)
 - Auto-capture dedup fix prevents duplicate numbers on toggle
+---
+Task ID: 1
+Agent: main
+Task: Fix captura desincronizada - v7.5
+
+Work Log:
+- Analicé screenshots del usuario (VLM timeout, procedí con análisis de código)
+- Verifiqué estado de código: encontré 5 problemas de desincronización
+- Fix 1 (capture-bus.ts): Revertí DEDUP-GLOBAL (12s, cualquier número) a per-number dedup (12s por valor). v7.4 bloqueaba cualquier número en 12s sin importar su valor, conceptualmente incorrecto.
+- Fix 2 (inject-main.js): Reducí DEDUP-SEQ de 14s a 10s. 10s << 18s (duración de giro), nunca bloquea repeticiones legítimas pero sí bloquea re-envíos post-recovery (1-5s).
+- Fix 3 (useRouletteCapturer.ts): Agregué processedIdsRef (Set) para prevenir duplicados al activar auto-capture. Cuando afterId='', el primer poll devolvía TODAS las entries existentes y se procesaban como nuevas.
+- Fix 4 (DashboardLive.tsx): Corregí link de descarga de v7.3.zip a v7.5.zip. Agregué _lastAutoCaptureIdRef como dedup defensivo en dashboard.
+- Fix 5 (manifest.json): Versión actualizada a 7.5.0
+- Reconstruí ZIP v7.5 en public/RollerWin-Capture-v7.5.zip
+- Push a Render: commit a89d660
+
+Stage Summary:
+- Todas las capas de dedup ahora son por VALOR+TIEMPO, no globales
+- Ventanas: Client 9s (tiempo global, OK porque giros=18s), Client SEQ 10s (por valor), Server 12s (por valor)
+- Ninguna ventana puede bloquear repeticiones legítimas (18s > 12s > 10s > 9s)
+- processedIdsRef previene duplicados toggle-on (el problema original del usuario)
+- Link de descarga ahora apunta al ZIP correcto (v7.5)
