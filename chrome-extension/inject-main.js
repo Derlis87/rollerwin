@@ -1307,5 +1307,5 @@
     window.EventSource = Proxy;
   })();
 
-  console.log('[RollerWin] v6.5 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup 9s + WS-Fallback + Extraccion estricta');
+  console.log('[RollerWin] v7.5 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup 9s + SEQ 10s + Per-Number');
 })();
