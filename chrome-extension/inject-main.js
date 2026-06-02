@@ -40,8 +40,8 @@
 (function() {
   'use strict';
 
-  if (window.__rwMainV4) return;
-  window.__rwMainV4 = true;
+  if (window.__rwMainV73) return;
+  window.__rwMainV73 = true;
 
   var SERVER = 'https://rollerwin3.onrender.com';
   var lastNum = -1;
@@ -530,7 +530,7 @@
       console.log('[RollerWin] RECOVERY #' + _recoverCount + ' iniciado (' + reason + ')');
 
       // PASO 1: Click OK en el modal si existe
-      var clicked = clickAnyButtonByText(['OK', 'Ok', 'ok', 'ACEPTAR', 'Aceptar', 'aceptar', 'VOLVER', 'Volver', 'volver']);
+      var clicked = clickAnyButtonByText(['OK', 'Ok', 'ok', 'ACEPTAR', 'Aceptar', 'aceptar', 'VOLVER', 'Volver', 'volver', 'VUELVA', 'Vuelva', 'volvera', 'INICIAR', 'Iniciar', 'iniciar', 'CONTINUAR', 'Continuar', 'continuar']);
       if (clicked) {
         console.log('[RollerWin] Click OK en modal — esperando 500ms...');
       }
