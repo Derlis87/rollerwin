@@ -1,4 +1,4 @@
-// RollerWin Capture v6.7 - MAIN WORLD DETECTION ENGINE
+// RollerWin Capture v7.5 - MAIN WORLD DETECTION ENGINE
 // SOLO detecta numeros desde iframes (donde corre Evolution)
 // El parent page SOLO retransmite lo que llega via postMessage desde iframes
 // FIX v5.0: DOM Scanner capturaba numeros del historial (circulos viejos)
@@ -752,7 +752,7 @@
       } catch(e) {}
     }, 10000);
 
-    console.log('[RollerWin] v6.7 DEDUP-GLOBAL+NO-NEWTAB | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
+    console.log('[RollerWin] v7.5 DEDUP-SEQ-10s+PER-NUMBER | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
 
   }
 
@@ -832,22 +832,23 @@
     }
   }, 15000);
 
-  // v7.4 FIX: Dedup por SECUENCIA — previene re-envío post-recovery
+  // v7.5 FIX: Dedup por SECUENCIA — previene re-envío post-recovery
   // La dedup por tiempo (9s) no basta cuando el iframe se recarga: _lastSentTimestamp
   // se resetea a 0, y el DOM Scanner re-lee el número viejo visible en la mesa.
   // Secuencia guarda los últimos 5 números enviados con timestamp.
-  // Ventana de 14s: los giros duran ~18s, así que 14s NUNCA bloquea repeticiones
-  // legítimas (15,15 consecutivos = 18s aparte > 14s → permitido).
+  // v7.5: Ventana de 10s (era 14s) — los giros duran ~18s, así que 10s NUNCA
+  // bloquea repeticiones legítimas (15,15 consecutivos = 18s > 10s → permitido).
   // Pero SI bloquea re-envíos post-recovery que ocurren en 1-5s.
+  // Solo bloquea si el MISMO número está en la secuencia dentro de 10s.
   var _sentSequence = []; // Array de {number, timestamp}
   var _SEQUENCE_MAX = 5;
-  var _SEQUENCE_WINDOW = 14000; // 14s — MENOR que duración de giro (18s)
+  var _SEQUENCE_WINDOW = 10000; // 10s — mucho MENOR que duración de giro (18s)
 
   function _checkSequenceDup(n) {
     for (var i = 0; i < _sentSequence.length; i++) {
       if (_sentSequence[i].number === n) {
         if (Date.now() - _sentSequence[i].timestamp < _SEQUENCE_WINDOW) {
-          return true; // Mismo número dentro de 14s → duplicado post-recovery
+          return true; // Mismo número dentro de 10s → duplicado post-recovery
         }
       }
     }

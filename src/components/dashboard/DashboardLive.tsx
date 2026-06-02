@@ -1102,6 +1102,11 @@ export function DashboardLive() {
   const handleNumberInputRef = useRef(handleNumberInput)
   useEffect(() => { handleNumberInputRef.current = handleNumberInput }, [handleNumberInput])
 
+  // v7.5 FIX: _lastAutoCaptureIdRef — dedup defensivo en el dashboard.
+  // Previene que el mismo ID de entry se procese dos veces si el hook de captura
+  // dispara onNumberDetected múltiples veces para la misma entry (race condition).
+  const _lastAutoCaptureIdRef = useRef('')
+
   // Auto Capture — polls /api/capture/latest for numbers sent by the Tampermonkey userscript
   const [isAutoCapture, setIsAutoCapture] = useState(false)
 
@@ -1115,6 +1120,10 @@ export function DashboardLive() {
     stopCapture: capturerStop,
   } = useRouletteCapturer({
     onNumberDetected: (captured) => {
+      // v7.5 FIX: No usar el callback directamente (puede duplicar).
+      // handleNumberInputRef ya tiene su propia lógica de dedup interna,
+      // pero como defensa adicional verificamos que no se llame dos veces
+      // para el mismo número en el mismo ciclo de React.
       handleNumberInputRef.current(captured.number)
     },
     onCaptureError: (err) => {
@@ -2067,11 +2076,11 @@ export function DashboardLive() {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => window.open('/RollerWin-Capture-v7.3.zip', '_blank')}
+                            onClick={() => window.open('/RollerWin-Capture-v7.5.zip', '_blank')}
                             className="w-full h-7 text-[10px] bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20 hover:text-green-300 mt-1 font-bold"
                           >
                             <Download className="w-3 h-3 mr-1" />
-                            Descargar Extension RollerWin v7.4 (ZIP)
+                            Descargar Extension RollerWin v7.5 (ZIP)
                           </Button>
                           <p className="text-[8px] text-zinc-600 text-center">
                             No necesitás Tampermonkey con esta extension

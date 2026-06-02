@@ -48,6 +48,12 @@ export function useRouletteCapturer(options: UseRouletteCapturerOptions = {}) {
   const onNumberDetectedRef = useRef(onNumberDetected)
   const onCaptureErrorRef = useRef(onCaptureError)
 
+  // v7.5 FIX: processedIdsRef — previene duplicados al activar auto-capture.
+  // Cuando se activa captura, el primer poll devuelve entries que ya existen
+  // en capture-data.json. Sin este Set, esos números se procesarían como nuevos.
+  // Almacena IDs de entries ya procesadas para no duplicar.
+  const processedIdsRef = useRef(new Set<string>())
+
   useEffect(() => { onNumberDetectedRef.current = onNumberDetected }, [onNumberDetected])
   useEffect(() => { onCaptureErrorRef.current = onCaptureError }, [onCaptureError])
 
@@ -74,16 +80,31 @@ export function useRouletteCapturer(options: UseRouletteCapturerOptions = {}) {
         const entries: CaptureEntry[] = data.entries ?? []
 
         if (entries.length > 0) {
-          setTotalCaptured(prev => prev + entries.length)
           // Update last seen ID
           lastIdRef.current = entries[entries.length - 1].id
 
+          // v7.5 FIX: Solo procesar entries NO ya procesadas.
+          // Cuando se activa auto-capture, afterId='' devuelve TODAS las entries.
+          // Solo las nuevas (no en processedIdsRef) se cuentan y reportan.
+          let newCount = 0
           for (const entry of entries) {
-            onNumberDetectedRef.current?.({
-              number: entry.number,
-              color: entry.color,
-              timestamp: new Date(entry.timestamp)
-            })
+            if (!processedIdsRef.current.has(entry.id)) {
+              processedIdsRef.current.add(entry.id)
+              newCount++
+              onNumberDetectedRef.current?.({
+                number: entry.number,
+                color: entry.color,
+                timestamp: new Date(entry.timestamp)
+              })
+            }
+          }
+          if (newCount > 0) {
+            setTotalCaptured(prev => prev + newCount)
+          }
+          // Limpiar IDs viejos (mantener últimos 100)
+          if (processedIdsRef.current.size > 100) {
+            const ids = Array.from(processedIdsRef.current)
+            processedIdsRef.current = new Set(ids.slice(-100))
           }
         }
       } catch (err) {
@@ -117,6 +138,9 @@ export function useRouletteCapturer(options: UseRouletteCapturerOptions = {}) {
   const disconnect = useCallback(() => {
     stopPolling()
     lastIdRef.current = ''
+    // v7.5: NO limpiar processedIdsRef al desconectar.
+    // Si se reconecta, los IDs viejos evitan re-procesar entries existentes.
+    // Solo se limpia si el usuario resetea capturas manualmente.
     setTotalCaptured(0)
     setError(null)
   }, [stopPolling])

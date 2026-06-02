@@ -95,25 +95,30 @@ function releaseWriteLock(number: number): void {
 // ── IN-MEMORY DEDUP CACHE ──
 // Prevents race conditions when multiple hooks (WS/Fetch/XHR/DOM)
 // detect the SAME spin result.
-// v7.4 FIX: DEDUP GLOBAL por tiempo — NO por valor.
-// Antes: _dedupCache = Map<number, number> chequeaba entries[i].number === number,
-// lo que bloqueaba repeticiones legítimas (ej: 15, 15 en giros diferentes).
-// Ahora: _lastCaptureTimestamp global — si CUALQUIER numero fue capturado en los
-// últimos 12s, bloquear. Esto permite 15,15 legítimos si están separados >12s.
+// v7.5 FIX: DEDUP por VALOR+TIEMPO — NO global.
+// v7.4 usaba DEDUP GLOBAL (cualquier número en 12s) que era conceptualmente
+// incorrecto. Ahora: por cada número, si fue capturado en los últimos 12s,
+// bloquear SOLO ese número. Perite 15,15 legítimos si están separados >12s.
 // Los giros duran ~18s, así que 12s nunca bloquea giros diferentes.
-const _lastCaptureTimestamp = { value: 0 }
+const _dedupCache = new Map<number, number>() // number → timestamp
 const DEDUP_WINDOW_MS = 12000 // 12 seconds
 
 function isDuplicate(number: number): boolean {
   const now = Date.now()
-  if (now - _lastCaptureTimestamp.value < DEDUP_WINDOW_MS) {
-    return true // Cualquier número dentro de 12s del último = mismo giro
+  const lastTime = _dedupCache.get(number)
+  if (lastTime !== undefined && now - lastTime < DEDUP_WINDOW_MS) {
+    return true // Mismo número dentro de 12s = mismo giro
   }
   return false
 }
 
 function markSeen(number: number): void {
-  _lastCaptureTimestamp.value = Date.now()
+  const now = Date.now()
+  _dedupCache.set(number, now)
+  // Limpiar entradas viejas
+  _dedupCache.forEach((ts, n) => {
+    if (now - ts > DEDUP_WINDOW_MS + 5000) _dedupCache.delete(n)
+  })
 }
 
 // ── Public API ──
@@ -135,14 +140,14 @@ export function pushCapture(number: number) {
 
   try {
     // SECONDARY: File-based dedup fallback (for cross-process safety on Render)
-    // v7.4 FIX: DEDUP GLOBAL por tiempo — si CUALQUIER numero fue capturado
-    // en los últimos 12s, bloquear. NO compara por valor (permite 15,15 legítimos).
+    // v7.5 FIX: DEDUP por VALOR+TIEMPO — solo bloquear si el MISMO número
+    // fue capturado en los últimos 12s. Permite repeticiones legítimas.
     const entries = readEntries()
     const now = Date.now()
-    const checkCount = Math.min(entries.length, 3)
+    const checkCount = Math.min(entries.length, 5)
     for (let i = entries.length - checkCount; i < entries.length; i++) {
-      if (now - entries[i].timestamp < DEDUP_WINDOW_MS) {
-        // Cualquier captura dentro de la ventana de 12s = mismo giro → bloquear
+      if (entries[i].number === number && now - entries[i].timestamp < DEDUP_WINDOW_MS) {
+        // Mismo número dentro de 12s = mismo giro → bloquear
         markSeen(number) // Also update cache
         return
       }
