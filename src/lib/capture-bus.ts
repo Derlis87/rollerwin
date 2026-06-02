@@ -94,40 +94,26 @@ function releaseWriteLock(number: number): void {
 
 // ── IN-MEMORY DEDUP CACHE ──
 // Prevents race conditions when multiple hooks (WS/Fetch/XHR/DOM)
-// detect the SAME spin result. Window is 15s to catch all edge cases.
-// Extension dedup (9s) is the primary guard. Server 15s is a safety net.
-// IMPORTANT: On Render with multiple workers, in-memory cache is per-process.
-// The file-based dedup (below) provides cross-process safety.
-//
-// v6.5 FIX: ELIMINADO SEQUENCE dedup (_lastWrittenNumber).
-// El sequence dedup BLOQUEABA repeticiones legítimas consecutivas (ej: 15, 15, 15).
-// Ahora solo se usa dedup por TIEMPO: si el mismo número fue visto en los últimos 15s,
-// es el mismo giro detectado por otro hook → bloquear. Si pasó >15s, es un nuevo giro.
-const _dedupCache = new Map<number, number>()
-const DEDUP_WINDOW_MS = 15000 // 15 seconds — catches all multi-hook duplicates
+// detect the SAME spin result.
+// v7.4 FIX: DEDUP GLOBAL por tiempo — NO por valor.
+// Antes: _dedupCache = Map<number, number> chequeaba entries[i].number === number,
+// lo que bloqueaba repeticiones legítimas (ej: 15, 15 en giros diferentes).
+// Ahora: _lastCaptureTimestamp global — si CUALQUIER numero fue capturado en los
+// últimos 12s, bloquear. Esto permite 15,15 legítimos si están separados >12s.
+// Los giros duran ~18s, así que 12s nunca bloquea giros diferentes.
+const _lastCaptureTimestamp = { value: 0 }
+const DEDUP_WINDOW_MS = 12000 // 12 seconds
 
 function isDuplicate(number: number): boolean {
-  // v6.5: TIME-based dedup ONLY — no sequence dedup
-  // Permite repeticiones legítimas (15, 15) siempre que estén separadas >15s
-  const lastSeen = _dedupCache.get(number)
-  if (lastSeen !== undefined) {
-    const elapsed = Date.now() - lastSeen
-    if (elapsed < DEDUP_WINDOW_MS) {
-      return true // True duplicate within 15s (race condition from multiple hooks)
-    }
+  const now = Date.now()
+  if (now - _lastCaptureTimestamp.value < DEDUP_WINDOW_MS) {
+    return true // Cualquier número dentro de 12s del último = mismo giro
   }
   return false
 }
 
 function markSeen(number: number): void {
-  _dedupCache.set(number, Date.now())
-  // Cleanup old entries every 100 calls to prevent memory leak
-  if (_dedupCache.size > 100) {
-    const now = Date.now()
-    for (const [key, ts] of _dedupCache) {
-      if (now - ts > DEDUP_WINDOW_MS * 2) _dedupCache.delete(key)
-    }
-  }
+  _lastCaptureTimestamp.value = Date.now()
 }
 
 // ── Public API ──
@@ -149,13 +135,14 @@ export function pushCapture(number: number) {
 
   try {
     // SECONDARY: File-based dedup fallback (for cross-process safety on Render)
-    // v6.5 FIX: ELIMINADO sequence dedup — solo dedup por TIEMPO (15s).
-    // Permite repeticiones legítimas consecutivas (ej: 15, 15, 15).
+    // v7.4 FIX: DEDUP GLOBAL por tiempo — si CUALQUIER numero fue capturado
+    // en los últimos 12s, bloquear. NO compara por valor (permite 15,15 legítimos).
     const entries = readEntries()
     const now = Date.now()
-    const checkCount = Math.min(entries.length, 5)
+    const checkCount = Math.min(entries.length, 3)
     for (let i = entries.length - checkCount; i < entries.length; i++) {
-      if (entries[i].number === number && now - entries[i].timestamp < DEDUP_WINDOW_MS) {
+      if (now - entries[i].timestamp < DEDUP_WINDOW_MS) {
+        // Cualquier captura dentro de la ventana de 12s = mismo giro → bloquear
         markSeen(number) // Also update cache
         return
       }

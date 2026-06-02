@@ -130,11 +130,22 @@
     // Si el numero fue enviado en los ultimos 12s, es el mismo giro → bloquear.
     // Los giros duran ~18s, asi que 12s jamas bloquea repetidos legitimas.
     if (_isDuplicate(n)) {
-      console.log('[RollerWin] DEDUP: ' + n + ' bloqueado (' + Math.round(now - _sentNumbers[n]) + 's ago) — ' + source);
+      console.log('[RollerWin] DEDUP: ' + n + ' bloqueado (ultimo envio hace ' + Math.round(now - _lastSentTimestamp) + 's) — ' + source);
+      return;
+    }
+
+    // v7.4: DEDUP por SECUENCIA — previene re-envío post-recovery/recarga
+    // El iframe se recarga sin estado, _lastSentTimestamp = 0, el DOM Scanner
+    // re-lee el número viejo visible. La secuencia sobrevive porque se pobló
+    // via sync o ya estaba en memoria antes de la recarga del hook.
+    if (typeof _checkSequenceDup === 'function' && _checkSequenceDup(n)) {
+      console.log('[RollerWin] DEDUP-SEQ: ' + n + ' bloqueado (en secuencia reciente) — ' + source);
       return;
     }
 
     _markSent(n);
+    // v7.4: Agregar a la secuencia para dedup post-recovery
+    if (typeof _addSequence === 'function') _addSequence(n);
     lastNum = n;
     lastTime = now;
     sentCount++;
@@ -821,6 +832,32 @@
     }
   }, 15000);
 
+  // v7.4 FIX: Dedup por SECUENCIA ABSOLUTA — previene re-envío post-recovery
+  // La dedup por tiempo (9s) no basta cuando el iframe se recarga: _lastSentTimestamp
+  // se resetea a 0, y el DOM Scanner re-lee el número viejo visible en la mesa.
+  // Secuencia guarda los últimos 5 números enviados con timestamp.
+  // Si un número ya está en la secuencia y pasó <20s, es el mismo giro → bloquear.
+  // Si pasó >20s, es un giro nuevo legítimo (ruleta puede repetir).
+  var _sentSequence = []; // Array de {number, timestamp}
+  var _SEQUENCE_MAX = 5;
+  var _SEQUENCE_WINDOW = 20000; // 20s — entre giros de ruleta (~18s)
+
+  function _checkSequenceDup(n) {
+    for (var i = 0; i < _sentSequence.length; i++) {
+      if (_sentSequence[i].number === n) {
+        if (Date.now() - _sentSequence[i].timestamp < _SEQUENCE_WINDOW) {
+          return true; // Mismo número en secuencia reciente → duplicado
+        }
+      }
+    }
+    return false;
+  }
+
+  function _addSequence(n) {
+    _sentSequence.push({ number: n, timestamp: Date.now() });
+    if (_sentSequence.length > _SEQUENCE_MAX) _sentSequence.shift();
+  }
+
   // v6.4: Solicitar sincronización del último número al parent
   // Esto previene que cualquier hook re-envíe el último resultado
   // después de una recarga del iframe (popula _sentNumbers)
@@ -829,6 +866,8 @@
       try {
         if (e.data && e.data.source === 'rollerwin-sync-reply' && typeof e.data.lastNumber === 'number') {
           syncLastNumber(e.data.lastNumber);
+          // v7.4: Tambien poblar la secuencia para prevenir re-envío post-recarga
+          _addSequence(e.data.lastNumber);
           window.removeEventListener('message', _syncHandler);
         }
       } catch(err) {}
