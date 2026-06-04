@@ -1,4 +1,4 @@
-// RollerWin Capture v7.5 - MAIN WORLD DETECTION ENGINE
+// RollerWin Capture v7.6 - MAIN WORLD DETECTION ENGINE
 // SOLO detecta numeros desde iframes (donde corre Evolution)
 // El parent page SOLO retransmite lo que llega via postMessage desde iframes
 // FIX v5.0: DOM Scanner capturaba numeros del historial (circulos viejos)
@@ -37,6 +37,17 @@
 //     location.href → location.replace() para forzar misma pestaña.
 //   - BUG 3 (Duplicados): syncLastNumber mejorado + dedup global previene
 //     re-envío del último número cuando el iframe se recarga.
+// FIX v7.6: 4 BUGS CRITICOS DE RECOVERY:
+//   - BUG 1 (Número saltado al reiniciar mesa): syncLastNumber seteaba
+//     _lastSentTimestamp, bloqueando DEDUP-TIME por 9s. El DOM Scanner
+//     no podía capturar el número del gap. Ahora sync NO toca _lastSentTimestamp.
+//   - BUG 2 (MutationObserver 2s muy lento): Si un número aparece y cambia
+//     en <2s durante restart, se pierde. Reducido a 500ms.
+//   - BUG 3 (Sin Gap Recovery): Agregado scanner agresivo cuando hay gap >22s.
+//     Escanea DOM cada 3s hasta capturar un número. También se activa
+//     al reconectar WS.
+//   - BUG 4 (iframe dead 90s muy lento): Reducido a 45s + detección de
+//     WS reconnect para escaneo inmediato del DOM.
 (function() {
   'use strict';
 
@@ -96,15 +107,17 @@
 
   // Sincronizar desde el parent (sobrevive recargas de iframe)
   // Popula _sentNumbers para que el iframe recargado no re-envie el ultimo numero
+  // v7.6 FIX: NO setear _lastSentTimestamp! Solo poblar _sentNumbersSet y secuencia.
+  // Si seteamos _lastSentTimestamp, el DEDUP-TIME bloquea TODAS las capturas por 9s,
+  // impidiendo que el DOM Scanner capture el número que apareció durante el gap.
   function syncLastNumber(n) {
     if (n >= 0 && n <= 36) {
       var now = Date.now();
       _sentNumbersSet[n] = now;
-      // v6.7: Tambien marcar timestamp global para prevenir re-envio inmediato
-      if (now - _lastSentTimestamp > _DEDUP_WINDOW) {
-        _lastSentTimestamp = now;
-      }
-      console.log('[RollerWin] SYNC: numero ' + n + ' marcado como enviado (desde parent)');
+      // v7.6: NO tocar _lastSentTimestamp — dejarlo en 0 para que el primer
+      // escaneo DOM pueda capturar inmediatamente. DEDUP-SEQ previene re-envío
+      // del número sincronizado (misma valor dentro de 10s → bloqueado).
+      console.log('[RollerWin] SYNC: numero ' + n + ' marcado como enviado (desde parent, v7.6 sin timestamp)');
     }
   }
 
@@ -653,20 +666,21 @@
     setInterval(checkPlayButton, 400); // v6.2: cada 400ms (era 1s)
 
     // ════════════════════════════════════════════════════════
-    // 6. IFRAME MUERTO: sin capturas >120s → reload COMPLETO
+    // 6. IFRAME MUERTO: sin capturas >60s → reload COMPLETO
     //    v6.2 FIX: 90s (era 35s que reiniciaba con sesion activa)
     //    v6.6 FIX: Relajada la condicion — si no hay capturas >120s,
     //    el iframe esta claramente muerto sin importar si la sesion
     //    del parent esta activa (keep-alive chekea parent, no iframe).
+    //    v7.6 FIX: Reducido a 60s (era 120s). 120s = 6-7 números perdidos.
+    //    60s = máximo 3-4 perdidos, pero con Gap Recovery en el iframe,
+    //    muchos de esos números ya deberían haber sido capturados.
     // ════════════════════════════════════════════════════════
     setInterval(function() {
       var noCap = Date.now() - _lastCaptureTime;
       var onGame = location.href.indexOf('/casino/games/') !== -1;
 
-      // v6.6: Reload si estamos en juego Y sin capturas >120s
-      // La condicion anterior (_sessionExpired || _keepAliveCount === 0) fallaba
-      // porque el keep-alive del parent devuelve 200 aun cuando el iframe murio.
-      if (onGame && noCap > 120000 && !_recoveryInProgress) {
+      // v7.6: Reload si estamos en juego Y sin capturas >60s
+      if (onGame && noCap > 60000 && !_recoveryInProgress) {
         console.log('[RollerWin] Sin capturas ' + Math.round(noCap/1000) + 's — iframe muerto, reload completo...');
         _isRecovering = true;
         _sessionExpired = true;
@@ -752,7 +766,7 @@
       } catch(e) {}
     }, 10000);
 
-    console.log('[RollerWin] v7.5 DEDUP-SEQ-10s+PER-NUMBER | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
+    console.log('[RollerWin] v7.6 GAP-RECOVERY+DEDUP-SEQ-10s+PER-NUMBER | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
 
   }
 
@@ -823,20 +837,40 @@
     };
   }
 
-  // Notificar parent si el iframe esta muerto (sin actividad >90s)
+  // v7.6 FIX: Notificar parent si el iframe esta muerto (sin actividad >45s, era 90s)
+  // Con giros de 18s, 90s = 5 números perdidos. 45s = máximo 2-3 perdidos.
   setInterval(function() {
-    if (!_iframeDeadNotified && Date.now() - _iframeLastActivity > 90000) {
+    if (!_iframeDeadNotified && Date.now() - _iframeLastActivity > 45000) {
       _iframeDeadNotified = true;
-      console.log('[RollerWin] IFRAME: Sin actividad >90s → notificando parent');
-      try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-dead-90s' }, '*'); } catch(e) {}
+      console.log('[RollerWin] IFRAME: Sin actividad >45s → notificando parent + Gap Recovery');
+      try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-dead-45s' }, '*'); } catch(e) {}
+      // v7.6: También activar Gap Recovery localmente
+      startGapRecovery();
     }
-  }, 15000);
+  }, 10000); // Check cada 10s (era 15s)
+
+  // v7.6 FIX: GAP RECOVERY SCANNER
+  // Cuando hay un gap >22s sin capturas (mas de un giro de 18s), significa que
+  // se perdió al menos un número. El Gap Recovery Scanner escanea el DOM de
+  // forma agresiva cada 3s hasta capturar el número perdido.
+  // También se activa cuando el WebSocket se reconecta.
+  var _iframeLastCaptureTime = Date.now();
+  var _gapRecoveryActive = false;
+  var _gapRecoveryTimer = null;
+  var _GAP_THRESHOLD = 22000; // 22s — mas de un giro (18s)
+  var _GAP_SCAN_INTERVAL = 3000; // 3s entre escaneos de gap
+
+  // v7.6 FIX: WS Reconnect Detection
+  // Trackea cuando un WebSocket se cierra y otro se abre.
+  // Al reconectar, escanea el DOM inmediatamente para capturar el resultado perdido.
+  var _wsWasClosed = false;
+  var _wsReconnectCount = 0;
 
   // v7.5 FIX: Dedup por SECUENCIA — previene re-envío post-recovery
   // La dedup por tiempo (9s) no basta cuando el iframe se recarga: _lastSentTimestamp
   // se resetea a 0, y el DOM Scanner re-lee el número viejo visible en la mesa.
   // Secuencia guarda los últimos 5 números enviados con timestamp.
-  // v7.5: Ventana de 10s (era 14s) — los giros duran ~18s, así que 10s NUNCA
+  // v7.6: Ventana de 10s — los giros duran ~18s, así que 10s NUNCA
   // bloquea repeticiones legítimas (15,15 consecutivos = 18s > 10s → permitido).
   // Pero SI bloquea re-envíos post-recovery que ocurren en 1-5s.
   // Solo bloquea si el MISMO número está en la secuencia dentro de 10s.
@@ -858,7 +892,79 @@
   function _addSequence(n) {
     _sentSequence.push({ number: n, timestamp: Date.now() });
     if (_sentSequence.length > _SEQUENCE_MAX) _sentSequence.shift();
+    _iframeLastCaptureTime = Date.now(); // v7.6: Actualizar timestamp de captura
+    // v7.6: Si habia un gap recovery activo, desactivarlo (se capturó un número)
+    if (_gapRecoveryActive) {
+      _gapRecoveryActive = false;
+      console.log('[RollerWin] GAP RECOVERY: número capturado, desactivando scanner');
+    }
   }
+
+  // v7.6: Función de Gap Recovery — escaneo agresivo del DOM
+  // Busca el número visible en el DOM usando selectores más amplios.
+  // Se usa cuando hay un gap >22s sin capturas o al reconectar WS.
+  function _gapRecoveryScan() {
+    var gapSelectors = [
+      '[class*="winning-number"]',
+      '[class*="winning-pocket"]',
+      '[class*="result-display"]',
+      '[class*="result-value"]',
+      '[class*="current-result"]',
+      '[class*="game-number-display"]',
+      '[class*="number-display"]',
+      '[data-result-number]',
+      '[data-winning-number]',
+      '[data-game-result]',
+      '[class*="overlay"] [class*="result"]',
+      '[class*="announced"]',
+      '[class*="round-result"]',
+      '[class*="roulette-result"]',
+      '[class*="live-result"]',
+      '[class*="last-number"]',
+      '[class*="lastnumber"]',
+      '[class*="game-result"]'
+    ];
+
+    for (var i = 0; i < gapSelectors.length; i++) {
+      try {
+        var els = document.querySelectorAll(gapSelectors[i]);
+        for (var j = 0; j < els.length; j++) {
+          var text = (els[j].textContent || '').trim();
+          var num = parseInt(text, 10);
+          if (!isNaN(num) && num >= 0 && num <= 36 && String(num) === text) {
+            console.log('[RollerWin] GAP RECOVERY: número ' + num + ' encontrado en DOM (' + gapSelectors[i] + ')');
+            sendToServer(num, 'GAP-RECOVERY:' + gapSelectors[i]);
+            return true;
+          }
+        }
+      } catch(e) {}
+    }
+    return false;
+  }
+
+  // v7.6: Iniciar Gap Recovery Scanner
+  function startGapRecovery() {
+    if (_gapRecoveryActive) return;
+    _gapRecoveryActive = true;
+    console.log('[RollerWin] GAP RECOVERY: activado (sin capturas >' + Math.round(_GAP_THRESHOLD/1000) + 's)');
+    // Escanear inmediatamente
+    _gapRecoveryScan();
+    // Escanear cada 3s
+    _gapRecoveryTimer = setInterval(function() {
+      if (!_gapRecoveryActive) {
+        clearInterval(_gapRecoveryTimer);
+        return;
+      }
+      _gapRecoveryScan();
+    }, _GAP_SCAN_INTERVAL);
+  }
+
+  // v7.6: Checker periódico para activar Gap Recovery
+  setInterval(function() {
+    if (!_gapRecoveryActive && Date.now() - _iframeLastCaptureTime > _GAP_THRESHOLD) {
+      startGapRecovery();
+    }
+  }, 5000); // Check cada 5s
 
   // v6.4: Solicitar sincronización del último número al parent
   // Esto previene que cualquier hook re-envíe el último resultado
@@ -996,9 +1102,22 @@
       console.log('[RollerWin] WS en iframe:', (url || '').substring(0, 80));
       var ws = protocols ? new OrigWS(url, protocols) : new OrigWS(url);
 
+      // v7.6: WS Reconnect Detection — trackea closes y opens
+      if (_wsWasClosed) {
+        _wsReconnectCount++;
+        console.log('[RollerWin] WS RECONNECT #' + _wsReconnectCount + ' detectado — activando Gap Recovery');
+        _wsWasClosed = false;
+        // Activar Gap Recovery inmediatamente para capturar el número perdido
+        setTimeout(function() {
+          startGapRecovery();
+        }, 1000); // Esperar 1s a que el WS envie estado actual
+      }
+
       ws.addEventListener('message', function(e) {
         try {
           var data = e.data;
+          // v7.6: Marcar actividad (para iframe dead detection)
+          _iframeLastActivity = Date.now();
           if (typeof data !== 'string') {
             if (data instanceof ArrayBuffer) {
               try { data = String.fromCharCode.apply(null, new Uint8Array(data)); } catch(er) { return; }
@@ -1040,6 +1159,13 @@
             try { extractObj(JSON.parse(data), 0, 'ws'); extractFromText(data, 'ws'); } catch(err) {}
           }
         } catch(err) {}
+      });
+
+      // v7.6: Trackear cuando el WS se cierra para detectar reconnects
+      ws.addEventListener('close', function(e) {
+        console.log('[RollerWin] WS CERRADO (code:' + e.code + ' reason:' + (e.reason || 'none') + ')');
+        _wsWasClosed = true;
+        _iframeDeadNotified = false; // Reset para permitir nueva notificación si se reconecta
       });
 
       return ws;
@@ -1233,18 +1359,24 @@
 
     function setup() {
       if (!document.body) return;
-      // Escaneo inicial retrasado
-      setTimeout(scanDOM, 3000);
+      // v7.6: Escaneo inicial rapido (500ms en vez de 3s)
+      // Esto es critico post-recovery: el número del gap puede estar visible
+      // inmediatamente al cargar el iframe.
+      setTimeout(scanDOM, 500);
+      // Segundo escaneo a los 2s (por si el DOM tarda en renderizar)
+      setTimeout(scanDOM, 2000);
 
-      // MutationObserver con debounce de 2s (menos agresivo que v4.9)
+      // v7.6: MutationObserver con debounce de 500ms (era 2s)
+      // 2s era muy lento: si un número aparece y cambia en <2s (common durante
+      // restart de mesa), se pierde. 500ms captura cambios rápidos.
       var timer = null;
       new MutationObserver(function() {
         if (timer) return;
-        timer = setTimeout(function() { timer = null; scanDOM(); }, 2000);
+        timer = setTimeout(function() { timer = null; scanDOM(); }, 500);
       }).observe(document.body, { childList: true, subtree: true, characterData: true });
 
-      // Scan periodico cada 8s (era 5s en v4.9)
-      setInterval(scanDOM, 8000);
+      // Scan periodico cada 6s (era 8s)
+      setInterval(scanDOM, 6000);
     }
 
     if (document.readyState === 'loading') {
@@ -1307,5 +1439,5 @@
     window.EventSource = Proxy;
   })();
 
-  console.log('[RollerWin] v7.5 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup 9s + SEQ 10s + Per-Number');
+  console.log('[RollerWin] v7.6 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup 9s + SEQ 10s + Per-Number + GapRecovery');
 })();
