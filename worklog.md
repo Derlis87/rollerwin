@@ -286,3 +286,30 @@ Stage Summary:
 - Ninguna ventana puede bloquear repeticiones legítimas (18s > 12s > 10s > 9s)
 - processedIdsRef previene duplicados toggle-on (el problema original del usuario)
 - Link de descarga ahora apunta al ZIP correcto (v7.5)
+---
+Task ID: 2
+Agent: main
+Task: v7.6 - Fix recovery: Gap Recovery Scanner + sync fix + faster detection
+
+Work Log:
+- Analyzed inject-main.js recovery logic in depth (1311 lines)
+- Identified 4 root causes for missed numbers during table restart
+- Root Cause 1: syncLastNumber set _lastSentTimestamp, blocking DEDUP-TIME for 9s after iframe reload
+- Root Cause 2: MutationObserver debounce of 2s too slow to catch brief number appearances during restart
+- Root Cause 3: No mechanism to recover missed numbers after a capture gap
+- Root Cause 4: iframe dead detection at 90s too slow (5 lost numbers)
+- Implemented v7.6 with all fixes
+- Updated all version labels across all files (content.js, background.js, manifest.json, DashboardLive.tsx)
+- Built RollerWin-Capture-v7.6.zip
+- Committed and pushed to GitHub/Render
+
+Stage Summary:
+- v7.6 deployed with 4 critical recovery fixes
+- Gap Recovery Scanner: scans DOM every 3s when gap >22s
+- syncLastNumber no longer blocks DEDUP-TIME
+- MutationObserver debounce reduced from 2s to 500ms
+- iframe dead detection reduced from 90s to 45s
+- Parent reload reduced from 120s to 60s
+- WS reconnect detection triggers immediate Gap Recovery
+- ZIP available at /RollerWin-Capture-v7.6.zip
+- User MUST download new ZIP and reinstall extension
