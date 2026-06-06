@@ -3,7 +3,7 @@
   "name": "RollerWin Capture",
   "version": "7.7.0",
   "description": "Captura numeros de ruleta Evolution en Betfury y los envia a RollerWin",
-  "permissions": ["scripting", "activeTab", "storage", "webNavigation", "tabs"],
+  "permissions": ["scripting", "activeTab", "storage", "webNavigation"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"

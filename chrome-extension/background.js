@@ -32,61 +32,6 @@ function isBetfury(url) {
   return url.indexOf('betfury.com') >= 0 || url.indexOf('betfury.io') >= 0;
 }
 
-function isBetfuryGame(url) {
-  if (!url) return false;
-  return url.indexOf('betfury.com') >= 0 && url.indexOf('/casino/games/') >= 0;
-}
-
-// ══════════════════════════════════════
-// v7.7: CERRAR pestañas duplicadas de betfury game
-// Cuando recovery abre una nueva pestaña, detectarla y cerrarla.
-// Solo mantener UNA pestaña de juego abierta.
-// ══════════════════════════════════════
-function closeDuplicateBetfuryTabs(newTabId) {
-  chrome.tabs.query({ url: '*://*.betfury.com/*casino/games/*' }, function(tabs) {
-    if (tabs.length > 1) {
-      // Hay mas de una pestaña de juego — cerrar la mas nueva
-      // (la original es la que ya estaba capturando)
-      for (var i = 0; i < tabs.length; i++) {
-        if (tabs[i].id === newTabId && tabs[i].url && tabs[i].url.indexOf('/casino/games/') !== -1) {
-          console.log('[RW BG] Cerrando pestaña DUPLICADA de juego (tab ' + tabs[i].id + '):', tabs[i].url);
-          chrome.tabs.remove(tabs[i].id);
-          return;
-        }
-      }
-    }
-  });
-}
-
-// Detectar cuando se abre una nueva pestaña — verificar duplicados
-chrome.tabs.onCreated.addListener(function(tab) {
-  // Esperar un poco a que la URL se resuelva (puede empezar como about:blank)
-  if (!tab.url || tab.url === 'about:blank' || !isBetfuryGame(tab.url)) {
-    // Programar verificación retrasada
-    setTimeout(function() {
-      chrome.tabs.get(tab.id, function(t) {
-        if (t && isBetfuryGame(t.url)) {
-          console.log('[RW BG] Nueva pestaña de juego detectada (retrasada):', t.url);
-          closeDuplicateBetfuryTabs(tab.id);
-        }
-      });
-    }, 3000);
-    return;
-  }
-  console.log('[RW BG] Nueva pestaña de juego detectada:', tab.url);
-  closeDuplicateBetfuryTabs(tab.id);
-});
-
-// También verificar cuando una pestaña cambia de URL a betfury game
-chrome.tabs.onUpdated.addListener(function(tabId, changeInfo, tab) {
-  if (changeInfo.url && isBetfuryGame(changeInfo.url)) {
-    setTimeout(function() {
-      console.log('[RW BG] Tab navegó a juego:', changeInfo.url);
-      closeDuplicateBetfuryTabs(tabId);
-    }, 1000);
-  }
-});
-
 // ══════════════════════════════════════
 // Detectar carga de tab principal
 // ══════════════════════════════════════
