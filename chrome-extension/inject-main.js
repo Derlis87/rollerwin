@@ -495,7 +495,9 @@
         for (var j = 0; j < texts.length; j++) {
           if (bt === texts[j]) {
             console.log('[RollerWin] Click boton [' + el.tagName.toLowerCase() + ']: "' + bt + '"');
-            el.click();
+            // v7.7 FIX: Bloquear window.open DURANTE el click para evitar
+            // que BetFury abra nueva pestaña al hacer click en OK/VOLVER
+            _safeClick(el);
             return true;
           }
         }
@@ -511,7 +513,7 @@
             for (var j = 0; j < texts.length; j++) {
               if (bt === texts[j]) {
                 console.log('[RollerWin] Click fallback [' + el.tagName.toLowerCase() + ']: "' + bt + '"');
-                el.click();
+                _safeClick(el);
                 return true;
               }
             }
@@ -519,6 +521,14 @@
         }
       }
       return false;
+    }
+
+    // v7.7: Click seguro — bloquea window.open durante el click y lo restaura despues
+    function _safeClick(el) {
+      var _realOpen = window.open;
+      window.open = function() { return null; };
+      try { el.click(); } catch(e) { try { el.click(); } catch(e2) {} }
+      window.open = _realOpen;
     }
 
     // ════════════════════════════════════════════════════════
@@ -656,7 +666,7 @@
             continue;
           }
           console.log('[RollerWin] Boton JUGAR encontrado [' + btns[i].tagName.toLowerCase() + '] — click!');
-          btns[i].click();
+          _safeClick(btns[i]);
           _playButtonCooldown = Date.now() + 5000; // Cooldown 5s (era 10s)
           _isRecovering = true;
           _saveState();
@@ -803,7 +813,11 @@
           var bt = (okBtns[j].textContent || '').trim();
           if (bt === 'OK' || bt === 'Ok' || bt === 'ok' || bt === 'ACEPTAR' || bt === 'Aceptar') {
             console.log('[RollerWin] IFRAME: Click OK en modal sesion');
-            okBtns[j].click();
+            // v7.7: Safe click — bloquear window.open durante el click
+            var _rwOpen = window.open;
+            window.open = function() { return null; };
+            try { okBtns[j].click(); } catch(e) {}
+            window.open = _rwOpen;
           }
         }
         return true;
