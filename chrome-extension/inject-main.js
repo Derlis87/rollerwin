@@ -324,42 +324,8 @@
       }
     }, 10000);
 
-    // ════════════════════════════════════════════════════════
-    // v7.7 FIX: BLOQUEAR APERTURA DE NUEVAS PESTAÑAS
-    // BetFury abre nuevas pestañas durante recovery de la mesa.
-    // Solo interceptar y bloquear — NO redirigir, NO cerrar nada.
-    // ════════════════════════════════════════════════════════
-
-    // 1) Bloquear window.open() para URLs de betfury — solo return null
-    var _origWindowOpen = window.open;
-    if (_origWindowOpen && !_origWindowOpen._rwBlocked) {
-      _origWindowOpen._rwBlocked = true;
-      window.open = function(url, target, features) {
-        try {
-          var openUrl = typeof url === 'string' ? url : (url && url.toString ? url.toString() : '');
-          if (openUrl.indexOf('betfury') !== -1) {
-            console.log('[RollerWin] window.open() BLOQUEADO (no new tab):', openUrl);
-            return null;
-          }
-        } catch(e) {}
-        return _origWindowOpen.apply(this, arguments);
-      };
-    }
-
-    // 2) Bloquear clicks en <a target="_blank"> que apunten a betfury
-    document.addEventListener('click', function(e) {
-      try {
-        var link = e.target.closest('a');
-        if (!link) return;
-        var target = (link.getAttribute('target') || '').toLowerCase();
-        var href = (link.getAttribute('href') || '').toLowerCase();
-        if ((target === '_blank' || target === 'new' || target === '_new') && href.indexOf('betfury') !== -1) {
-          e.preventDefault();
-          e.stopPropagation();
-          console.log('[RollerWin] <a target=' + target + '> BLOQUEADO:', href);
-        }
-      } catch(err) {}
-    }, true);
+    // NOTA v7.7: El manejo de pestañas duplicadas se hace en background.js
+    // (chrome.tabs.onCreated) — NO se intercepta nada desde la página.
 
     // Recibir timestamp de última captura
     // v6.3 FIX: NO resetear estado de recovery durante una recuperación activa
