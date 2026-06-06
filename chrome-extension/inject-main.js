@@ -54,6 +54,15 @@
   if (window.__rwMainV73) return;
   window.__rwMainV73 = true;
 
+  // v7.7 GUARD CRÍTICO: NUNCA ejecutar fuera de betfury.com/betfury.io
+  // Si este script se inyecta accidentalmente en RollerWin u otra página,
+  // el recovery haría location.replace() y REEMPLAZARÍA esa página con BetFury.
+  var _rwHostname = (location.hostname || '').toLowerCase();
+  if (_rwHostname.indexOf('betfury') === -1) {
+    console.log('[RollerWin] HOSTNAME NO ES BETFURY (' + _rwHostname + ') — script detenido.');
+    return;
+  }
+
   var SERVER = 'https://rollerwin3.onrender.com';
   var lastNum = -1;
   var lastTime = 0;
