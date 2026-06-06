@@ -326,12 +326,11 @@
 
     // ════════════════════════════════════════════════════════
     // v7.7 FIX: BLOQUEAR APERTURA DE NUEVAS PESTAÑAS
-    // BetFury/evolution abre nuevas pestañas durante el recovery
-    // de la mesa del juego. Interceptar window.open() y clicks
-    // en <a target="_blank"> para forzar todo a la MISMA pestaña.
+    // BetFury abre nuevas pestañas durante recovery de la mesa.
+    // Solo interceptar y bloquear — NO redirigir, NO cerrar nada.
     // ════════════════════════════════════════════════════════
 
-    // 1) Interceptar window.open() — si la URL es betfury, redirigir en la misma pestaña
+    // 1) Bloquear window.open() para URLs de betfury — solo return null
     var _origWindowOpen = window.open;
     if (_origWindowOpen && !_origWindowOpen._rwBlocked) {
       _origWindowOpen._rwBlocked = true;
@@ -339,21 +338,15 @@
         try {
           var openUrl = typeof url === 'string' ? url : (url && url.toString ? url.toString() : '');
           if (openUrl.indexOf('betfury') !== -1) {
-            console.log('[RollerWin] window.open() BLOQUEADO — redirigiendo en misma pestaña:', openUrl);
-            if (_gameUrl && _gameUrl.indexOf('/casino/games/') !== -1) {
-              location.replace(_gameUrl);
-            } else {
-              location.replace(ROULETTE_URL);
-            }
-            return null; // No abrir nueva pestaña
+            console.log('[RollerWin] window.open() BLOQUEADO (no new tab):', openUrl);
+            return null;
           }
         } catch(e) {}
-        console.log('[RollerWin] window.open() permitido (no es betfury):', url);
         return _origWindowOpen.apply(this, arguments);
       };
     }
 
-    // 2) Interceptar clicks en <a> con target="_blank" que apunten a betfury
+    // 2) Bloquear clicks en <a target="_blank"> que apunten a betfury
     document.addEventListener('click', function(e) {
       try {
         var link = e.target.closest('a');
@@ -363,75 +356,10 @@
         if ((target === '_blank' || target === 'new' || target === '_new') && href.indexOf('betfury') !== -1) {
           e.preventDefault();
           e.stopPropagation();
-          console.log('[RollerWin] <a target=' + target + '> BLOQUEADO — redirigiendo en misma pestaña:', href);
-          if (_gameUrl && _gameUrl.indexOf('/casino/games/') !== -1) {
-            location.replace(_gameUrl);
-          } else {
-            location.replace(ROULETTE_URL);
-          }
+          console.log('[RollerWin] <a target=' + target + '> BLOQUEADO:', href);
         }
       } catch(err) {}
-    }, true); // capture phase — antes de que BetFury lo maneje
-
-    // 3) Detectar y cerrar pestañas huérfanas (otra pestaña de betfury abierta por el recovery)
-    // v7.7 FIX: Persistir tabId en localStorage para que sobreviva recargas.
-    // Si la pestaña recarga (recovery), reusa el MISMO id y no se auto-cierra.
-    var RW_TAB_KEY = 'rollerwin_active_tab';
-    var _savedTab = JSON.parse(localStorage.getItem(RW_TAB_KEY) || '{}');
-    var _myTabId = _savedTab.id || Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
-    var _tabCheckInterval = null;
-
-    function _claimActiveTab() {
-      try {
-        var active = JSON.parse(localStorage.getItem(RW_TAB_KEY) || '{}');
-        // Si el ID guardado es el nuestro — somos la misma pestaña recargándose, SIEMPRE activa
-        if (active.id === _myTabId) {
-          console.log('[RollerWin] Tab ACTIVO (mismo id tras recarga):', _myTabId);
-          localStorage.setItem(RW_TAB_KEY, JSON.stringify({ id: _myTabId, timestamp: Date.now() }));
-          return true;
-        }
-        // Si hay otro tab activo con menos de 30s — SOMOS una pestaña nueva/extra
-        if (active.id && active.id !== _myTabId && Date.now() - active.timestamp < 30000) {
-          // Somos una pestaña secundaria — auto-cerrarnos
-          console.log('[RollerWin] Pestaña SECUNDARIA detectada (activa: ' + active.id + ') — auto-cerrando...');
-          setTimeout(function() {
-            try { window.close(); } catch(e) {}
-            setTimeout(function() {
-              try { location.replace('https://betfury.com/es/casino'); } catch(e) {}
-            }, 1000);
-          }, 500);
-          return false;
-        }
-        // No hay claim activo o expiró — reclamamos
-        console.log('[RollerWin] Tab ACTIVO (nuevo claim):', _myTabId);
-        localStorage.setItem(RW_TAB_KEY, JSON.stringify({ id: _myTabId, timestamp: Date.now() }));
-        return true;
-      } catch(e) { return true; }
-    }
-
-    var _isActiveTab = _claimActiveTab();
-    // Renovar claim cada 10s
-    _tabCheckInterval = setInterval(function() {
-      if (_isActiveTab) {
-        try {
-          localStorage.setItem(RW_TAB_KEY, JSON.stringify({ id: _myTabId, timestamp: Date.now() }));
-        } catch(e) {}
-      }
-    }, 10000);
-
-    // Detectar si otra pestaña se convirtió en la activa (storage event)
-    window.addEventListener('storage', function(e) {
-      if (e.key === RW_TAB_KEY && _isActiveTab) {
-        try {
-          var active = JSON.parse(e.newValue || '{}');
-          if (active.id && active.id !== _myTabId) {
-            console.log('[RollerWin] Otra pestaña tomó control — nos convertimos en secundarios');
-            _isActiveTab = false;
-            if (_tabCheckInterval) clearInterval(_tabCheckInterval);
-          }
-        } catch(err) {}
-      }
-    });
+    }, true);
 
     // Recibir timestamp de última captura
     // v6.3 FIX: NO resetear estado de recovery durante una recuperación activa
