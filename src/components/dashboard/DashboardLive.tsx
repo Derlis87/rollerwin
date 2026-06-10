@@ -198,6 +198,36 @@ export function DashboardLive() {
   const [selectedCasino, setSelectedCasino] = useState(CASINO_CONFIGS[0].id)
   const [selectedTable, setSelectedTable] = useState(CASINO_CONFIGS[0].tables[0].id)
   const [selectedBetType, setSelectedBetType] = useState<BetType>('color')
+
+  // Extension table selector (synced with server)
+  const [extSelectedTable, setExtSelectedTable] = useState('https://betfury.com/es/casino/games/roulette-live-by-evolution')
+  const [tableSaving, setTableSaving] = useState(false)
+  const [tableSaved, setTableSaved] = useState(false)
+
+  const handleExtTableChange = useCallback(async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const val = e.target.value
+    setExtSelectedTable(val)
+    setTableSaving(true)
+    setTableSaved(false)
+    try {
+      await fetch('/api/capture/table-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ table: val }),
+      })
+      setTableSaved(true)
+      setTimeout(() => setTableSaved(false), 2000)
+    } catch {}
+    setTableSaving(false)
+  }, [])
+
+  // Load saved table on mount
+  useEffect(() => {
+    fetch('/api/capture/table-config')
+      .then(r => r.json())
+      .then(data => { if (data.selectedTable) setExtSelectedTable(data.selectedTable) })
+      .catch(() => {})
+  }, [])
   
   // Game state
   const [numbers, setNumbers] = useState<number[]>([])
@@ -2071,8 +2101,26 @@ export function DashboardLive() {
                             <li>En Chrome, abrí <strong className="text-zinc-300">chrome://extensions</strong></li>
                             <li>Activá <strong className="text-zinc-300">"Modo de desarrollador"</strong></li>
                             <li>Click en <strong className="text-zinc-300">"Cargar extensión sin empaquetar"</strong> y seleccioná la carpeta extraida</li>
-                            <li>Abri la mesa de Evolution en Betfury y Listo!</li>
+                            <li>Abri la mesa de ruleta en Betfury y Listo!</li>
                           </ol>
+                          <div className="pt-1 border-t border-zinc-700/50 space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[9px] text-zinc-500 font-medium">MESA DE RULETA</span>
+                              {tableSaving && <span className="text-[8px] text-green-400">Guardando...</span>}
+                              {tableSaved && <span className="text-[8px] text-green-400">Guardado!</span>}
+                            </div>
+                            <select
+                              value={extSelectedTable}
+                              onChange={handleExtTableChange}
+                              className="w-full h-7 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-300 px-2 cursor-pointer outline-none focus:border-green-500/50"
+                            >
+                              <option value="https://betfury.com/es/casino/games/roulette-live-by-evolution">Evolution Live Roulette</option>
+                              <option value="https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play">Pragmatic Roulette Azure</option>
+                            </select>
+                            <p className="text-[8px] text-zinc-600 text-center">
+                              La extension usara esta mesa en el recovery
+                            </p>
+                          </div>
                           <Button
                             variant="outline"
                             size="sm"

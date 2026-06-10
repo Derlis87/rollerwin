@@ -280,15 +280,26 @@
     var _lastCaptureTime = Date.now();
     var _lastKeepAliveResponse = 'pending';
 
-    // v7.6.3: Mesa seleccionable desde popup.html
-    // Lee la mesa elegida por el usuario desde localStorage
-    // Default: Evolution Live Roulette
+    // v7.6.3: Mesa seleccionable desde popup.html o dashboard de RollerWin
+    // 1) Lee del servidor (prioridad máxima — configurado desde el dashboard)
+    // 2) Lee de localStorage (configurado desde el popup de la extensión)
+    // 3) Default: Evolution Live Roulette
     var RW_TABLES = [
       'https://betfury.com/es/casino/games/roulette-live-by-evolution',
       'https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play'
     ];
     var _selectedTable = localStorage.getItem('rollerwin_selected_table');
     var ROULETTE_URL = (_selectedTable && RW_TABLES.indexOf(_selectedTable) !== -1) ? _selectedTable : RW_TABLES[0];
+
+    // Leer mesa configurada desde el servidor de RollerWin (dashboard)
+    try {
+      fetch(SERVER + '/api/capture/table-config').then(function(r) { return r.json(); }).then(function(data) {
+        if (data && data.selectedTable && RW_TABLES.indexOf(data.selectedTable) !== -1) {
+          ROULETTE_URL = data.selectedTable;
+          console.log('[RollerWin] Mesa desde servidor:', ROULETTE_URL);
+        }
+      }).catch(function() {});
+    } catch(e) {}
 
     // ═══ PERSISTENCIA en localStorage ═══
     // El estado de recovery sobrevive recargas de pagina
