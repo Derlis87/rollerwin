@@ -9,6 +9,7 @@ const { getLaunchOptions, createStealthContext, getProfile } = require('./browse
 const { startHumanBehavior, stopHumanBehavior, humanPause } = require('./browser/human-behavior');
 const { RollerWinAPI } = require('./api/rollerwin-api');
 const { BetFuryCasino } = require('./casinos/betfury');
+const { PinnacleCasino } = require('./casinos/pinnacle');
 const { StakeCasino } = require('./casinos/stake');
 const { Orchestrator } = require('./orchestrator');
 const log = require('./utils/logger');
@@ -52,6 +53,9 @@ async function main() {
   const casinoInstances = [];
   if (config.betfuryEnabled) {
     casinoInstances.push(new BetFuryCasino(config, apiClient));
+  }
+  if (config.pinnacleEnabled) {
+    casinoInstances.push(new PinnacleCasino(config, apiClient));
   }
   if (config.stakeEnabled) {
     casinoInstances.push(new StakeCasino(config, apiClient));

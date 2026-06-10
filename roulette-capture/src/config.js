@@ -9,11 +9,15 @@ function loadConfig() {
   const defaults = {
     ROLLERWIN_API_URL: 'https://rollerwin3.onrender.com/api/capture/receive',
     BETFURY_ENABLED: 'true',
-    STAKE_ENABLED: 'true',
+    PINNACLE_ENABLED: 'true',
+    STAKE_ENABLED: 'false',
     BETFURY_ROULETTE_URL: 'https://betfury.com/es/casino/games/roulette-live-by-evolution',
+    PINNACLE_ROULETTE_URL: 'https://www.pinnacle.com/es/casino/live/roulette',
     STAKE_ROULETTE_URL: 'https://stake.com/casino/games/evolution/roulette',
     BETFURY_EMAIL: '',
     BETFURY_PASSWORD: '',
+    PINNACLE_EMAIL: '',
+    PINNACLE_PASSWORD: '',
     STAKE_EMAIL: '',
     STAKE_PASSWORD: '',
     MOUSE_MOVE_INTERVAL_MIN: '2000',
@@ -52,6 +56,7 @@ function loadConfig() {
 
   // Parsear booleans
   config.betfuryEnabled = config.BETFURY_ENABLED === 'true';
+  config.pinnacleEnabled = config.PINNACLE_ENABLED === 'true';
   config.stakeEnabled = config.STAKE_ENABLED === 'true';
   config.headed = config.HEADED === 'true';
 
@@ -74,6 +79,7 @@ function loadConfig() {
   // Casinos activos ordenados
   config.activeCasinos = [];
   if (config.betfuryEnabled) config.activeCasinos.push('betfury');
+  if (config.pinnacleEnabled) config.activeCasinos.push('pinnacle');
   if (config.stakeEnabled) config.activeCasinos.push('stake');
 
   if (config.activeCasinos.length === 0) {
