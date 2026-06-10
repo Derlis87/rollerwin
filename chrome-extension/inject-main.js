@@ -280,8 +280,15 @@
     var _lastCaptureTime = Date.now();
     var _lastKeepAliveResponse = 'pending';
 
-    // URL directa de la mesa de Evolution Live Roulette
-    var ROULETTE_URL = 'https://betfury.com/es/casino/games/roulette-live-by-evolution';
+    // v7.6.3: Mesa seleccionable desde popup.html
+    // Lee la mesa elegida por el usuario desde localStorage
+    // Default: Evolution Live Roulette
+    var RW_TABLES = [
+      'https://betfury.com/es/casino/games/roulette-live-by-evolution',
+      'https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play'
+    ];
+    var _selectedTable = localStorage.getItem('rollerwin_selected_table');
+    var ROULETTE_URL = (_selectedTable && RW_TABLES.indexOf(_selectedTable) !== -1) ? _selectedTable : RW_TABLES[0];
 
     // ═══ PERSISTENCIA en localStorage ═══
     // El estado de recovery sobrevive recargas de pagina
@@ -788,7 +795,7 @@
       } catch(e) {}
     }, 10000);
 
-    console.log('[RollerWin] v7.7 NO-NEWTAB+GAP-RECOVERY+DEDUP-SEQ-10s+PER-NUMBER | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
+    console.log('[RollerWin] v7.6.3 MULTI-MESA+SAFE-CLICK | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
 
   }
 

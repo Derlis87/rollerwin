@@ -101,4 +101,4 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
   return true;
 });
 
-console.log('[RollerWin BG] Service Worker v7.7 iniciado');
+console.log('[RollerWin BG] Service Worker v7.6.3 iniciado');
