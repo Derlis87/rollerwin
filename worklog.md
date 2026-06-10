@@ -313,3 +313,24 @@ Stage Summary:
 - WS reconnect detection triggers immediate Gap Recovery
 - ZIP available at /RollerWin-Capture-v7.6.zip
 - User MUST download new ZIP and reinstall extension
+---
+Task ID: 1
+Agent: main
+Task: v7.6.3 - Agregar selector de mesa en popup (Evolution + Pragmatic Azure)
+
+Work Log:
+- Agregué lista de mesas disponibles en popup.html con dropdown selector
+- Mesas: Evolution Live Roulette + Pragmatic Roulette Azure
+- La selección se guarda en localStorage (key: rollerwin_selected_table)
+- Modifiqué inject-main.js para leer ROULETTE_URL desde localStorage en vez de hardcodear
+- Se valida que la mesa guardada esté en la lista de mesas permitidas
+- Actualicé versiones a 7.6.3 en: manifest.json, content.js, background.js, popup.html, DashboardLive.tsx
+- Corregí DashboardLive.tsx: URL de descarga apuntaba a archivo viejo, ahora usa /api/download-extension
+- Rebuild ZIP y actualicé route.ts con nuevo base64
+- Force push a GitHub/Render (conflictos de rebase con commits viejos de v7.7)
+
+Stage Summary:
+- v7.6.3 desplegada con selector de mesa en popup
+- Para cambiar de mesa: click en ícono de extensión → seleccionar mesa → recargar página de BetFury
+- El recovery automáticamente navega a la mesa seleccionada
+- NO se tocó código de captura ni dedup (Motor V6.0 intacto)
