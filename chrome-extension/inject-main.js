@@ -1,5 +1,5 @@
-// RollerWin Capture v7.7 - MAIN WORLD DETECTION ENGINE
-// SOLO detecta numeros desde iframes (donde corre Evolution)
+// RollerWin Capture v7.6.1 - MAIN WORLD DETECTION ENGINE
+// Soporta Evolution Y Pragmatic Play — seleccion de mesa desde localStorage
 // El parent page SOLO retransmite lo que llega via postMessage desde iframes
 // FIX v5.0: DOM Scanner capturaba numeros del historial (circulos viejos)
 // FIX v5.1: extractObj toma ULTIMO elemento, regex ultimo match, excluye URLs historial
@@ -48,29 +48,16 @@
 //     al reconectar WS.
 //   - BUG 4 (iframe dead 90s muy lento): Reducido a 45s + detección de
 //     WS reconnect para escaneo inmediato del DOM.
+// FIX v7.6.1: 3 CAMBIOS MINIMOS sobre V7.6 (NO se toca captura):
+//   - FIX 1: ROULETTE_URL dinamico desde localStorage (soporta Evolution + Pragmatic)
+//   - FIX 2: _safeClick() bloquea window.open durante .click() (sin pestañas duplicadas)
+//   - FIX 3: iframe dead envia 'rollerwin-iframe-dead' (separado de session-expired)
+//     para evitar loop de recovery cuando el iframe esta vivo pero no captura.
 (function() {
   'use strict';
 
   if (window.__rwMainV73) return;
   window.__rwMainV73 = true;
-
-  // v7.7 GUARD: Solo ejecutar en betfury.com/betfury.io (parent) O en iframes de
-  // proveedores de casino conocidos (Evolution, Pragmatic, etc.).
-  // El recovery (location.replace) SOLO corre en el parent (!isInIframe),
-  // asi que es seguro permitir iframes de otros dominios.
-  var _rwHostname = (location.hostname || '').toLowerCase();
-  var _isBetfury = _rwHostname.indexOf('betfury') !== -1;
-  var _isGameProvider = _rwHostname.indexOf('evolution') !== -1 ||
-    _rwHostname.indexOf('pragmatic') !== -1 ||
-    _rwHostname.indexOf('ezugi') !== -1 ||
-    _rwHostname.indexOf('softswiss') !== -1;
-  // En iframes, permitir cualquier dominio (el parent check protege el recovery)
-  var isInIframe = (window.self !== window.top);
-  if (!_isBetfury && !isInIframe) {
-    console.log('[RollerWin] HOSTNAME NO ES BETFURY Y NO ES IFRAME (' + _rwHostname + ') — script detenido.');
-    return;
-  }
-  console.log('[RollerWin] Hostname OK: ' + _rwHostname + (isInIframe ? ' [IFRAME]' : ' [PARENT]') + (_isGameProvider ? ' [PROVIDER]' : ''));
 
   var SERVER = 'https://rollerwin3.onrender.com';
   var lastNum = -1;
@@ -139,6 +126,7 @@
     }
   }
 
+  var isInIframe = (window.self !== window.top);
   var hostname = location.hostname || '';
 
   var RED = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
@@ -288,26 +276,13 @@
     var _lastCaptureTime = Date.now();
     var _lastKeepAliveResponse = 'pending';
 
-    // v7.6.3: Mesa seleccionable desde popup.html o dashboard de RollerWin
-    // 1) Lee del servidor (prioridad máxima — configurado desde el dashboard)
-    // 2) Lee de localStorage (configurado desde el popup de la extensión)
-    // 3) Default: Evolution Live Roulette
+    // v7.6.1 FIX 1: ROULETTE_URL dinamico — soporta Evolution y Pragmatic
     var RW_TABLES = [
       'https://betfury.com/es/casino/games/roulette-live-by-evolution',
       'https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play'
     ];
     var _selectedTable = localStorage.getItem('rollerwin_selected_table');
     var ROULETTE_URL = (_selectedTable && RW_TABLES.indexOf(_selectedTable) !== -1) ? _selectedTable : RW_TABLES[0];
-
-    // Leer mesa configurada desde el servidor de RollerWin (dashboard)
-    try {
-      fetch(SERVER + '/api/capture/table-config').then(function(r) { return r.json(); }).then(function(data) {
-        if (data && data.selectedTable && RW_TABLES.indexOf(data.selectedTable) !== -1) {
-          ROULETTE_URL = data.selectedTable;
-          console.log('[RollerWin] Mesa desde servidor:', ROULETTE_URL);
-        }
-      }).catch(function() {});
-    } catch(e) {}
 
     // ═══ PERSISTENCIA en localStorage ═══
     // El estado de recovery sobrevive recargas de pagina
@@ -359,9 +334,6 @@
       }
     }, 10000);
 
-    // NOTA v7.7: El manejo de pestañas duplicadas se hace en background.js
-    // (chrome.tabs.onCreated) — NO se intercepta nada desde la página.
-
     // Recibir timestamp de última captura
     // v6.3 FIX: NO resetear estado de recovery durante una recuperación activa
     // Si el iframe envía un número mientras estamos recuperando, no debemos
@@ -381,6 +353,10 @@
     // El iframe NO puede ver el DOM del parent y viceversa.
     // Si el iframe detecta "SESIÓN FINALIZADA" o pierde conexion,
     // envia postMessage al parent para activar recovery.
+    // v7.6.1 FIX 3: SEPARAR iframe-dead de session-expired.
+    // El iframe envia 'rollerwin-iframe-dead' cuando no hay actividad >45s.
+    // Esto NO es session expired — el iframe puede estar vivo pero lento.
+    // Solo resetear contadores, NO iniciar recovery (evita loop).
     window.addEventListener('message', function(e) {
       try {
         if (e.data && e.data.source === 'rollerwin-session-expired') {
@@ -389,8 +365,9 @@
           _saveState();
           handleSessionExpired(e.data.reason);
         }
-        // v7.6.4: iframe-dead NO dispara handleSessionExpired — solo resetea contadores.
-        // Evita loop de recovery cuando la captura no funciona (ej: mesa Pragmatic).
+        // v7.6.1: iframe dead = sin actividad, pero NO es session expired
+        // Solo resetear contadores de captura para evitar que el parent
+        // haga reload por "sin capturas >60s" cuando el iframe esta vivo.
         if (e.data && e.data.source === 'rollerwin-iframe-dead') {
           console.log('[RollerWin] IFRAME inactivo: ' + e.data.reason + ' — NO es session expired, solo reset contadores');
           _lastCaptureTime = Date.now();
@@ -528,6 +505,27 @@
     // ════════════════════════════════════════════════════════
     // 2. BUSQUEDA AMPLIA de botones (button/div/span/a)
     // ════════════════════════════════════════════════════════
+    // v7.6.1 FIX 2: _safeClick() bloquea window.open durante .click()
+    // Esto previene que el boton "Jugar" o "OK" abra una nueva pestaña
+    // durante el recovery. Restaura window.open inmediatamente despues.
+    var _origWindowOpen = window.open;
+    function _safeClick(el) {
+      var _blocked = false;
+      var _restored = false;
+      window.open = function() {
+        _blocked = true;
+        console.log('[RollerWin] _safeClick: window.open BLOQUEADO (previene pestaña duplicada)');
+        return null;
+      };
+      try {
+        el.click();
+      } catch(e) {}
+      // Restaurar window.open inmediatamente
+      window.open = _origWindowOpen;
+      _restored = true;
+      return _blocked; // true si se bloqueo un window.open
+    }
+
     function clickAnyButtonByText(texts) {
       // Buscar en TODOS los elementos clicables, no solo <button>
       var selectors = 'button, a, [role="button"], div[onclick], span[onclick], [class*="btn"], [class*="button"]';
@@ -538,8 +536,6 @@
         for (var j = 0; j < texts.length; j++) {
           if (bt === texts[j]) {
             console.log('[RollerWin] Click boton [' + el.tagName.toLowerCase() + ']: "' + bt + '"');
-            // v7.7 FIX: Bloquear window.open DURANTE el click para evitar
-            // que BetFury abra nueva pestaña al hacer click en OK/VOLVER
             _safeClick(el);
             return true;
           }
@@ -564,14 +560,6 @@
         }
       }
       return false;
-    }
-
-    // v7.7: Click seguro — bloquea window.open durante el click y lo restaura despues
-    function _safeClick(el) {
-      var _realOpen = window.open;
-      window.open = function() { return null; };
-      try { el.click(); } catch(e) { try { el.click(); } catch(e2) {} }
-      window.open = _realOpen;
     }
 
     // ════════════════════════════════════════════════════════
@@ -722,18 +710,21 @@
     setInterval(checkPlayButton, 400); // v6.2: cada 400ms (era 1s)
 
     // ════════════════════════════════════════════════════════
-    // 6. IFRAME MUERTO: sin capturas >120s → reload COMPLETO
-    //    v7.6.4 FIX: Vuelto a 120s (estaba en 60s que causaba loops).
-    //    Si la captura no funciona (ej: mesa Pragmatic con estructura diferente),
-    //    60s causaba: reload → sin capturas → 60s → reload → loop infinito.
-    //    120s da tiempo al Gap Recovery y evita reinicios innecesarios.
+    // 6. IFRAME MUERTO: sin capturas >60s → reload COMPLETO
+    //    v6.2 FIX: 90s (era 35s que reiniciaba con sesion activa)
+    //    v6.6 FIX: Relajada la condicion — si no hay capturas >120s,
+    //    el iframe esta claramente muerto sin importar si la sesion
+    //    del parent esta activa (keep-alive chekea parent, no iframe).
+    //    v7.6 FIX: Reducido a 60s (era 120s). 120s = 6-7 números perdidos.
+    //    60s = máximo 3-4 perdidos, pero con Gap Recovery en el iframe,
+    //    muchos de esos números ya deberían haber sido capturados.
     // ════════════════════════════════════════════════════════
     setInterval(function() {
       var noCap = Date.now() - _lastCaptureTime;
       var onGame = location.href.indexOf('/casino/games/') !== -1;
 
-      // v7.6.4: Reload si estamos en juego Y sin capturas >120s
-      if (onGame && noCap > 120000 && !_recoveryInProgress) {
+      // v7.6: Reload si estamos en juego Y sin capturas >60s
+      if (onGame && noCap > 60000 && !_recoveryInProgress) {
         console.log('[RollerWin] Sin capturas ' + Math.round(noCap/1000) + 's — iframe muerto, reload completo...');
         _isRecovering = true;
         _sessionExpired = true;
@@ -819,7 +810,7 @@
       } catch(e) {}
     }, 10000);
 
-    console.log('[RollerWin] v7.7.0 DUAL-PROVIDER+ANTI-LOOP | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
+    console.log('[RollerWin] v7.6.1 GAP-RECOVERY+DEDUP-SEQ-10s+PER-NUMBER+SAFE-CLICK | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
 
   }
 
@@ -853,11 +844,7 @@
           var bt = (okBtns[j].textContent || '').trim();
           if (bt === 'OK' || bt === 'Ok' || bt === 'ok' || bt === 'ACEPTAR' || bt === 'Aceptar') {
             console.log('[RollerWin] IFRAME: Click OK en modal sesion');
-            // v7.7: Safe click — bloquear window.open durante el click
-            var _rwOpen = window.open;
-            window.open = function() { return null; };
-            try { okBtns[j].click(); } catch(e) {}
-            window.open = _rwOpen;
+            okBtns[j].click();
           }
         }
         return true;
@@ -894,20 +881,18 @@
     };
   }
 
-  // v7.6.4 FIX: Notificar parent si el iframe esta muerto (sin actividad >90s)
-  // IMPORTANTE: Usar 'rollerwin-iframe-dead' (NO 'rollerwin-session-expired').
-  // Antes se usaba session-expired, lo cual causaba location.replace() en loop
-  // infinito cuando la captura no funcionaba (ej: mesa Pragmatic con estructura diferente).
-  // Ahora el parent trata iframe-dead como un reload suave, NO como session expirada.
+  // v7.6.1 FIX 3: Notificar parent como 'rollerwin-iframe-dead' (NO session-expired)
+  // Esto evita que el parent inicie un recovery loop. El parent solo
+  // reseteara contadores al recibir este mensaje.
   setInterval(function() {
-    if (!_iframeDeadNotified && Date.now() - _iframeLastActivity > 90000) {
+    if (!_iframeDeadNotified && Date.now() - _iframeLastActivity > 45000) {
       _iframeDeadNotified = true;
-      console.log('[RollerWin] IFRAME: Sin actividad >90s → notificando parent (iframe-dead, NO session-expired) + Gap Recovery');
-      try { window.parent.postMessage({ source: 'rollerwin-iframe-dead', reason: 'iframe-dead-90s' }, '*'); } catch(e) {}
+      console.log('[RollerWin] IFRAME: Sin actividad >45s → notificando parent (iframe-dead, NO session-expired)');
+      try { window.parent.postMessage({ source: 'rollerwin-iframe-dead', reason: 'iframe-dead-45s' }, '*'); } catch(e) {}
       // v7.6: También activar Gap Recovery localmente
       startGapRecovery();
     }
-  }, 10000); // Check cada 10s
+  }, 10000); // Check cada 10s (era 15s)
 
   // v7.6 FIX: GAP RECOVERY SCANNER
   // Cuando hay un gap >22s sin capturas (mas de un giro de 18s), significa que
@@ -982,20 +967,7 @@
       '[class*="live-result"]',
       '[class*="last-number"]',
       '[class*="lastnumber"]',
-      '[class*="game-result"]',
-      // v7.7: Selectores Pragmatic Play
-      '[class*="gameResult"]',
-      '[class*="resultNumber"]',
-      '[class*="winningNumber"]',
-      '[class*="pocketNumber"]',
-      '[class*="lastResult"]',
-      '[class*="winner"]',
-      '[class*="winning"]',
-      '[class*="game-number"]',
-      '[class*="gameNumber"]',
-      '[data-result]',
-      '[data-number]',
-      '[data-value][class*="result"]'
+      '[class*="game-result"]'
     ];
 
     for (var i = 0; i < gapSelectors.length; i++) {
@@ -1068,19 +1040,13 @@
   }, 30000);
 
   // Campos de resultado de ruleta (alta confianza)
-  // v7.7: Agregados campos usados por Pragmatic Play y otros proveedores
   var RESULT_FIELDS = [
     'number', 'result', 'resultnumber', 'winningnumber', 'win_number',
     'game_number', 'roulette_number', 'ball_number', 'pocket', 'pocket_number',
     'winningpocket', 'pocketid', 'resultid', 'displaynumber',
     'roundresult', 'gameoutcome', 'finalnumber', 'outcome',
     'winningnumberdisplay', 'resultnumber', 'final_number', 'game_result',
-    'round_result', 'game_outcome', 'numberstr', 'numberstring',
-    // v7.7: Campos adicionales para Pragmatic Play
-    'resultnumber', 'winnum', 'win_num', 'result_num', 'gameresult',
-    'resultnumberstr', 'rouletteResult', 'resultNumberStr', 'numberstr',
-    'rouletteNumber', 'gameResult', 'winningNumberStr', 'pocketNumber',
-    'gameNumber', 'roundNumber', 'betResult', 'totalResult'
+    'round_result', 'game_outcome', 'numberstr', 'numberstring'
   ];
 
   function isResultField(key) {
@@ -1277,17 +1243,10 @@
       var promise = origFetch.apply(this, arguments);
 
       var urlLow = url.toLowerCase();
-      // v7.7: Keywords expandidas para Pragmatic Play + otros proveedores.
-      // Tambien se procesan URLs que contienen 'game' o 'casino' si estamos
-      // en un iframe (donde TODA la actividad es relevante para la captura).
-      var isGameUrl = urlLow.indexOf('result') >= 0 ||
+      // FIX v5.0.1: Excluir URLs de historial y estado — solo procesar resultados
+      if (urlLow.indexOf('result') >= 0 ||
           urlLow.indexOf('roulette') >= 0 || urlLow.indexOf('evolution') >= 0 ||
-          urlLow.indexOf('round') >= 0 || urlLow.indexOf('wheel') >= 0 ||
-          urlLow.indexOf('pragmatic') >= 0 || urlLow.indexOf('azure') >= 0 ||
-          urlLow.indexOf('game') >= 0 || urlLow.indexOf('casino') >= 0 ||
-          urlLow.indexOf('live') >= 0 || urlLow.indexOf('bet') >= 0 ||
-          urlLow.indexOf('play') >= 0 || urlLow.indexOf('spin') >= 0;
-      if (isGameUrl) {
+          urlLow.indexOf('round') >= 0 || urlLow.indexOf('wheel') >= 0) {
         // EXCLUIR: URLs que contienen history o state (son datos historicos, no resultado actual)
         if (urlLow.indexOf('history') >= 0 || urlLow.indexOf('state') >= 0 || urlLow.indexOf('stats') >= 0) {
           return promise; // No procesar — es historial
@@ -1320,15 +1279,10 @@
       var self = this;
       this.addEventListener('load', function() {
         var u = (self._rwUrl || '').toLowerCase();
-        // v7.7: Keywords expandidas (mismas que fetch hook)
-        var isGameUrl = u.indexOf('result') >= 0 ||
+        // FIX v5.0.1: Excluir historial y estado
+        if (u.indexOf('result') >= 0 ||
             u.indexOf('roulette') >= 0 || u.indexOf('evolution') >= 0 ||
-            u.indexOf('round') >= 0 || u.indexOf('wheel') >= 0 ||
-            u.indexOf('pragmatic') >= 0 || u.indexOf('azure') >= 0 ||
-            u.indexOf('game') >= 0 || u.indexOf('casino') >= 0 ||
-            u.indexOf('live') >= 0 || u.indexOf('bet') >= 0 ||
-            u.indexOf('play') >= 0 || u.indexOf('spin') >= 0;
-        if (isGameUrl) {
+            u.indexOf('round') >= 0 || u.indexOf('wheel') >= 0) {
           if (u.indexOf('history') >= 0 || u.indexOf('state') >= 0 || u.indexOf('stats') >= 0) return;
           try {
             var t = self.responseText;
@@ -1358,11 +1312,7 @@
     var CURRENT_KEYWORDS = ['winning-number','winningnumber','winning-pocket','winningpocket',
       'result-display','resultdisplay','result-value','resultvalue','current-result',
       'game-number-display','number-display','overlay-result','announced','lastnumber',
-      'round-result','roulette-result','live-result','detailed-result',
-      // v7.7: Pragmatic Play keywords
-      'gameresult','game-result','resultnumber','winningnumber',
-      'pocketnumber','lastresult','roundnumber','gamenumber',
-      'winner','winning','result-number','number-display'];
+      'round-result','roulette-result','live-result','detailed-result'];
 
     function isHistoryElement(el) {
       if (!el) return false;
@@ -1396,7 +1346,7 @@
       return false;
     }
 
-    // v7.7: Selectores expandidos para Pragmatic Play y otros proveedores
+    // Solo selectores que apuntan al RESULTADO ACTUAL, nunca historial
     var STRICT_SELECTORS = [
       '[class*="winning-number"]',
       '[class*="winning-pocket"]',
@@ -1412,27 +1362,7 @@
       '[class*="announced"]',
       '[class*="round-result"]',
       '[class*="roulette-result"]',
-      '[class*="live-result"]',
-      // v7.7: Selectores para Pragmatic Play
-      '[class*="game-result"]',
-      '[class*="gameResult"]',
-      '[class*="roulette-result"]',
-      '[class*="winningNumber"]',
-      '[class*="resultNumber"]',
-      '[class*="number-display"]',
-      '[class*="pocket-number"]',
-      '[class*="pocketNumber"]',
-      '[class*="last-result"]',
-      '[class*="lastResult"]',
-      '[class*="round-result"]',
-      '[class*="game-number"]',
-      '[class*="gameNumber"]',
-      // Pragmatic: resultado visible en pantalla
-      '[class*="result"] [class*="number"]',
-      '[class*="number"] [class*="result"]',
-      // Pragmatic: circulo/indicador del numero ganador
-      '[class*="winner"]',
-      '[class*="winning"]'
+      '[class*="live-result"]'
     ];
 
     // v6.4 FIX: Change-detect con limite de tiempo para DOM Scanner
@@ -1554,5 +1484,5 @@
     window.EventSource = Proxy;
   })();
 
-  console.log('[RollerWin] v7.7 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup 9s + SEQ 10s + Per-Number + GapRecovery');
+  console.log('[RollerWin] v7.6.1 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup 9s + SEQ 10s + Per-Number + GapRecovery');
 })();

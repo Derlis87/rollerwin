@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "RollerWin Capture",
-  "version": "7.7.0",
-  "description": "Captura numeros de ruleta en Betfury y los envia a RollerWin",
+  "version": "7.6.1",
+  "description": "Captura numeros de ruleta en Betfury (Evolution + Pragmatic) y los envia a RollerWin",
   "permissions": ["scripting", "activeTab", "storage", "webNavigation"],
   "host_permissions": ["<all_urls>"],
   "background": {

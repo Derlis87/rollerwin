@@ -334,3 +334,26 @@ Stage Summary:
 - Para cambiar de mesa: click en ícono de extensión → seleccionar mesa → recargar página de BetFury
 - El recovery automáticamente navega a la mesa seleccionada
 - NO se tocó código de captura ni dedup (Motor V6.0 intacto)
+---
+Task ID: 1
+Agent: Main Agent
+Task: Restaurar V7.6 que funcionaba y aplicar solo 3 fixes mínimos
+
+Work Log:
+- Extraído ZIP V7.6 del usuario (/tmp/v76-extract/)
+- Analizado inject-main.js completo (1443 líneas) - código de captura intacto
+- Identificados los 3 problemas a corregir SIN tocar captura:
+  1. ROULETTE_URL hardcodeado a Evolution → hacer dinámico desde localStorage
+  2. .click() puede abrir pestañas duplicadas → agregar _safeClick()
+  3. iframe-dead-45s enviaba 'rollerwin-session-expired' → bucle de recovery → separar
+- Aplicados los 3 cambios al inject-main.js (V7.6.1)
+- Actualizado content.js, background.js, manifest.json a v7.6.1
+- Generado ZIP y base64 actualizado en db/extension-zip-base64.txt
+- Actualizado route.ts del API de descarga
+- Actualizado texto del botón en DashboardLive.tsx
+
+Stage Summary:
+- V7.6.1 basada 100% en V7.6 del usuario (captura NO modificada)
+- 3 únicos cambios: ROULETTE_URL dinámico, _safeClick(), iframe-dead separado
+- ZIP generado en /home/z/my-project/download/RollerWin-Capture-v7.6.1.zip
+- Base64 actualizado en db/extension-zip-base64.txt

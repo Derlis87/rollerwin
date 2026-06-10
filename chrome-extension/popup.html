@@ -2,7 +2,7 @@
 <html>
 <head>
   <style>
-    body { width: 320px; padding: 14px; margin: 0; font-family: -apple-system, sans-serif; background: #0a0a0a; color: #e4e4e7; }
+    body { width: 280px; padding: 14px; margin: 0; font-family: -apple-system, sans-serif; background: #0a0a0a; color: #e4e4e7; }
     .header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 6px #22c55e; }
     .dot.off { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
@@ -22,25 +22,13 @@
     .btn-inject:active { background: #14532d; }
     .server { font-size: 9px; color: #52525b; text-align: center; margin-top: 8px; }
     .info { font-size: 9px; color: #3f3f46; text-align: center; margin-top: 4px; line-height: 1.4; }
-    .table-section { margin-bottom: 10px; }
-    .table-label { font-size: 10px; color: #71717a; margin-bottom: 4px; font-weight: 600; }
-    .table-select {
-      width: 100%; padding: 7px 10px; background: #18181b; color: #e4e4e7;
-      border: 1px solid #3f3f46; border-radius: 6px; font-size: 11px;
-      cursor: pointer; outline: none; font-family: -apple-system, sans-serif;
-    }
-    .table-select:hover { border-color: #52525b; }
-    .table-select:focus { border-color: #22c55e; }
-    .table-select option { background: #18181b; color: #e4e4e7; }
-    .saved-msg { font-size: 9px; color: #22c55e; text-align: center; margin-top: 4px; opacity: 0; transition: opacity 0.3s; }
-    .saved-msg.show { opacity: 1; }
   </style>
 </head>
 <body>
   <div class="header">
     <div class="dot" id="dot"></div>
     <div class="title">RollerWin Capture</div>
-    <div class="version">v7.7.0</div>
+    <div class="version">v7.5</div>
   </div>
   <div class="status" id="status">Cargando...</div>
   <div class="number-display">
@@ -53,16 +41,6 @@
       <div class="total"><strong id="totalCount">0</strong></div>
     </div>
   </div>
-
-  <div class="table-section">
-    <div class="table-label">MESA DE RULETA</div>
-    <select class="table-select" id="tableSelect">
-      <option value="https://betfury.com/es/casino/games/roulette-live-by-evolution">Evolution Live Roulette</option>
-      <option value="https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play">Pragmatic Roulette Azure</option>
-    </select>
-    <div class="saved-msg" id="savedMsg">Mesa guardada - recarga la pagina de BetFury</div>
-  </div>
-
   <button class="btn-inject" id="btnInject">Forzar Inyeccion en Frames</button>
   <div class="server">Servidor: rollerwin3.onrender.com</div>
   <div class="info">MAIN world injection: captura numeros<br>de iframes cross-origin de Evolution</div>
@@ -72,27 +50,6 @@
     var status = document.getElementById('status');
     var circle = document.getElementById('numCircle');
     var total = document.getElementById('totalCount');
-    var tableSelect = document.getElementById('tableSelect');
-    var savedMsg = document.getElementById('savedMsg');
-
-    var TABLE_LS_KEY = 'rollerwin_selected_table';
-    var TABLES = [
-      'https://betfury.com/es/casino/games/roulette-live-by-evolution',
-      'https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play'
-    ];
-
-    // Cargar mesa guardada
-    var savedTable = localStorage.getItem(TABLE_LS_KEY);
-    if (savedTable && TABLES.indexOf(savedTable) !== -1) {
-      tableSelect.value = savedTable;
-    }
-
-    // Guardar mesa al cambiar
-    tableSelect.addEventListener('change', function() {
-      localStorage.setItem(TABLE_LS_KEY, tableSelect.value);
-      savedMsg.classList.add('show');
-      setTimeout(function() { savedMsg.classList.remove('show'); }, 2500);
-    });
 
     function updateUI(data) {
       if (data.isConnected && data.totalCaptured > 0) {

@@ -1,4 +1,4 @@
-// RollerWin Capture v7.7 — Background Service Worker
+// RollerWin Capture v7.6.1 — Background Service Worker
 // Inyecta el script de deteccion en MUNDO PRINCIPAL en TODOS los frames
 var lastNumber = null;
 var totalCaptured = 0;
@@ -101,4 +101,4 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
   return true;
 });
 
-console.log('[RollerWin BG] Service Worker v7.7.0 iniciado');
+console.log('[RollerWin BG] Service Worker v7.6.1 iniciado');
