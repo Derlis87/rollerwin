@@ -2089,6 +2089,26 @@ export function DashboardLive() {
                           </div>
                         </div>
                       )}
+                      {/* Extension table selector — always visible */}
+                      <div className="mt-2 p-2.5 bg-zinc-800/60 border border-zinc-700/50 rounded-lg space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[9px] text-zinc-500 font-medium">MESA DE RULETA</span>
+                          {tableSaving && <span className="text-[8px] text-green-400">Guardando...</span>}
+                          {tableSaved && <span className="text-[8px] text-green-400">Guardado!</span>}
+                        </div>
+                        <select
+                          value={extSelectedTable}
+                          onChange={handleExtTableChange}
+                          className="w-full h-7 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-300 px-2 cursor-pointer outline-none focus:border-green-500/50"
+                        >
+                          <option value="https://betfury.com/es/casino/games/roulette-live-by-evolution">Evolution Live Roulette</option>
+                          <option value="https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play">Pragmatic Roulette Azure</option>
+                        </select>
+                        <p className="text-[8px] text-zinc-600 text-center">
+                          La extension usara esta mesa en el recovery
+                        </p>
+                      </div>
+
                       {!isAutoCapture && (
                         <div className="mt-2 p-2.5 bg-zinc-800/60 border border-zinc-700/50 rounded-lg space-y-2">
                           <div className="flex items-center gap-1.5 text-[10px] text-amber-400 font-medium">
@@ -2103,24 +2123,6 @@ export function DashboardLive() {
                             <li>Click en <strong className="text-zinc-300">"Cargar extensión sin empaquetar"</strong> y seleccioná la carpeta extraida</li>
                             <li>Abri la mesa de ruleta en Betfury y Listo!</li>
                           </ol>
-                          <div className="pt-1 border-t border-zinc-700/50 space-y-1.5">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[9px] text-zinc-500 font-medium">MESA DE RULETA</span>
-                              {tableSaving && <span className="text-[8px] text-green-400">Guardando...</span>}
-                              {tableSaved && <span className="text-[8px] text-green-400">Guardado!</span>}
-                            </div>
-                            <select
-                              value={extSelectedTable}
-                              onChange={handleExtTableChange}
-                              className="w-full h-7 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-300 px-2 cursor-pointer outline-none focus:border-green-500/50"
-                            >
-                              <option value="https://betfury.com/es/casino/games/roulette-live-by-evolution">Evolution Live Roulette</option>
-                              <option value="https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play">Pragmatic Roulette Azure</option>
-                            </select>
-                            <p className="text-[8px] text-zinc-600 text-center">
-                              La extension usara esta mesa en el recovery
-                            </p>
-                          </div>
                           <Button
                             variant="outline"
                             size="sm"
