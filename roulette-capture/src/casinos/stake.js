@@ -2,7 +2,8 @@
 // stake.js - Modulo especifico para Stake
 // ============================================================
 const { BaseCasino } = require('./base-casino');
-const { randomDelay, humanPause, lookAtRouletteTable } = require('../browser/human-behavior');
+const { randomDelay } = require('../utils/helpers');
+const { humanPause, lookAtRouletteTable } = require('../browser/human-behavior');
 const log = require('../utils/logger');
 
 class StakeCasino extends BaseCasino {

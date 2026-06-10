@@ -2,8 +2,8 @@
 // orchestrator.js - Orquestador principal
 // Maneja la rotacion entre casinos, monitoreo y recovery
 // ============================================================
-const { randomDelay, randInt } = require('../utils/helpers');
-const log = require('../utils/logger');
+const { randomDelay, randInt } = require('./utils/helpers');
+const log = require('./utils/logger');
 
 class Orchestrator {
   constructor(casinos, config, apiClient) {

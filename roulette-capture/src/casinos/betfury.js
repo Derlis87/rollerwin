@@ -2,7 +2,8 @@
 // betfury.js - Modulo especifico para BetFury
 // ============================================================
 const { BaseCasino } = require('./base-casino');
-const { randomDelay, humanPause, lookAtRouletteTable } = require('../browser/human-behavior');
+const { randomDelay } = require('../utils/helpers');
+const { humanPause, lookAtRouletteTable } = require('../browser/human-behavior');
 const log = require('../utils/logger');
 
 class BetFuryCasino extends BaseCasino {
