@@ -381,6 +381,14 @@
           _saveState();
           handleSessionExpired(e.data.reason);
         }
+        // v7.6.4: iframe-dead NO dispara handleSessionExpired — solo resetea contadores.
+        // Evita loop de recovery cuando la captura no funciona (ej: mesa Pragmatic).
+        if (e.data && e.data.source === 'rollerwin-iframe-dead') {
+          console.log('[RollerWin] IFRAME inactivo: ' + e.data.reason + ' — NO es session expired, solo reset contadores');
+          _lastCaptureTime = Date.now();
+          _lastCapturePersisted = _lastCaptureTime;
+          _saveState();
+        }
       } catch(err) {}
     });
 
@@ -706,21 +714,18 @@
     setInterval(checkPlayButton, 400); // v6.2: cada 400ms (era 1s)
 
     // ════════════════════════════════════════════════════════
-    // 6. IFRAME MUERTO: sin capturas >60s → reload COMPLETO
-    //    v6.2 FIX: 90s (era 35s que reiniciaba con sesion activa)
-    //    v6.6 FIX: Relajada la condicion — si no hay capturas >120s,
-    //    el iframe esta claramente muerto sin importar si la sesion
-    //    del parent esta activa (keep-alive chekea parent, no iframe).
-    //    v7.6 FIX: Reducido a 60s (era 120s). 120s = 6-7 números perdidos.
-    //    60s = máximo 3-4 perdidos, pero con Gap Recovery en el iframe,
-    //    muchos de esos números ya deberían haber sido capturados.
+    // 6. IFRAME MUERTO: sin capturas >120s → reload COMPLETO
+    //    v7.6.4 FIX: Vuelto a 120s (estaba en 60s que causaba loops).
+    //    Si la captura no funciona (ej: mesa Pragmatic con estructura diferente),
+    //    60s causaba: reload → sin capturas → 60s → reload → loop infinito.
+    //    120s da tiempo al Gap Recovery y evita reinicios innecesarios.
     // ════════════════════════════════════════════════════════
     setInterval(function() {
       var noCap = Date.now() - _lastCaptureTime;
       var onGame = location.href.indexOf('/casino/games/') !== -1;
 
-      // v7.6: Reload si estamos en juego Y sin capturas >60s
-      if (onGame && noCap > 60000 && !_recoveryInProgress) {
+      // v7.6.4: Reload si estamos en juego Y sin capturas >120s
+      if (onGame && noCap > 120000 && !_recoveryInProgress) {
         console.log('[RollerWin] Sin capturas ' + Math.round(noCap/1000) + 's — iframe muerto, reload completo...');
         _isRecovering = true;
         _sessionExpired = true;
@@ -806,7 +811,7 @@
       } catch(e) {}
     }, 10000);
 
-    console.log('[RollerWin] v7.6.3 MULTI-MESA+SAFE-CLICK | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
+    console.log('[RollerWin] v7.6.4 ANTI-LOOP+90s-DEAD | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
 
   }
 
@@ -881,17 +886,20 @@
     };
   }
 
-  // v7.6 FIX: Notificar parent si el iframe esta muerto (sin actividad >45s, era 90s)
-  // Con giros de 18s, 90s = 5 números perdidos. 45s = máximo 2-3 perdidos.
+  // v7.6.4 FIX: Notificar parent si el iframe esta muerto (sin actividad >90s)
+  // IMPORTANTE: Usar 'rollerwin-iframe-dead' (NO 'rollerwin-session-expired').
+  // Antes se usaba session-expired, lo cual causaba location.replace() en loop
+  // infinito cuando la captura no funcionaba (ej: mesa Pragmatic con estructura diferente).
+  // Ahora el parent trata iframe-dead como un reload suave, NO como session expirada.
   setInterval(function() {
-    if (!_iframeDeadNotified && Date.now() - _iframeLastActivity > 45000) {
+    if (!_iframeDeadNotified && Date.now() - _iframeLastActivity > 90000) {
       _iframeDeadNotified = true;
-      console.log('[RollerWin] IFRAME: Sin actividad >45s → notificando parent + Gap Recovery');
-      try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-dead-45s' }, '*'); } catch(e) {}
+      console.log('[RollerWin] IFRAME: Sin actividad >90s → notificando parent (iframe-dead, NO session-expired) + Gap Recovery');
+      try { window.parent.postMessage({ source: 'rollerwin-iframe-dead', reason: 'iframe-dead-90s' }, '*'); } catch(e) {}
       // v7.6: También activar Gap Recovery localmente
       startGapRecovery();
     }
-  }, 10000); // Check cada 10s (era 15s)
+  }, 10000); // Check cada 10s
 
   // v7.6 FIX: GAP RECOVERY SCANNER
   // Cuando hay un gap >22s sin capturas (mas de un giro de 18s), significa que
