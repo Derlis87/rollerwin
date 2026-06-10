@@ -3,15 +3,27 @@
   "name": "RollerWin Capture",
   "version": "7.6.1",
   "description": "Captura numeros de ruleta en Betfury (Evolution + Pragmatic) y los envia a RollerWin",
-  "permissions": ["scripting", "activeTab", "storage", "webNavigation"],
-  "host_permissions": ["<all_urls>"],
+  "permissions": [
+    "scripting",
+    "activeTab",
+    "storage",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": ["*://*.betfury.com/*", "*://*.betfury.io/*"],
-      "js": ["content.js"],
+      "matches": [
+        "*://*.betfury.com/*",
+        "*://*.betfury.io/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
@@ -30,8 +42,12 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["inject-main.js"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "inject-main.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }

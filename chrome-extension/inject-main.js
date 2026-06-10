@@ -1,5 +1,5 @@
 // RollerWin Capture v7.6.1 - MAIN WORLD DETECTION ENGINE
-// Soporta Evolution Y Pragmatic Play — seleccion de mesa desde localStorage
+// SOLO detecta numeros desde iframes (donde corre Evolution)
 // El parent page SOLO retransmite lo que llega via postMessage desde iframes
 // FIX v5.0: DOM Scanner capturaba numeros del historial (circulos viejos)
 // FIX v5.1: extractObj toma ULTIMO elemento, regex ultimo match, excluye URLs historial
@@ -48,11 +48,9 @@
 //     al reconectar WS.
 //   - BUG 4 (iframe dead 90s muy lento): Reducido a 45s + detección de
 //     WS reconnect para escaneo inmediato del DOM.
-// FIX v7.6.1: 3 CAMBIOS MINIMOS sobre V7.6 (NO se toca captura):
-//   - FIX 1: ROULETTE_URL dinamico desde localStorage (soporta Evolution + Pragmatic)
-//   - FIX 2: _safeClick() bloquea window.open durante .click() (sin pestañas duplicadas)
-//   - FIX 3: iframe dead envia 'rollerwin-iframe-dead' (separado de session-expired)
-//     para evitar loop de recovery cuando el iframe esta vivo pero no captura.
+// FIX v7.6.1: 2 CAMBIOS MINIMOS (NO se toca captura):
+//   - FIX 1: ROULETTE_URL dinamico desde localStorage (Evolution + Pragmatic)
+//   - FIX 2: _safeClick() bloquea window.open durante recovery (sin pestañas duplicadas)
 (function() {
   'use strict';
 
@@ -353,10 +351,6 @@
     // El iframe NO puede ver el DOM del parent y viceversa.
     // Si el iframe detecta "SESIÓN FINALIZADA" o pierde conexion,
     // envia postMessage al parent para activar recovery.
-    // v7.6.1 FIX 3: SEPARAR iframe-dead de session-expired.
-    // El iframe envia 'rollerwin-iframe-dead' cuando no hay actividad >45s.
-    // Esto NO es session expired — el iframe puede estar vivo pero lento.
-    // Solo resetear contadores, NO iniciar recovery (evita loop).
     window.addEventListener('message', function(e) {
       try {
         if (e.data && e.data.source === 'rollerwin-session-expired') {
@@ -364,15 +358,6 @@
           _sessionExpired = true;
           _saveState();
           handleSessionExpired(e.data.reason);
-        }
-        // v7.6.1: iframe dead = sin actividad, pero NO es session expired
-        // Solo resetear contadores de captura para evitar que el parent
-        // haga reload por "sin capturas >60s" cuando el iframe esta vivo.
-        if (e.data && e.data.source === 'rollerwin-iframe-dead') {
-          console.log('[RollerWin] IFRAME inactivo: ' + e.data.reason + ' — NO es session expired, solo reset contadores');
-          _lastCaptureTime = Date.now();
-          _lastCapturePersisted = _lastCaptureTime;
-          _saveState();
         }
       } catch(err) {}
     });
@@ -506,24 +491,15 @@
     // 2. BUSQUEDA AMPLIA de botones (button/div/span/a)
     // ════════════════════════════════════════════════════════
     // v7.6.1 FIX 2: _safeClick() bloquea window.open durante .click()
-    // Esto previene que el boton "Jugar" o "OK" abra una nueva pestaña
-    // durante el recovery. Restaura window.open inmediatamente despues.
+    // Esto previene pestañas duplicadas durante recovery.
     var _origWindowOpen = window.open;
     function _safeClick(el) {
-      var _blocked = false;
-      var _restored = false;
       window.open = function() {
-        _blocked = true;
-        console.log('[RollerWin] _safeClick: window.open BLOQUEADO (previene pestaña duplicada)');
+        console.log('[RollerWin] _safeClick: window.open BLOQUEADO');
         return null;
       };
-      try {
-        el.click();
-      } catch(e) {}
-      // Restaurar window.open inmediatamente
+      try { el.click(); } catch(e) {}
       window.open = _origWindowOpen;
-      _restored = true;
-      return _blocked; // true si se bloqueo un window.open
     }
 
     function clickAnyButtonByText(texts) {
@@ -810,7 +786,7 @@
       } catch(e) {}
     }, 10000);
 
-    console.log('[RollerWin] v7.6.1 GAP-RECOVERY+DEDUP-SEQ-10s+PER-NUMBER+SAFE-CLICK | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
+    console.log('[RollerWin] v7.6.1 GAP-RECOVERY+DEDUP-SEQ-10s+PER-NUMBER | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
 
   }
 
@@ -881,14 +857,13 @@
     };
   }
 
-  // v7.6.1 FIX 3: Notificar parent como 'rollerwin-iframe-dead' (NO session-expired)
-  // Esto evita que el parent inicie un recovery loop. El parent solo
-  // reseteara contadores al recibir este mensaje.
+  // v7.6 FIX: Notificar parent si el iframe esta muerto (sin actividad >45s, era 90s)
+  // Con giros de 18s, 90s = 5 números perdidos. 45s = máximo 2-3 perdidos.
   setInterval(function() {
     if (!_iframeDeadNotified && Date.now() - _iframeLastActivity > 45000) {
       _iframeDeadNotified = true;
-      console.log('[RollerWin] IFRAME: Sin actividad >45s → notificando parent (iframe-dead, NO session-expired)');
-      try { window.parent.postMessage({ source: 'rollerwin-iframe-dead', reason: 'iframe-dead-45s' }, '*'); } catch(e) {}
+      console.log('[RollerWin] IFRAME: Sin actividad >45s → notificando parent + Gap Recovery');
+      try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-dead-45s' }, '*'); } catch(e) {}
       // v7.6: También activar Gap Recovery localmente
       startGapRecovery();
     }
@@ -1484,5 +1459,5 @@
     window.EventSource = Proxy;
   })();
 
-  console.log('[RollerWin] v7.6.1 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup 9s + SEQ 10s + Per-Number + GapRecovery');
+  console.log('[RollerWin] v7.6 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup 9s + SEQ 10s + Per-Number + GapRecovery');
 })();
