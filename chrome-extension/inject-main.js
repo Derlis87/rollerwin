@@ -54,14 +54,23 @@
   if (window.__rwMainV73) return;
   window.__rwMainV73 = true;
 
-  // v7.7 GUARD CRÍTICO: NUNCA ejecutar fuera de betfury.com/betfury.io
-  // Si este script se inyecta accidentalmente en RollerWin u otra página,
-  // el recovery haría location.replace() y REEMPLAZARÍA esa página con BetFury.
+  // v7.7 GUARD: Solo ejecutar en betfury.com/betfury.io (parent) O en iframes de
+  // proveedores de casino conocidos (Evolution, Pragmatic, etc.).
+  // El recovery (location.replace) SOLO corre en el parent (!isInIframe),
+  // asi que es seguro permitir iframes de otros dominios.
   var _rwHostname = (location.hostname || '').toLowerCase();
-  if (_rwHostname.indexOf('betfury') === -1) {
-    console.log('[RollerWin] HOSTNAME NO ES BETFURY (' + _rwHostname + ') — script detenido.');
+  var _isBetfury = _rwHostname.indexOf('betfury') !== -1;
+  var _isGameProvider = _rwHostname.indexOf('evolution') !== -1 ||
+    _rwHostname.indexOf('pragmatic') !== -1 ||
+    _rwHostname.indexOf('ezugi') !== -1 ||
+    _rwHostname.indexOf('softswiss') !== -1;
+  // En iframes, permitir cualquier dominio (el parent check protege el recovery)
+  var isInIframe = (window.self !== window.top);
+  if (!_isBetfury && !isInIframe) {
+    console.log('[RollerWin] HOSTNAME NO ES BETFURY Y NO ES IFRAME (' + _rwHostname + ') — script detenido.');
     return;
   }
+  console.log('[RollerWin] Hostname OK: ' + _rwHostname + (isInIframe ? ' [IFRAME]' : ' [PARENT]') + (_isGameProvider ? ' [PROVIDER]' : ''));
 
   var SERVER = 'https://rollerwin3.onrender.com';
   var lastNum = -1;
@@ -130,7 +139,6 @@
     }
   }
 
-  var isInIframe = (window.self !== window.top);
   var hostname = location.hostname || '';
 
   var RED = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
@@ -811,7 +819,7 @@
       } catch(e) {}
     }, 10000);
 
-    console.log('[RollerWin] v7.6.4 ANTI-LOOP+90s-DEAD | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
+    console.log('[RollerWin] v7.7.0 DUAL-PROVIDER+ANTI-LOOP | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
 
   }
 
@@ -974,7 +982,20 @@
       '[class*="live-result"]',
       '[class*="last-number"]',
       '[class*="lastnumber"]',
-      '[class*="game-result"]'
+      '[class*="game-result"]',
+      // v7.7: Selectores Pragmatic Play
+      '[class*="gameResult"]',
+      '[class*="resultNumber"]',
+      '[class*="winningNumber"]',
+      '[class*="pocketNumber"]',
+      '[class*="lastResult"]',
+      '[class*="winner"]',
+      '[class*="winning"]',
+      '[class*="game-number"]',
+      '[class*="gameNumber"]',
+      '[data-result]',
+      '[data-number]',
+      '[data-value][class*="result"]'
     ];
 
     for (var i = 0; i < gapSelectors.length; i++) {
@@ -1047,13 +1068,19 @@
   }, 30000);
 
   // Campos de resultado de ruleta (alta confianza)
+  // v7.7: Agregados campos usados por Pragmatic Play y otros proveedores
   var RESULT_FIELDS = [
     'number', 'result', 'resultnumber', 'winningnumber', 'win_number',
     'game_number', 'roulette_number', 'ball_number', 'pocket', 'pocket_number',
     'winningpocket', 'pocketid', 'resultid', 'displaynumber',
     'roundresult', 'gameoutcome', 'finalnumber', 'outcome',
     'winningnumberdisplay', 'resultnumber', 'final_number', 'game_result',
-    'round_result', 'game_outcome', 'numberstr', 'numberstring'
+    'round_result', 'game_outcome', 'numberstr', 'numberstring',
+    // v7.7: Campos adicionales para Pragmatic Play
+    'resultnumber', 'winnum', 'win_num', 'result_num', 'gameresult',
+    'resultnumberstr', 'rouletteResult', 'resultNumberStr', 'numberstr',
+    'rouletteNumber', 'gameResult', 'winningNumberStr', 'pocketNumber',
+    'gameNumber', 'roundNumber', 'betResult', 'totalResult'
   ];
 
   function isResultField(key) {
@@ -1250,10 +1277,17 @@
       var promise = origFetch.apply(this, arguments);
 
       var urlLow = url.toLowerCase();
-      // FIX v5.0.1: Excluir URLs de historial y estado — solo procesar resultados
-      if (urlLow.indexOf('result') >= 0 ||
+      // v7.7: Keywords expandidas para Pragmatic Play + otros proveedores.
+      // Tambien se procesan URLs que contienen 'game' o 'casino' si estamos
+      // en un iframe (donde TODA la actividad es relevante para la captura).
+      var isGameUrl = urlLow.indexOf('result') >= 0 ||
           urlLow.indexOf('roulette') >= 0 || urlLow.indexOf('evolution') >= 0 ||
-          urlLow.indexOf('round') >= 0 || urlLow.indexOf('wheel') >= 0) {
+          urlLow.indexOf('round') >= 0 || urlLow.indexOf('wheel') >= 0 ||
+          urlLow.indexOf('pragmatic') >= 0 || urlLow.indexOf('azure') >= 0 ||
+          urlLow.indexOf('game') >= 0 || urlLow.indexOf('casino') >= 0 ||
+          urlLow.indexOf('live') >= 0 || urlLow.indexOf('bet') >= 0 ||
+          urlLow.indexOf('play') >= 0 || urlLow.indexOf('spin') >= 0;
+      if (isGameUrl) {
         // EXCLUIR: URLs que contienen history o state (son datos historicos, no resultado actual)
         if (urlLow.indexOf('history') >= 0 || urlLow.indexOf('state') >= 0 || urlLow.indexOf('stats') >= 0) {
           return promise; // No procesar — es historial
@@ -1286,10 +1320,15 @@
       var self = this;
       this.addEventListener('load', function() {
         var u = (self._rwUrl || '').toLowerCase();
-        // FIX v5.0.1: Excluir historial y estado
-        if (u.indexOf('result') >= 0 ||
+        // v7.7: Keywords expandidas (mismas que fetch hook)
+        var isGameUrl = u.indexOf('result') >= 0 ||
             u.indexOf('roulette') >= 0 || u.indexOf('evolution') >= 0 ||
-            u.indexOf('round') >= 0 || u.indexOf('wheel') >= 0) {
+            u.indexOf('round') >= 0 || u.indexOf('wheel') >= 0 ||
+            u.indexOf('pragmatic') >= 0 || u.indexOf('azure') >= 0 ||
+            u.indexOf('game') >= 0 || u.indexOf('casino') >= 0 ||
+            u.indexOf('live') >= 0 || u.indexOf('bet') >= 0 ||
+            u.indexOf('play') >= 0 || u.indexOf('spin') >= 0;
+        if (isGameUrl) {
           if (u.indexOf('history') >= 0 || u.indexOf('state') >= 0 || u.indexOf('stats') >= 0) return;
           try {
             var t = self.responseText;
@@ -1319,7 +1358,11 @@
     var CURRENT_KEYWORDS = ['winning-number','winningnumber','winning-pocket','winningpocket',
       'result-display','resultdisplay','result-value','resultvalue','current-result',
       'game-number-display','number-display','overlay-result','announced','lastnumber',
-      'round-result','roulette-result','live-result','detailed-result'];
+      'round-result','roulette-result','live-result','detailed-result',
+      // v7.7: Pragmatic Play keywords
+      'gameresult','game-result','resultnumber','winningnumber',
+      'pocketnumber','lastresult','roundnumber','gamenumber',
+      'winner','winning','result-number','number-display'];
 
     function isHistoryElement(el) {
       if (!el) return false;
@@ -1353,7 +1396,7 @@
       return false;
     }
 
-    // Solo selectores que apuntan al RESULTADO ACTUAL, nunca historial
+    // v7.7: Selectores expandidos para Pragmatic Play y otros proveedores
     var STRICT_SELECTORS = [
       '[class*="winning-number"]',
       '[class*="winning-pocket"]',
@@ -1369,7 +1412,27 @@
       '[class*="announced"]',
       '[class*="round-result"]',
       '[class*="roulette-result"]',
-      '[class*="live-result"]'
+      '[class*="live-result"]',
+      // v7.7: Selectores para Pragmatic Play
+      '[class*="game-result"]',
+      '[class*="gameResult"]',
+      '[class*="roulette-result"]',
+      '[class*="winningNumber"]',
+      '[class*="resultNumber"]',
+      '[class*="number-display"]',
+      '[class*="pocket-number"]',
+      '[class*="pocketNumber"]',
+      '[class*="last-result"]',
+      '[class*="lastResult"]',
+      '[class*="round-result"]',
+      '[class*="game-number"]',
+      '[class*="gameNumber"]',
+      // Pragmatic: resultado visible en pantalla
+      '[class*="result"] [class*="number"]',
+      '[class*="number"] [class*="result"]',
+      // Pragmatic: circulo/indicador del numero ganador
+      '[class*="winner"]',
+      '[class*="winning"]'
     ];
 
     // v6.4 FIX: Change-detect con limite de tiempo para DOM Scanner
