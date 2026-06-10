@@ -1993,6 +1993,31 @@ export function DashboardLive() {
                       </div>
                     </div>
 
+                    {/* Extension table selector — pre-join */}
+                    <div className="mb-4 p-3 bg-zinc-800/80 border border-zinc-700/50 rounded-lg space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-zinc-400 text-xs flex items-center gap-1.5">
+                          <Wifi className="w-3.5 h-3.5 text-green-400" />
+                          Mesa para la Extension (Recovery)
+                        </Label>
+                        <div className="flex items-center gap-2">
+                          {tableSaving && <span className="text-[10px] text-amber-400">Guardando...</span>}
+                          {tableSaved && <span className="text-[10px] text-green-400">Guardado!</span>}
+                        </div>
+                      </div>
+                      <select
+                        value={extSelectedTable}
+                        onChange={handleExtTableChange}
+                        className="w-full h-9 bg-zinc-900 border border-zinc-700 rounded text-sm text-white px-3 cursor-pointer outline-none focus:border-green-500/50"
+                      >
+                        <option value="https://betfury.com/es/casino/games/roulette-live-by-evolution">Evolution Live Roulette</option>
+                        <option value="https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play">Pragmatic Roulette Azure</option>
+                      </select>
+                      <p className="text-[10px] text-zinc-500">
+                        La extension usara esta mesa cuando haga recovery automatico
+                      </p>
+                    </div>
+
                     <Button onClick={handleJoinTable} className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-bold py-6 text-lg">
                       <ExternalLink className="w-5 h-5 mr-2" />Abrir Casino y Unirse a Mesa
                     </Button>
