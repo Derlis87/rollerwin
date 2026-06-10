@@ -357,3 +357,26 @@ Stage Summary:
 - 3 únicos cambios: ROULETTE_URL dinámico, _safeClick(), iframe-dead separado
 - ZIP generado en /home/z/my-project/download/RollerWin-Capture-v7.6.1.zip
 - Base64 actualizado en db/extension-zip-base64.txt
+---
+Task ID: 1
+Agent: main
+Task: Develop multi-casino roulette capture system with Playwright
+
+Work Log:
+- Explored RollerWin project structure: found API endpoint POST /api/capture/receive {number: N}
+- Created complete project at /home/z/my-project/roulette-capture/
+- Implemented anti-detection (stealth.js): User-Agent rotation, viewport randomization, canvas fingerprint, WebGL spoofing, navigator.webdriver removal, chrome.runtime spoofing
+- Implemented human behavior (human-behavior.js): bezier curve mouse paths, random scrolls, safe-area clicks, variable speed
+- Implemented WebSocket/Fetch/DOM interceptor (ws-interceptor.js): captures from WS frames, fetch responses, DOM scanning
+- Implemented BetFury casino module with navigation and session detection
+- Implemented Stake casino module with cookie/geo handling
+- Implemented orchestrator with casino rotation, health monitoring, recovery
+- Installed dependencies: playwright + puppeteer-extra-plugin-stealth
+- Verified all files exist and have valid syntax
+
+Stage Summary:
+- Project ready at /home/z/my-project/roulette-capture/
+- Run with: cd roulette-capture && node src/index.js
+- Run visible with: HEADED=1 node src/index.js
+- .env file configured with BetFury + Stake active
+- Cookies support via config/cookies.json

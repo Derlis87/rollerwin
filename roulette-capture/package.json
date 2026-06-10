@@ -1,0 +1,17 @@
+{
+  "name": "roulette-capture",
+  "version": "1.0.0",
+  "description": "Capturador de ruleta multi-casino con comportamiento humano - 24/7",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "start:visible": "HEADED=1 node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node src/utils/test.js"
+  },
+  "dependencies": {
+    "playwright": "^1.45.0",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  }
+}
