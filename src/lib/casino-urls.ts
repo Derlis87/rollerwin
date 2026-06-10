@@ -29,6 +29,12 @@ export const CASINO_CONFIGS: CasinoConfig[] = [
         name: 'Roulette Live', 
         url: 'https://betfury.com/es/casino/games/roulette-live-by-evolution',
         provider: 'Evolution'
+      },
+      {
+        id: 'roulette-azure-pragmatic',
+        name: 'Roulette Azure',
+        url: 'https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play',
+        provider: 'Pragmatic Play'
       }
     ],
     notes: 'Haz login en Betfury y accede directamente a la mesa de ruleta'
