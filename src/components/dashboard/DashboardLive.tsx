@@ -256,7 +256,6 @@ export function DashboardLive() {
   const livePeakIndexRef = useRef(0)
   
   // UI state
-  const [copiedUrl, setCopiedUrl] = useState(false)
   const [showKeyboardHint, setShowKeyboardHint] = useState(true)
   
   // Import state
@@ -1200,14 +1199,6 @@ export function DashboardLive() {
     }))
   }, [selectedCasino, selectedTable])
 
-  // Copy casino URL
-  const handleCopyUrl = useCallback(() => {
-    const url = getTableUrl(selectedCasino, selectedTable)
-    navigator.clipboard.writeText(url)
-    setCopiedUrl(true)
-    setTimeout(() => setCopiedUrl(false), 2000)
-  }, [selectedCasino, selectedTable])
-
   // Clear all data
   const handleClear = useCallback(() => {
     setNumbers([])
@@ -1940,272 +1931,23 @@ export function DashboardLive() {
       <main className="container mx-auto px-4 py-4">
         <div className="grid grid-cols-1 xl:grid-cols-4 gap-4 items-start">
           <div className="xl:col-span-3 space-y-4">
-            
-            {/* Casino Setup Card */}
-            <Card className="bg-zinc-900 border-zinc-800">
-              <CardHeader className="py-3">
-                <CardTitle className="text-white flex items-center gap-2 text-base">
-                  <Radio className="w-4 h-4 text-amber-500" />
-                  Configuración del Casino
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {!isJoined ? (
-                  <>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                      <div className="space-y-2">
-                        <Label className="text-zinc-400">Casino</Label>
-                        <Select value={selectedCasino} onValueChange={(v) => {
-                          setSelectedCasino(v)
-                          const casino = CASINO_CONFIGS.find(c => c.id === v)
-                          if (casino) setSelectedTable(casino.tables[0].id)
-                        }}>
-                          <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            {CASINO_CONFIGS.map(casino => (
-                              <SelectItem key={casino.id} value={casino.id}>{casino.name}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
 
-                      <div className="space-y-2">
-                        <Label className="text-zinc-400">Mesa de Ruleta</Label>
-                        <Select value={selectedTable} onValueChange={setSelectedTable}>
-                          <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            {currentCasino?.tables.map(table => (
-                              <SelectItem key={table.id} value={table.id}>{table.name} {table.provider && `(${table.provider})`}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label className="text-zinc-400">Tipo de Apuesta</Label>
-                        <Select value={selectedBetType} onValueChange={(v) => setSelectedBetType(v as BetType)}>
-                          <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            {BET_TYPE_OPTIONS.map(bet => (
-                              <SelectItem key={bet.id} value={bet.id}>{bet.icon} {bet.name}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-
-                    <div className="bg-zinc-800 rounded-lg p-3 mb-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs text-zinc-500 mb-1">URL directa a la mesa:</p>
-                          <p className="text-sm text-cyan-400 truncate font-mono">{getTableUrl(selectedCasino, selectedTable)}</p>
-                        </div>
-                        <Button variant="ghost" size="icon" onClick={handleCopyUrl} className="text-zinc-400 hover:text-white">
-                          {copiedUrl ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
-                        </Button>
-                      </div>
-                    </div>
-
-                    {/* Extension table selector — pre-join */}
-                    <div className="mb-4 p-3 bg-zinc-800/80 border border-zinc-700/50 rounded-lg space-y-2">
-                      <div className="flex items-center justify-between">
-                        <Label className="text-zinc-400 text-xs flex items-center gap-1.5">
-                          <Wifi className="w-3.5 h-3.5 text-green-400" />
-                          Mesa para la Extension (Recovery)
-                        </Label>
-                        <div className="flex items-center gap-2">
-                          {tableSaving && <span className="text-[10px] text-amber-400">Guardando...</span>}
-                          {tableSaved && <span className="text-[10px] text-green-400">Guardado!</span>}
-                        </div>
-                      </div>
-                      <select
-                        value={extSelectedTable}
-                        onChange={handleExtTableChange}
-                        className="w-full h-9 bg-zinc-900 border border-zinc-700 rounded text-sm text-white px-3 cursor-pointer outline-none focus:border-green-500/50"
-                      >
-                        <optgroup label="BetFury">
-                          <option value="https://betfury.com/es/casino/games/roulette-live-by-evolution">Evolution Live Roulette</option>
-                          <option value="https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play">Roulette Azure (Pragmatic)</option>
-                        </optgroup>
-                        <optgroup label="Pinnacle">
-                          <option value="https://casino.pinnacle.com/es/live-casino/games/european-roulette/">European Roulette (Evolution)</option>
-                          <option value="https://casino.pinnacle.com/es/live-casino/games/roulette-azure/">Roulette Azure (Pragmatic)</option>
-                        </optgroup>
-                      </select>
-                      <p className="text-[10px] text-zinc-500">
-                        El capturador server usara esta mesa al activar Auto Captura
-                      </p>
-                    </div>
-
-                    <Button onClick={handleJoinTable} className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-bold py-6 text-lg">
-                      <ExternalLink className="w-5 h-5 mr-2" />Abrir Casino y Unirse a Mesa
-                    </Button>
-
-                    <div className="mt-4">
-                      <Button
-                        onClick={() => window.open('/api/download?file=estrategia-rentable-v52.pdf', '_blank')}
-                        className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold py-3 text-sm flex items-center justify-center gap-2"
-                      >
-                        <FileDown className="w-4 h-4" />
-                        Descargar Estrategia Rentable (PDF)
-                      </Button>
-                    </div>
-
-                    <div className="mt-4 p-4 bg-gradient-to-r from-amber-500/10 to-cyan-500/10 border border-amber-500/30 rounded-lg">
-                      <h4 className="text-amber-500 font-bold mb-3 flex items-center gap-2"><Zap className="w-4 h-4" />¿Cómo Funciona?</h4>
-                      <ol className="text-sm text-zinc-400 space-y-2">
-                        <li className="flex items-start gap-2"><span className="text-amber-500 font-bold">1.</span> Selecciona el casino y la mesa de ruleta</li>
-                        <li className="flex items-start gap-2"><span className="text-amber-500 font-bold">2.</span> Haz clic en &quot;Abrir Casino&quot; para ir a la mesa</li>
-                        <li className="flex items-start gap-2"><span className="text-amber-500 font-bold">3.</span> Ingresa los números que van saliendo en la ruleta</li>
-                        <li className="flex items-start gap-2"><span className="text-amber-500 font-bold">4.</span> El sistema generará predicciones basadas en estadísticas avanzadas</li>
-                      </ol>
-                    </div>
-                  </>
-                ) : (
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="text-center">
-                        <div className="text-2xl font-bold text-green-500">{successCount}</div>
-                        <div className="text-xs text-zinc-500">Aciertos</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-2xl font-bold text-amber-500">{avgPeakHeight}</div>
-                        <div className="text-xs text-zinc-500">Pico Promedio</div>
-                      </div>
-                      <div className="text-center">
-                        <div className={`text-2xl font-bold ${currentPeak >= 5 ? 'text-red-500' : currentPeak >= 3 ? 'text-amber-500' : 'text-green-500'}`}>
-                          {currentPeak}
-                        </div>
-                        <div className="text-xs text-zinc-500">Pico Actual</div>
-                      </div>
-                    </div>
-                    
-                    <div className="flex items-center gap-2">
-                      {showKeyboardHint && (
-                        <div className="flex items-center justify-between p-2 bg-cyan-500/10 border border-cyan-500/30 rounded text-xs">
-                          <div className="flex items-center gap-2 text-cyan-400">
-                            <Keyboard className="w-4 h-4" />
-                            <span>Usa las teclas <strong>0-9</strong> para ingreso rápido</span>
-                          </div>
-                          <Button variant="ghost" size="sm" onClick={() => setShowKeyboardHint(false)} className="h-6 text-xs text-zinc-400">Ocultar</Button>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Auto Capture Button */}
-                    <div className="mt-2">
-                      <Button
-                        onClick={toggleAutoCapture}
-                        className={`w-full font-bold py-2.5 text-sm transition-all ${
-                          isAutoCapture
-                            ? 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white shadow-lg shadow-green-500/20'
-                            : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 hover:border-zinc-600'
-                        }`}
-                      >
-                        {isAutoCapture ? (
-                          <>
-                            <Scan className="w-4 h-4 mr-2 animate-pulse" />
-                            Auto Captura ACTIVA
-                            <span className="ml-2 w-2 h-2 rounded-full bg-green-300 animate-pulse" />
-                          </>
-                        ) : (
-                          <>
-                            <Wifi className="w-4 h-4 mr-2" />
-                            Activar Auto Captura
-                          </>
-                        )}
-                      </Button>
-                      {isAutoCapture && (
-                        <div className="mt-1.5 space-y-1">
-                          <div className="flex items-center justify-center gap-2 text-[10px]">
-                            <span className="flex items-center gap-1 text-green-400">
-                              <Wifi className="w-3 h-3" />
-                              Monitoreando...
-                            </span>
-                            {capturerTotal > 0 && (
-                              <>
-                                <span className="text-zinc-600">|</span>
-                                <span className="text-zinc-400">
-                                  {capturerTotal} numeros capturados
-                                </span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                      {/* Extension table selector — always visible */}
-                      <div className="mt-2 p-2.5 bg-zinc-800/60 border border-zinc-700/50 rounded-lg space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[9px] text-zinc-500 font-medium">MESA DE RULETA</span>
-                          {tableSaving && <span className="text-[8px] text-green-400">Guardando...</span>}
-                          {tableSaved && <span className="text-[8px] text-green-400">Guardado!</span>}
-                        </div>
-                        <select
-                          value={extSelectedTable}
-                          onChange={handleExtTableChange}
-                          className="w-full h-7 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-300 px-2 cursor-pointer outline-none focus:border-green-500/50"
-                        >
-                          <option value="https://betfury.com/es/casino/games/roulette-live-by-evolution">Evolution Live Roulette</option>
-                          <option value="https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play">Roulette Azure (Pragmatic)</option>
-                          <option value="https://casino.pinnacle.com/es/live-casino/games/european-roulette/">European Roulette (Evolution)</option>
-                          <option value="https://casino.pinnacle.com/es/live-casino/games/roulette-azure/">Roulette Azure (Pragmatic)</option>
-                        </select>
-                        <p className="text-[8px] text-zinc-600 text-center">
-                          El capturador server usara esta mesa
-                        </p>
-                      </div>
-
-                      {!isAutoCapture && (
-                        <div className="mt-2 p-2.5 bg-zinc-800/60 border border-zinc-700/50 rounded-lg space-y-2">
-                          <div className="flex items-center gap-1.5 text-[10px] text-amber-400 font-medium">
-                            <HelpCircle className="w-3 h-3" />
-                            Instala la extension de Chrome:
-                          </div>
-                          <ol className="text-[9px] text-zinc-400 space-y-1 pl-3 list-decimal leading-tight">
-                            <li>Descargá la extension haciendo click abajo</li>
-                            <li>Extraé el ZIP en una carpeta en tu PC</li>
-                            <li>En Chrome, abrí <strong className="text-zinc-300">chrome://extensions</strong></li>
-                            <li>Activá <strong className="text-zinc-300">"Modo de desarrollador"</strong></li>
-                            <li>Click en <strong className="text-zinc-300">"Cargar extensión sin empaquetar"</strong> y seleccioná la carpeta extraida</li>
-                            <li>Abri la mesa de ruleta en Betfury y Listo!</li>
-                          </ol>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => window.open('/api/download-extension', '_blank')}
-                            className="w-full h-7 text-[10px] bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20 hover:text-green-300 mt-1 font-bold"
-                          >
-                            <Download className="w-3 h-3 mr-1" />
-                            Descargar Extension RollerWin v7.6.1 (ZIP)
-                          </Button>
-                          <p className="text-[8px] text-zinc-600 text-center">
-                            No necesitás Tampermonkey con esta extension
-                          </p>
-                          {/* Capturador Server - Playwright */}
-                          <div className="border-t border-zinc-700/40 pt-2 mt-2">
-                            <p className="text-[9px] text-cyan-400 font-semibold text-center mb-1">
-                              CAPTURADOR SERVER 24/7 (Sin extension)
-                            </p>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => window.open('/roulette-capture.zip', '_blank')}
-                              className="w-full h-7 text-[10px] bg-cyan-500/10 border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-300 font-bold"
-                            >
-                              <Download className="w-3 h-3 mr-1" />
-                              Descargar Capturador Server (ZIP)
-                            </Button>
-                            <p className="text-[8px] text-zinc-600 text-center mt-1">
-                              BetFury + Pinnacle | Anti-deteccion | 24/7
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
+            {!isJoined && (
+              <Card className="bg-zinc-900 border-zinc-800">
+                <CardContent className="py-16">
+                  <div className="text-center space-y-3">
+                    <div className="text-4xl">🎰</div>
+                    <h3 className="text-white font-bold text-lg">Bienvenido a RollerWin</h3>
+                    <p className="text-zinc-400 text-sm max-w-md mx-auto">
+                      Configurá tu casino y mesa en el panel de la derecha, luego hacé click en &quot;Abrir Mesa&quot; para comenzar a recibir predicciones en vivo.
+                    </p>
+                    <p className="text-zinc-600 text-xs">
+                      También podés activar &quot;Auto Captura&quot; para capturar números automáticamente con el Capturador Server.
+                    </p>
                   </div>
-                )}
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Number Input Grid */}
             {isJoined && (
@@ -2500,11 +2242,161 @@ export function DashboardLive() {
             )}
           </div>
 
-          {/* Current Peak Display - Compact Side Panel */}
-          {isJoined && (
-            <div className="xl:col-span-1">
-              {/* Current Peak */}
-              <Card className="bg-zinc-900 border-zinc-800">
+          {/* Side Panel - Config + Tools */}
+          <div className="xl:col-span-1 space-y-4">
+
+            {/* Casino Config Card */}
+            <Card className="bg-zinc-900 border-zinc-800">
+              <CardHeader className="py-2.5 px-4">
+                <CardTitle className="text-white flex items-center gap-2 text-sm">
+                  <Radio className="w-4 h-4 text-amber-500" />
+                  Configuración
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="px-4 pb-4 space-y-3">
+                {/* Casino */}
+                <div className="space-y-1">
+                  <label className="text-[10px] text-zinc-500 font-medium block">Casino</label>
+                  <Select value={selectedCasino} onValueChange={(v) => {
+                    setSelectedCasino(v)
+                    const casino = CASINO_CONFIGS.find(c => c.id === v)
+                    if (casino) setSelectedTable(casino.tables[0].id)
+                  }}>
+                    <SelectTrigger className="h-8 bg-zinc-800 border-zinc-700 text-white text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {CASINO_CONFIGS.map(casino => (
+                        <SelectItem key={casino.id} value={casino.id}>{casino.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Mesa de Ruleta */}
+                <div className="space-y-1">
+                  <label className="text-[10px] text-zinc-500 font-medium block">Mesa de Ruleta</label>
+                  <Select value={selectedTable} onValueChange={setSelectedTable}>
+                    <SelectTrigger className="h-8 bg-zinc-800 border-zinc-700 text-white text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {currentCasino?.tables.map(table => (
+                        <SelectItem key={table.id} value={table.id}>{table.name} {table.provider && `(${table.provider})`}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Tipo de Apuesta */}
+                <div className="space-y-1">
+                  <label className="text-[10px] text-zinc-500 font-medium block">Tipo de Apuesta</label>
+                  <Select value={selectedBetType} onValueChange={(v) => setSelectedBetType(v as BetType)}>
+                    <SelectTrigger className="h-8 bg-zinc-800 border-zinc-700 text-white text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {BET_TYPE_OPTIONS.map(bet => (
+                        <SelectItem key={bet.id} value={bet.id}>{bet.icon} {bet.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Join / Session indicator */}
+                {!isJoined ? (
+                  <Button onClick={handleJoinTable} className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-bold py-2.5 text-xs">
+                    <ExternalLink className="w-4 h-4 mr-1.5" />Abrir Mesa
+                  </Button>
+                ) : (
+                  <div className="flex items-center justify-center gap-3 py-1">
+                    <div className="text-center">
+                      <div className="text-lg font-bold text-green-500">{successCount}</div>
+                      <div className="text-[9px] text-zinc-500">Aciertos</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-lg font-bold text-amber-500">{avgPeakHeight}</div>
+                      <div className="text-[9px] text-zinc-500">Pico Prom.</div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Auto Capture */}
+                {isJoined && (
+                  <div className="space-y-1.5">
+                    <Button
+                      onClick={toggleAutoCapture}
+                      className={`w-full font-bold py-2 text-xs transition-all ${
+                        isAutoCapture
+                          ? 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white shadow-lg shadow-green-500/20'
+                          : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 hover:border-zinc-600'
+                      }`}
+                    >
+                      {isAutoCapture ? (
+                        <>
+                          <Scan className="w-3.5 h-3.5 mr-1.5 animate-pulse" />
+                          Auto Captura ACTIVA
+                          <span className="ml-1.5 w-2 h-2 rounded-full bg-green-300 animate-pulse" />
+                        </>
+                      ) : (
+                        <>
+                          <Wifi className="w-3.5 h-3.5 mr-1.5" />
+                          Activar Auto Captura
+                        </>
+                      )}
+                    </Button>
+                    {isAutoCapture && (
+                      <div className="flex items-center justify-center gap-2 text-[10px]">
+                        <span className="flex items-center gap-1 text-green-400">
+                          <Wifi className="w-3 h-3" />
+                          Monitoreando...
+                        </span>
+                        {capturerTotal > 0 && (
+                          <>
+                            <span className="text-zinc-600">|</span>
+                            <span className="text-zinc-400">{capturerTotal} numeros</span>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Capturador table selector */}
+                <div className="p-2 bg-zinc-800/60 border border-zinc-700/50 rounded-lg space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] text-zinc-500 font-medium">MESA CAPTURADOR</span>
+                    {tableSaving && <span className="text-[8px] text-green-400">Guardando...</span>}
+                    {tableSaved && <span className="text-[8px] text-green-400">Guardado!</span>}
+                  </div>
+                  <select
+                    value={extSelectedTable}
+                    onChange={handleExtTableChange}
+                    className="w-full h-6 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-300 px-2 cursor-pointer outline-none focus:border-green-500/50"
+                  >
+                    <optgroup label="BetFury">
+                      <option value="https://betfury.com/es/casino/games/roulette-live-by-evolution">Evolution Live</option>
+                      <option value="https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play">Roulette Azure</option>
+                    </optgroup>
+                    <optgroup label="Pinnacle">
+                      <option value="https://casino.pinnacle.com/es/live-casino/games/european-roulette/">European Roulette</option>
+                      <option value="https://casino.pinnacle.com/es/live-casino/games/roulette-azure/">Roulette Azure</option>
+                    </optgroup>
+                  </select>
+                </div>
+
+                {/* Download Capturador */}
+                {!isAutoCapture && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => window.open('/roulette-capture.zip', '_blank')}
+                    className="w-full h-7 text-[10px] bg-cyan-500/10 border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-300 font-bold"
+                  >
+                    <Download className="w-3 h-3 mr-1" />
+                    Descargar Capturador Server
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Current Peak */}
+            {isJoined && (
+            <Card className="bg-zinc-900 border-zinc-800">
                 <CardContent className="py-4">
                   <div className="text-center">
                     <div className="text-xs text-zinc-400 mb-1">PICO ACTUAL</div>
@@ -2517,9 +2409,12 @@ export function DashboardLive() {
                   </div>
                 </CardContent>
               </Card>
+            )}
 
+            {isJoined && (
+              <>
               {/* Bankroll Calculator - Side Panel */}
-              <Card className="bg-gradient-to-br from-zinc-900 to-zinc-800 border-emerald-500/30 mt-4">
+              <Card className="bg-gradient-to-br from-zinc-900 to-zinc-800 border-emerald-500/30">
                 <CardHeader className="py-2 px-4">
                   <CardTitle className="text-white flex items-center justify-between text-sm">
                     <span className="flex items-center gap-2">
@@ -2781,8 +2676,9 @@ export function DashboardLive() {
                   )}
                 </CardContent>
               </Card>
-            </div>
-          )}
+              </>
+            )}
+          </div>
         </div>
 
         {/* ═══ Advanced Backtesting V6.0 ═══ */}
