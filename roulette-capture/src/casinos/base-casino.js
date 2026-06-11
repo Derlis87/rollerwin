@@ -19,15 +19,17 @@ class BaseCasino {
     this.running = false;
     this.recoveryCount = 0;
     this.consecutiveRecoveryFails = 0;
-    this.status = 'idle'; // idle, connecting, capturing, recovering, error
+    this.status = 'idle';
     this.url = '';
+    this.dynamicUrl = null; // URL override desde el dashboard
   }
 
   /**
-   * URL de la mesa de ruleta (override en subclase)
+   * URL de la mesa - usa dynamicUrl si fue seteada por el dashboard
    */
   getRouletteURL() {
-    throw new Error('getRouletteURL() debe ser implementado por la subclase');
+    if (this.dynamicUrl) return this.dynamicUrl;
+    throw new Error('getRouletteURL() debe ser implementado o se debe setear dynamicUrl');
   }
 
   /**
@@ -213,7 +215,8 @@ class BaseCasino {
       ...this.processor.getStats(),
       status: this.status,
       recoveryCount: this.recoveryCount,
-      url: this.getRouletteURL(),
+      url: this.dynamicUrl || this.getRouletteURL(),
+      dynamicUrl: this.dynamicUrl,
     };
   }
 }

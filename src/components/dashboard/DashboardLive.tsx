@@ -1167,11 +1167,24 @@ export function DashboardLive() {
       capturerStop()
       capturerDisconnect()
       setIsAutoCapture(false)
+      // Notificar al script capturador que se desactivo
+      fetch('/api/capture/pipeline-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: false }),
+      }).catch(() => {})
     } else {
       capturerConnect()
       setIsAutoCapture(true)
+      // Notificar al script capturador: activar captura en esta mesa
+      const casino = extSelectedTable.includes('pinnacle') ? 'pinnacle' : 'betfury'
+      fetch('/api/capture/pipeline-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: true, table: extSelectedTable, casino }),
+      }).catch(() => {})
     }
-  }, [isAutoCapture, capturerConnect, capturerDisconnect, capturerStop])
+  }, [isAutoCapture, capturerConnect, capturerDisconnect, capturerStop, extSelectedTable])
 
   // Handle join table
   const handleJoinTable = useCallback(() => {
@@ -2010,8 +2023,13 @@ export function DashboardLive() {
                         onChange={handleExtTableChange}
                         className="w-full h-9 bg-zinc-900 border border-zinc-700 rounded text-sm text-white px-3 cursor-pointer outline-none focus:border-green-500/50"
                       >
-                        <option value="https://betfury.com/es/casino/games/roulette-live-by-evolution">Evolution Live Roulette</option>
-                        <option value="https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play">Pragmatic Roulette Azure</option>
+                        <optgroup label="BetFury">
+                          <option value="https://betfury.com/es/casino/games/roulette-live-by-evolution">Evolution Live Roulette</option>
+                          <option value="https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play">Pragmatic Roulette Azure</option>
+                        </optgroup>
+                        <optgroup label="Pinnacle">
+                          <option value="https://www.pinnacle.com/es/casino/live/roulette">Live Roulette</option>
+                        </optgroup>
                       </select>
                       <p className="text-[10px] text-zinc-500">
                         La extension usara esta mesa cuando haga recovery automatico
@@ -2128,6 +2146,7 @@ export function DashboardLive() {
                         >
                           <option value="https://betfury.com/es/casino/games/roulette-live-by-evolution">Evolution Live Roulette</option>
                           <option value="https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play">Pragmatic Roulette Azure</option>
+                          <option value="https://www.pinnacle.com/es/casino/live/roulette">Pinnacle Live Roulette</option>
                         </select>
                         <p className="text-[8px] text-zinc-600 text-center">
                           La extension usara esta mesa en el recovery

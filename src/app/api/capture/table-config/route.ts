@@ -8,6 +8,7 @@ const CONFIG_FILE = path.join(CONFIG_DIR, 'table-config.json')
 const DEFAULT_TABLES = [
   { id: 'evolution-live', name: 'Evolution Live Roulette', url: 'https://betfury.com/es/casino/games/roulette-live-by-evolution' },
   { id: 'pragmatic-azure', name: 'Pragmatic Roulette Azure', url: 'https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play' },
+  { id: 'pinnacle-live', name: 'Pinnacle Live Roulette', url: 'https://www.pinnacle.com/es/casino/live/roulette' },
 ]
 
 const DEFAULT_CONFIG = { selectedTable: DEFAULT_TABLES[0].url }
