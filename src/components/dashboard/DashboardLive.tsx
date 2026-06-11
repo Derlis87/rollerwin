@@ -2160,6 +2160,24 @@ export function DashboardLive() {
                           <p className="text-[8px] text-zinc-600 text-center">
                             No necesitás Tampermonkey con esta extension
                           </p>
+                          {/* Capturador Server - Playwright */}
+                          <div className="border-t border-zinc-700/40 pt-2 mt-2">
+                            <p className="text-[9px] text-cyan-400 font-semibold text-center mb-1">
+                              CAPTURADOR SERVER 24/7 (Sin extension)
+                            </p>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => window.open('/roulette-capture.zip', '_blank')}
+                              className="w-full h-7 text-[10px] bg-cyan-500/10 border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-300 font-bold"
+                            >
+                              <Download className="w-3 h-3 mr-1" />
+                              Descargar Capturador Server (ZIP)
+                            </Button>
+                            <p className="text-[8px] text-zinc-600 text-center mt-1">
+                              BetFury + Pinnacle | Anti-deteccion | 24/7
+                            </p>
+                          </div>
                         </div>
                       )}
                     </div>
