@@ -1177,7 +1177,7 @@ export function DashboardLive() {
       capturerConnect()
       setIsAutoCapture(true)
       // Notificar al script capturador: activar captura en esta mesa
-      const casino = extSelectedTable.includes('pinnacle') ? 'pinnacle' : 'betfury'
+      const casino = extSelectedTable.includes('pinnacle.com') ? 'pinnacle' : 'betfury'
       fetch('/api/capture/pipeline-status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2025,14 +2025,15 @@ export function DashboardLive() {
                       >
                         <optgroup label="BetFury">
                           <option value="https://betfury.com/es/casino/games/roulette-live-by-evolution">Evolution Live Roulette</option>
-                          <option value="https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play">Pragmatic Roulette Azure</option>
+                          <option value="https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play">Roulette Azure (Pragmatic)</option>
                         </optgroup>
                         <optgroup label="Pinnacle">
-                          <option value="https://www.pinnacle.com/es/casino/live/roulette">Live Roulette</option>
+                          <option value="https://casino.pinnacle.com/es/live-casino/games/european-roulette/">European Roulette (Evolution)</option>
+                          <option value="https://casino.pinnacle.com/es/live-casino/games/roulette-azure/">Roulette Azure (Pragmatic)</option>
                         </optgroup>
                       </select>
                       <p className="text-[10px] text-zinc-500">
-                        La extension usara esta mesa cuando haga recovery automatico
+                        El capturador server usara esta mesa al activar Auto Captura
                       </p>
                     </div>
 
@@ -2145,11 +2146,12 @@ export function DashboardLive() {
                           className="w-full h-7 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-300 px-2 cursor-pointer outline-none focus:border-green-500/50"
                         >
                           <option value="https://betfury.com/es/casino/games/roulette-live-by-evolution">Evolution Live Roulette</option>
-                          <option value="https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play">Pragmatic Roulette Azure</option>
-                          <option value="https://www.pinnacle.com/es/casino/live/roulette">Pinnacle Live Roulette</option>
+                          <option value="https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play">Roulette Azure (Pragmatic)</option>
+                          <option value="https://casino.pinnacle.com/es/live-casino/games/european-roulette/">European Roulette (Evolution)</option>
+                          <option value="https://casino.pinnacle.com/es/live-casino/games/roulette-azure/">Roulette Azure (Pragmatic)</option>
                         </select>
                         <p className="text-[8px] text-zinc-600 text-center">
-                          La extension usara esta mesa en el recovery
+                          El capturador server usara esta mesa
                         </p>
                       </div>
 

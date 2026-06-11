@@ -12,7 +12,7 @@ function loadConfig() {
     PINNACLE_ENABLED: 'true',
     STAKE_ENABLED: 'false',
     BETFURY_ROULETTE_URL: 'https://betfury.com/es/casino/games/roulette-live-by-evolution',
-    PINNACLE_ROULETTE_URL: 'https://www.pinnacle.com/es/casino/live/roulette',
+    PINNACLE_ROULETTE_URL: 'https://casino.pinnacle.com/es/live-casino/games/european-roulette/',
     STAKE_ROULETTE_URL: 'https://stake.com/casino/games/evolution/roulette',
     BETFURY_EMAIL: '',
     BETFURY_PASSWORD: '',

@@ -6,9 +6,12 @@ const CONFIG_DIR = process.env.NODE_ENV === 'production' ? '/tmp/rw-capture' : p
 const CONFIG_FILE = path.join(CONFIG_DIR, 'table-config.json')
 
 const DEFAULT_TABLES = [
-  { id: 'evolution-live', name: 'Evolution Live Roulette', url: 'https://betfury.com/es/casino/games/roulette-live-by-evolution' },
-  { id: 'pragmatic-azure', name: 'Pragmatic Roulette Azure', url: 'https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play' },
-  { id: 'pinnacle-live', name: 'Pinnacle Live Roulette', url: 'https://www.pinnacle.com/es/casino/live/roulette' },
+  // === BetFury ===
+  { id: 'betfury-evolution', name: 'Evolution Live Roulette', url: 'https://betfury.com/es/casino/games/roulette-live-by-evolution', casino: 'betfury' },
+  { id: 'betfury-azure', name: 'Roulette Azure (Pragmatic Play)', url: 'https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play', casino: 'betfury' },
+  // === Pinnacle ===
+  { id: 'pinnacle-evolution', name: 'European Roulette (Evolution)', url: 'https://casino.pinnacle.com/es/live-casino/games/european-roulette/', casino: 'pinnacle' },
+  { id: 'pinnacle-azure', name: 'Roulette Azure (Pragmatic Play)', url: 'https://casino.pinnacle.com/es/live-casino/games/roulette-azure/', casino: 'pinnacle' },
 ]
 
 const DEFAULT_CONFIG = { selectedTable: DEFAULT_TABLES[0].url }

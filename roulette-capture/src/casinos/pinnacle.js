@@ -21,7 +21,8 @@ class PinnacleCasino extends BaseCasino {
     const url = this.getRouletteURL();
     log.info(this.name, 'Navegando a Pinnacle...');
 
-    // Ir a la home primero para establecer cookies y sesion
+    // Las URLs de mesa pueden ser casino.pinnacle.com o www.pinnacle.com
+    // Ir a la home principal primero para establecer cookies y sesion
     await this.page.goto('https://www.pinnacle.com/es/', {
       waitUntil: 'domcontentloaded',
       timeout: 30000,
@@ -32,7 +33,6 @@ class PinnacleCasino extends BaseCasino {
 
     // Manejar banner de cookies/age verification si aparece
     try {
-      // Pinnacle suele mostrar un dialogo de "aceptar cookies" o age check
       const acceptSelectors = [
         'button[data-testid="accept-cookies"]',
         'button:has-text("Accept")',
@@ -58,22 +58,12 @@ class PinnacleCasino extends BaseCasino {
       }
     } catch (e) { /* no hay dialogo */ }
 
-    // Navegar a la seccion de casino live si la URL no lo incluye
-    if (!url.includes('/casino/')) {
-      try {
-        // Buscar link de casino en el nav
-        const casinoLink = await this.page.$('a[href*="/casino"], a:has-text("Casino"), a:has-text("Live Casino")');
-        if (casinoLink) {
-          await casinoLink.click();
-          log.info(this.name, 'Navegado a la seccion de casino');
-          await randomDelay(2000, 3000);
-        }
-      } catch (e) { /* ya puede estar en casino */ }
-    }
-
     await humanPause(1000, 2000);
 
-    // Navegar a la mesa de ruleta
+    // Navegar directamente a la mesa de ruleta
+    // Las URLs pueden ser:
+    //   https://casino.pinnacle.com/es/live-casino/games/european-roulette/
+    //   https://casino.pinnacle.com/es/live-casino/games/roulette-azure/
     log.info(this.name, `Abriendo mesa: ${url}`);
     await this.page.goto(url, {
       waitUntil: 'domcontentloaded',
@@ -83,7 +73,7 @@ class PinnacleCasino extends BaseCasino {
     // Comportamiento humano mientras carga
     await humanPause(2000, 4000);
 
-    // Segundo intento de cerrar popups que aparezcan despues de la navegacion
+    // Cerrar popups que aparezcan despues de la navegacion
     try {
       const popupSelectors = [
         'button[aria-label="Close"]',
