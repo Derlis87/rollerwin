@@ -199,21 +199,25 @@ export function DashboardLive() {
   const [selectedTable, setSelectedTable] = useState(CASINO_CONFIGS[0].tables[0].id)
   const [selectedBetType, setSelectedBetType] = useState<BetType>('color')
 
-  // Extension table selector (synced with server)
-  const [extSelectedTable, setExtSelectedTable] = useState('https://betfury.com/es/casino/games/roulette-live-by-evolution')
+  // Current capture table URL (derived from selectedCasino + selectedTable)
+  const captureTableUrl = (() => {
+    const casino = CASINO_CONFIGS.find(c => c.id === selectedCasino)
+    const table = casino?.tables.find(t => t.id === selectedTable)
+    return table?.url || casino?.rouletteUrl || ''
+  })()
+
   const [tableSaving, setTableSaving] = useState(false)
   const [tableSaved, setTableSaved] = useState(false)
 
-  const handleExtTableChange = useCallback(async (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const val = e.target.value
-    setExtSelectedTable(val)
+  // Sync table selection to server when it changes
+  const syncTableToServer = useCallback(async (url: string) => {
     setTableSaving(true)
     setTableSaved(false)
     try {
       await fetch('/api/capture/table-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ table: val }),
+        body: JSON.stringify({ table: url }),
       })
       setTableSaved(true)
       setTimeout(() => setTableSaved(false), 2000)
@@ -221,11 +225,27 @@ export function DashboardLive() {
     setTableSaving(false)
   }, [])
 
-  // Load saved table on mount
+  // When casino or table changes, sync to server
+  useEffect(() => {
+    if (captureTableUrl) syncTableToServer(captureTableUrl)
+  }, [selectedCasino, selectedTable])
+
+  // Load saved table on mount and set casino/table from it
   useEffect(() => {
     fetch('/api/capture/table-config')
       .then(r => r.json())
-      .then(data => { if (data.selectedTable) setExtSelectedTable(data.selectedTable) })
+      .then(data => {
+        if (!data.selectedTable) return
+        // Find which casino + table matches the saved URL
+        for (const casino of CASINO_CONFIGS) {
+          const match = casino.tables.find(t => t.url === data.selectedTable)
+          if (match) {
+            setSelectedCasino(casino.id)
+            setSelectedTable(match.id)
+            return
+          }
+        }
+      })
       .catch(() => {})
   }, [])
   
@@ -1176,14 +1196,14 @@ export function DashboardLive() {
       capturerConnect()
       setIsAutoCapture(true)
       // Notificar al script capturador: activar captura en esta mesa
-      const casino = extSelectedTable.includes('pinnacle.com') ? 'pinnacle' : 'betfury'
+      const casinoName = selectedCasino
       fetch('/api/capture/pipeline-status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ active: true, table: extSelectedTable, casino }),
+        body: JSON.stringify({ active: true, table: captureTableUrl, casino: casinoName }),
       }).catch(() => {})
     }
-  }, [isAutoCapture, capturerConnect, capturerDisconnect, capturerStop, extSelectedTable])
+  }, [isAutoCapture, capturerConnect, capturerDisconnect, capturerStop, selectedCasino, captureTableUrl])
 
   // Handle join table
   const handleJoinTable = useCallback(() => {
@@ -2356,27 +2376,10 @@ export function DashboardLive() {
                   </div>
                 )}
 
-                {/* Capturador table selector */}
-                <div className="p-2 bg-zinc-800/60 border border-zinc-700/50 rounded-lg space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[9px] text-zinc-500 font-medium">MESA CAPTURADOR</span>
-                    {tableSaving && <span className="text-[8px] text-green-400">Guardando...</span>}
-                    {tableSaved && <span className="text-[8px] text-green-400">Guardado!</span>}
-                  </div>
-                  <select
-                    value={extSelectedTable}
-                    onChange={handleExtTableChange}
-                    className="w-full h-6 bg-zinc-900 border border-zinc-700 rounded text-[10px] text-zinc-300 px-2 cursor-pointer outline-none focus:border-green-500/50"
-                  >
-                    <optgroup label="BetFury">
-                      <option value="https://betfury.com/es/casino/games/roulette-live-by-evolution">Evolution Live</option>
-                      <option value="https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play">Roulette Azure</option>
-                    </optgroup>
-                    <optgroup label="Pinnacle">
-                      <option value="https://casino.pinnacle.com/es/live-casino/games/european-roulette/">European Roulette</option>
-                      <option value="https://casino.pinnacle.com/es/live-casino/games/roulette-azure/">Roulette Azure</option>
-                    </optgroup>
-                  </select>
+                {/* Sync indicator */}
+                <div className="flex items-center justify-center h-4">
+                  {tableSaving && <span className="text-[9px] text-amber-400">Guardando...</span>}
+                  {tableSaved && <span className="text-[9px] text-green-400">Sincronizado</span>}
                 </div>
 
                 {/* Download Capturador */}

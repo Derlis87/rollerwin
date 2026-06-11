@@ -16,28 +16,48 @@ export interface CasinoTable {
   provider?: string
 }
 
-// Solo Betfury
 export const CASINO_CONFIGS: CasinoConfig[] = [
   {
     id: 'betfury',
-    name: 'Betfury',
+    name: 'BetFury',
     loginUrl: 'https://betfury.com/es',
     rouletteUrl: 'https://betfury.com/es/casino',
     tables: [
-      { 
-        id: 'roulette-live-evolution', 
-        name: 'Roulette Live', 
+      {
+        id: 'roulette-live-evolution',
+        name: 'Roulette Live (Evolution)',
         url: 'https://betfury.com/es/casino/games/roulette-live-by-evolution',
         provider: 'Evolution'
       },
       {
         id: 'roulette-azure-pragmatic',
-        name: 'Roulette Azure',
+        name: 'Roulette Azure (Pragmatic)',
         url: 'https://betfury.com/es/casino/games/roulette-azure-by-pragmatic-play',
         provider: 'Pragmatic Play'
       }
     ],
     notes: 'Haz login en Betfury y accede directamente a la mesa de ruleta'
+  },
+  {
+    id: 'pinnacle',
+    name: 'Pinnacle',
+    loginUrl: 'https://www.pinnacle.com/es/',
+    rouletteUrl: 'https://casino.pinnacle.com/es/live-casino/games/european-roulette/',
+    tables: [
+      {
+        id: 'pinnacle-european-roulette',
+        name: 'European Roulette (Evolution)',
+        url: 'https://casino.pinnacle.com/es/live-casino/games/european-roulette/',
+        provider: 'Evolution'
+      },
+      {
+        id: 'pinnacle-roulette-azure',
+        name: 'Roulette Azure (Pragmatic)',
+        url: 'https://casino.pinnacle.com/es/live-casino/games/roulette-azure/',
+        provider: 'Pragmatic Play'
+      }
+    ],
+    notes: 'Haz login en Pinnacle y accede a la mesa de ruleta en vivo'
   }
 ]
 
@@ -48,10 +68,10 @@ export function getCasinoById(id: string): CasinoConfig | undefined {
 export function getTableUrl(casinoId: string, tableId: string): string {
   const casino = getCasinoById(casinoId)
   if (!casino) return ''
-  
+
   const table = casino.tables.find(t => t.id === tableId)
   if (table?.url) return table.url
-  
+
   return casino.rouletteUrl
 }
 
@@ -61,15 +81,15 @@ let casinoWindowRef: Window | null = null
 export function openCasino(casinoId: string, tableId?: string): Window | null {
   const casino = getCasinoById(casinoId)
   if (!casino) return null
-  
+
   // Get direct table URL
   const url = getTableUrl(casinoId, tableId || '')
-  
+
   // Si ya existe una ventana abierta, cerrarla primero
   if (casinoWindowRef && !casinoWindowRef.closed) {
     casinoWindowRef.close()
   }
-  
+
   // Open in new window with specific features
   const features = [
     'width=1600',
@@ -83,9 +103,10 @@ export function openCasino(casinoId: string, tableId?: string): Window | null {
     'resizable=yes',
     'scrollbars=yes'
   ].join(',')
-  
+
   // Usar un nombre fijo para reutilizar la misma ventana
-  casinoWindowRef = window.open(url, 'BetfuryCasino', features)
-  
+  const windowName = casinoId === 'pinnacle' ? 'PinnacleCasino' : 'BetfuryCasino'
+  casinoWindowRef = window.open(url, windowName, features)
+
   return casinoWindowRef
 }
