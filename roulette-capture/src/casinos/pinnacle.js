@@ -14,6 +14,8 @@ class PinnacleCasino extends BaseCasino {
   }
 
   getRouletteURL() {
+    // Priorizar la URL dinamica que viene del dashboard de RollerWin
+    if (this.dynamicUrl) return this.dynamicUrl;
     return this.config.PINNACLE_ROULETTE_URL;
   }
 
@@ -249,43 +251,47 @@ class PinnacleCasino extends BaseCasino {
   }
 
   /**
-   * Verifica si ya estamos logueados
+   * Verifica si ya estamos logueados en el casino (no solo en el sitio principal)
    */
   async _isLoggedIn() {
     try {
-      // Navegar a una pagina protegida (mi cuenta)
-      const response = await this.page.goto('https://www.pinnacle.com/es/account/overview', {
+      // Intentar navegar a una pagina del casino para verificar sesion real
+      const response = await this.page.goto('https://casino.pinnacle.com/es/live-casino/', {
         waitUntil: 'domcontentloaded',
-        timeout: 15000,
+        timeout: 20000,
       });
 
       const currentUrl = this.page.url();
 
-      // Si redirige a login, no estamos logueados
+      // Si redirige a login o authenticate, no estamos logueados en el casino
       if (currentUrl.includes('login') || currentUrl.includes('authenticate')) {
+        log.info(this.name, 'No logueado en casino - redirigido a login');
         return false;
       }
 
-      // Si estamos en la pagina de cuenta, estamos logueados
-      if (currentUrl.includes('account')) {
-        log.info(this.name, 'Sesion de Pinnacle activa (cookie valida)');
-        return true;
-      }
-
-      // Verificar si hay elemento de usuario logueado en la pagina
+      // Si estamos en el casino, verificar que no hay pantalla de login embebida
       try {
-        const hasUserMenu = await this.page.evaluate(() => {
-          // Buscar indicadores de usuario logueado
-          const userElements = document.querySelectorAll(
-            '[class*="user"], [class*="avatar"], [class*="account"], [class*="balance"]'
-          );
-          return userElements.length > 0;
+        const hasLoginForm = await this.page.evaluate(() => {
+          const inputs = document.querySelectorAll('input[type="password"]');
+          const loginButtons = document.querySelectorAll('button');
+          for (const btn of loginButtons) {
+            const text = (btn.textContent || '').toLowerCase();
+            if (text.includes('log in') || text.includes('login') || text.includes('sign in') || text.includes('ingresar')) {
+              return true;
+            }
+          }
+          return inputs.length > 0;
         });
-        return hasUserMenu;
-      } catch (e) {
-        return false;
-      }
+        if (hasLoginForm) {
+          log.info(this.name, 'Formulario de login detectado en la pagina del casino');
+          return false;
+        }
+      } catch (e) { /* ok */ }
+
+      log.info(this.name, 'Sesion de Pinnacle activa en el casino');
+      return true;
     } catch (err) {
+      log.debug(this.name, `Error verificando sesion: ${err.message}`);
       return false;
     }
   }

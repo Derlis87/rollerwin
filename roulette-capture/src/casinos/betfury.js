@@ -12,6 +12,7 @@ class BetFuryCasino extends BaseCasino {
   }
 
   getRouletteURL() {
+    if (this.dynamicUrl) return this.dynamicUrl;
     return this.config.BETFURY_ROULETTE_URL;
   }
 
