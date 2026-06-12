@@ -53,7 +53,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { useAppStore, getNumberColor } from '@/store/app-store'
-import { CASINO_CONFIGS, openCasino, getTableUrl } from '@/lib/casino-urls'
+import { CASINO_CONFIGS, getTableUrl } from '@/lib/casino-urls'
 
 import { calculatePeakHistory, getCurrentPeak, parseNumberText, type PeakRecord as EnginePeakRecord } from '@/lib/peak-engine'
 import { PeakLevelCharts } from './charts/PeakLevelCharts'
@@ -251,7 +251,6 @@ export function DashboardLive() {
   
   // Game state
   const [numbers, setNumbers] = useState<number[]>([])
-  const [casinoWindow, setCasinoWindow] = useState<Window | null>(null)
   const [isJoined, setIsJoined] = useState(false)
   const [isCompactMode, setIsCompactMode] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(true)
@@ -1205,10 +1204,9 @@ export function DashboardLive() {
     }
   }, [isAutoCapture, capturerConnect, capturerDisconnect, capturerStop, selectedCasino, captureTableUrl])
 
-  // Handle join table
+  // Handle join table - marca la sesion como activa sin abrir ventana
+  // El capturador se encarga de abrir el navegador
   const handleJoinTable = useCallback(() => {
-    const newWindow = openCasino(selectedCasino, selectedTable)
-    setCasinoWindow(newWindow)
     setIsJoined(true)
     
     localStorage.setItem('currentSession', JSON.stringify({
@@ -1249,15 +1247,11 @@ export function DashboardLive() {
 
   // Leave table
   const handleLeaveTable = useCallback(() => {
-    if (casinoWindow && !casinoWindow.closed) {
-      casinoWindow.close()
-    }
-    setCasinoWindow(null)
     setIsJoined(false)
     stopDemoMode()
     handleClear()
     localStorage.removeItem('currentSession')
-  }, [casinoWindow, stopDemoMode, handleClear])
+  }, [stopDemoMode, handleClear])
 
   // Logout
   const handleLogout = useCallback(async () => {

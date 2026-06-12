@@ -34,18 +34,53 @@ class PinnacleCasino extends BaseCasino {
 
     try {
       // Navegar a la pagina de login de Pinnacle
+      log.info(this.name, 'Navegando a pagina de login...');
       await this.page.goto('https://www.pinnacle.com/es/login', {
         waitUntil: 'domcontentloaded',
         timeout: 30000,
       });
 
-      await randomDelay(2000, 3000);
+      // Esperar que la SPA de Pinnacle renderice los campos de login
+      // Pinnacle puede tardar varios segundos en cargar el formulario
+      log.info(this.name, 'Esperando que el formulario de login cargue...');
+      
+      let formReady = false;
+      for (let attempt = 0; attempt < 15; attempt++) {
+        await randomDelay(1000, 2000);
+        
+        // Verificar si ya estamos logueados (la URL cambio)
+        const checkUrl = this.page.url();
+        if (!checkUrl.includes('login') && !checkUrl.includes('authenticate')) {
+          log.info(this.name, 'Ya se esta logueado en Pinnacle (redireccion)');
+          return true;
+        }
 
-      // Verificar si ya estamos logueados (redirigieron a otra pagina)
-      const currentUrl = this.page.url();
-      if (!currentUrl.includes('login') && !currentUrl.includes('authenticate')) {
-        log.info(this.name, 'Ya se esta logueado en Pinnacle');
-        return true;
+        // Verificar si hay algun input visible en la pagina
+        try {
+          const hasInputs = await this.page.evaluate(() => {
+            const inputs = document.querySelectorAll('input');
+            for (const input of inputs) {
+              const rect = input.getBoundingClientRect();
+              // Al menos 20x10 pixeles y visible
+              if (rect.width > 20 && rect.height > 10 && 
+                  window.getComputedStyle(input).display !== 'none' &&
+                  window.getComputedStyle(input).visibility !== 'hidden') {
+                return true;
+              }
+            }
+            return false;
+          });
+          if (hasInputs) {
+            formReady = true;
+            log.info(this.name, 'Formulario de login detectado');
+            break;
+          }
+        } catch (e) { /* seguir */ }
+      }
+
+      if (!formReady) {
+        log.warn(this.name, 'El formulario de login no cargo a tiempo - login manual necesario');
+        return false;
       }
 
       // Buscar el campo de email/usuario
