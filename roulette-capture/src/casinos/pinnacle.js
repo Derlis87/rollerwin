@@ -1,7 +1,7 @@
 // ============================================================
 // pinnacle.js - Modulo especifico para Pinnacle
 // Pinnacle usa Evolution Gaming para live casino
-// La estructura es: home -> casino -> live casino -> roulette
+// Soporta login automatico con credenciales del .env
 // ============================================================
 const { BaseCasino } = require('./base-casino');
 const { randomDelay } = require('../utils/helpers');
@@ -17,12 +17,249 @@ class PinnacleCasino extends BaseCasino {
     return this.config.PINNACLE_ROULETTE_URL;
   }
 
+  /**
+   * Login automatico en Pinnacle
+   * Pinnacle usa un formulario de login con email y password
+   */
+  async _login() {
+    const email = this.config.PINNACLE_EMAIL;
+    const password = this.config.PINNACLE_PASSWORD;
+
+    if (!email || !password) {
+      log.info(this.name, 'No hay credenciales de Pinnacle en .env - se necesita login manual');
+      return false;
+    }
+
+    log.info(this.name, 'Intentando login automatico...');
+
+    try {
+      // Navegar a la pagina de login de Pinnacle
+      await this.page.goto('https://www.pinnacle.com/es/login', {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
+      });
+
+      await randomDelay(2000, 3000);
+
+      // Verificar si ya estamos logueados (redirigieron a otra pagina)
+      const currentUrl = this.page.url();
+      if (!currentUrl.includes('login') && !currentUrl.includes('authenticate')) {
+        log.info(this.name, 'Ya se esta logueado en Pinnacle');
+        return true;
+      }
+
+      // Buscar el campo de email/usuario
+      // Pinnacle usa diferentes selectores segun la version de la UI
+      const emailSelectors = [
+        'input[type="email"]',
+        'input[name="email"]',
+        'input[name="username"]',
+        'input[placeholder*="correo" i]',
+        'input[placeholder*="email" i]',
+        'input[placeholder*="usuario" i]',
+        'input[placeholder*="user" i]',
+        'input[data-testid="login-username"]',
+        'input[id*="email" i]',
+        'input[id*="username" i]',
+        '#username',
+        '#email',
+      ];
+
+      const passwordSelectors = [
+        'input[type="password"]',
+        'input[name="password"]',
+        'input[data-testid="login-password"]',
+        'input[id*="password" i]',
+        '#password',
+      ];
+
+      // Buscar y llenar email
+      let emailField = null;
+      for (const sel of emailSelectors) {
+        try {
+          emailField = await this.page.$(sel);
+          if (emailField) {
+            const isVisible = await emailField.isVisible().catch(() => false);
+            if (isVisible) {
+              log.info(this.name, `Campo de email encontrado: ${sel}`);
+              break;
+            }
+            emailField = null;
+          }
+        } catch (e) { /* seguir */ }
+      }
+
+      if (!emailField) {
+        log.warn(this.name, 'No se encontro el campo de email - login manual necesario');
+        return false;
+      }
+
+      // Click en el campo primero (comportamiento humano)
+      await emailField.click();
+      await humanPause(500, 1000);
+
+      // Limpiar y escribir email con delay entre teclas
+      await emailField.fill('');
+      await this.page.keyboard.type(email, { delay: 50 + Math.random() * 80 });
+      await humanPause(800, 1500);
+
+      // Buscar y llenar password
+      let passwordField = null;
+      for (const sel of passwordSelectors) {
+        try {
+          passwordField = await this.page.$(sel);
+          if (passwordField) {
+            const isVisible = await passwordField.isVisible().catch(() => false);
+            if (isVisible) {
+              log.info(this.name, `Campo de password encontrado: ${sel}`);
+              break;
+            }
+            passwordField = null;
+          }
+        } catch (e) { /* seguir */ }
+      }
+
+      if (!passwordField) {
+        log.warn(this.name, 'No se encontro el campo de password - login manual necesario');
+        return false;
+      }
+
+      await passwordField.click();
+      await humanPause(300, 700);
+
+      await passwordField.fill('');
+      await this.page.keyboard.type(password, { delay: 30 + Math.random() * 60 });
+      await humanPause(1000, 2000);
+
+      // Buscar y click en el boton de login/submit
+      const loginButtonSelectors = [
+        'button[type="submit"]',
+        'button[data-testid="login-submit"]',
+        'button:has-text("Log in")',
+        'button:has-text("Login")',
+        'button:has-text("Sign in")',
+        'button:has-text("Iniciar sesion")',
+        'button:has-text("Ingresar")',
+        'button:has-text("Entrar")',
+        'input[type="submit"]',
+        '[class*="login"] button[type="submit"]',
+        'form button[type="submit"]',
+      ];
+
+      let loginButton = null;
+      for (const sel of loginButtonSelectors) {
+        try {
+          loginButton = await this.page.$(sel);
+          if (loginButton) {
+            const isVisible = await loginButton.isVisible().catch(() => false);
+            if (isVisible) {
+              log.info(this.name, `Boton de login encontrado: ${sel}`);
+              break;
+            }
+            loginButton = null;
+          }
+        } catch (e) { /* seguir */ }
+      }
+
+      if (!loginButton) {
+        log.warn(this.name, 'No se encontro el boton de login - intentando con Enter');
+        await this.page.keyboard.press('Enter');
+      } else {
+        await loginButton.click();
+      }
+
+      // Esperar a que el login procese
+      log.info(this.name, 'Login enviado, esperando respuesta...');
+      await randomDelay(3000, 5000);
+
+      // Verificar si el login fue exitoso
+      const afterLoginUrl = this.page.url();
+      if (afterLoginUrl.includes('login') || afterLoginUrl.includes('authenticate')) {
+        // Verificar si hay mensaje de error
+        try {
+          const errorMsg = await this.page.evaluate(() => {
+            const errorEls = document.querySelectorAll(
+              '[class*="error"], [class*="alert"], [class*="message"], [role="alert"]'
+            );
+            for (const el of errorEls) {
+              const text = el.textContent?.trim();
+              if (text && text.length > 0 && text.length < 200) return text;
+            }
+            return null;
+          });
+          if (errorMsg) {
+            log.error(this.name, `Error de login: ${errorMsg}`);
+          } else {
+            log.warn(this.name, 'Login parece haber fallado - pagina sigue en login');
+          }
+        } catch (e) { /* ok */ }
+
+        return false;
+      }
+
+      // Verificar que no haya redirigido a una pagina de error
+      if (afterLoginUrl.includes('error') || afterLoginUrl.includes('denied')) {
+        log.error(this.name, `Login redirigio a pagina de error: ${afterLoginUrl}`);
+        return false;
+      }
+
+      log.info(this.name, 'Login automatico exitoso!');
+      await randomDelay(2000, 3000);
+      return true;
+
+    } catch (err) {
+      log.error(this.name, `Error en login automatico: ${err.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Verifica si ya estamos logueados
+   */
+  async _isLoggedIn() {
+    try {
+      // Navegar a una pagina protegida (mi cuenta)
+      const response = await this.page.goto('https://www.pinnacle.com/es/account/overview', {
+        waitUntil: 'domcontentloaded',
+        timeout: 15000,
+      });
+
+      const currentUrl = this.page.url();
+
+      // Si redirige a login, no estamos logueados
+      if (currentUrl.includes('login') || currentUrl.includes('authenticate')) {
+        return false;
+      }
+
+      // Si estamos en la pagina de cuenta, estamos logueados
+      if (currentUrl.includes('account')) {
+        log.info(this.name, 'Sesion de Pinnacle activa (cookie valida)');
+        return true;
+      }
+
+      // Verificar si hay elemento de usuario logueado en la pagina
+      try {
+        const hasUserMenu = await this.page.evaluate(() => {
+          // Buscar indicadores de usuario logueado
+          const userElements = document.querySelectorAll(
+            '[class*="user"], [class*="avatar"], [class*="account"], [class*="balance"]'
+          );
+          return userElements.length > 0;
+        });
+        return hasUserMenu;
+      } catch (e) {
+        return false;
+      }
+    } catch (err) {
+      return false;
+    }
+  }
+
   async navigate() {
     const url = this.getRouletteURL();
     log.info(this.name, 'Navegando a Pinnacle...');
 
-    // Las URLs de mesa pueden ser casino.pinnacle.com o www.pinnacle.com
-    // Ir a la home principal primero para establecer cookies y sesion
+    // Ir a la home principal primero para establecer cookies
     await this.page.goto('https://www.pinnacle.com/es/', {
       waitUntil: 'domcontentloaded',
       timeout: 30000,
@@ -60,10 +297,59 @@ class PinnacleCasino extends BaseCasino {
 
     await humanPause(1000, 2000);
 
+    // === LOGIN ===
+    // 1. Verificar si ya hay sesion activa (cookies guardadas)
+    let loggedIn = await this._isLoggedIn();
+
+    // 2. Si no, intentar login automatico con credenciales del .env
+    if (!loggedIn) {
+      log.info(this.name, 'No hay sesion activa, intentando login...');
+      loggedIn = await this._login();
+    }
+
+    // 3. Si no se pudo logear automaticamente, esperar login manual
+    if (!loggedIn) {
+      const hasCredentials = this.config.PINNACLE_EMAIL && this.config.PINNACLE_PASSWORD;
+      if (hasCredentials) {
+        log.warn(this.name, 'Login automatico fallo - abriendo pagina de login para login manual');
+        await this.page.goto('https://www.pinnacle.com/es/login', {
+          waitUntil: 'domcontentloaded',
+          timeout: 30000,
+        });
+      }
+
+      log.warn(this.name, '');
+      log.warn(this.name, '  ========================================');
+      log.warn(this.name, '  LOGUEATE MANUALMENTE EN EL NAVEGADOR');
+      log.warn(this.name, '  El capturador esperara hasta que lo hagas');
+      log.warn(this.name, '  ========================================');
+      log.warn(this.name, '');
+
+      // Esperar hasta que el usuario se loguee (maximo 3 minutos)
+      const maxWait = 180000; // 3 minutos
+      const checkInterval = 3000;
+      let waited = 0;
+
+      while (waited < maxWait) {
+        await randomDelay(checkInterval - 500, checkInterval + 500);
+        waited += checkInterval;
+
+        // Verificar si ya se loguearon (la URL cambio de login)
+        const currentUrl = this.page.url();
+        if (!currentUrl.includes('login') && !currentUrl.includes('authenticate')) {
+          log.info(this.name, 'Login manual detectado - continuando...');
+          loggedIn = true;
+          break;
+        }
+      }
+
+      if (!loggedIn) {
+        log.error(this.name, 'Timeout esperando login manual - no se pudo conectar');
+        return;
+      }
+    }
+
     // Navegar directamente a la mesa de ruleta
-    // Las URLs pueden ser:
-    //   https://casino.pinnacle.com/es/live-casino/games/european-roulette/
-    //   https://casino.pinnacle.com/es/live-casino/games/roulette-azure/
     log.info(this.name, `Abriendo mesa: ${url}`);
     await this.page.goto(url, {
       waitUntil: 'domcontentloaded',
