@@ -166,6 +166,15 @@ class Orchestrator {
     const stats = this.currentCasino.getStats();
     const secondsSinceCapture = stats.secondsSinceCapture;
 
+    // Si nunca se capturo nada, dar tiempo al juego para cargar (no recovery)
+    // Un numero de ruleta tarda ~30-60 seg entre giros
+    if (secondsSinceCapture === Infinity || secondsSinceCapture === null) {
+      log.debug('orchestrator',
+        `[${this.currentCasino.name}] Esperando primer captura... (sin timeout)`
+      );
+      return;
+    }
+
     log.debug('orchestrator',
       `[${this.currentCasino.name}] status=${stats.status} | ` +
       `sinCaptura=${secondsSinceCapture}s | enviados=${stats.totalSent}`

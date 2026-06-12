@@ -198,34 +198,56 @@ async function scanDOMForNumbers(page) {
 function setupNetworkInterception(page, casinoName, onNumberDetected) {
   const logTag = 'ws-' + casinoName;
 
-  // --- WEBSOCKET INTERCEPTION ---
-  // Playwright expone eventos WebSocket a nivel de pagina
-  page.on('websocket', (ws) => {
-    const url = ws.url();
-    log.debug(logTag, `WebSocket conectado: ${url.substring(0, 80)}...`);
+  // --- Helper: escuchar WebSockets en una pagina o frame ---
+  function listenWebSockets(target, sourceLabel) {
+    target.on('websocket', (ws) => {
+      const url = ws.url();
+      log.info(logTag, `WebSocket conectado [${sourceLabel}]: ${url.substring(0, 100)}...`);
 
-    ws.on('framereceived', (frame) => {
-      try {
-        const payload = frame.payload;
-        if (!payload || payload.length < 2) return;
+      ws.on('framereceived', (frame) => {
+        try {
+          const payload = frame.payload;
+          if (!payload || payload.length < 2) return;
 
-        const number = extractNumber(payload);
-        if (number !== null) {
-          log.info(logTag, `Numero detectado via WS: ${number}`);
-          onNumberDetected(number, 'websocket');
+          const number = extractNumber(payload);
+          if (number !== null) {
+            log.info(logTag, `Numero detectado via WS [${sourceLabel}]: ${number}`);
+            onNumberDetected(number, 'websocket');
+          }
+        } catch (e) {
+          // Silencioso - frames rotos son normales
         }
-      } catch (e) {
-        // Silencioso - frames rotos son normales
-      }
-    });
+      });
 
-    ws.on('close', () => {
-      log.debug(logTag, `WebSocket cerrado: ${url.substring(0, 60)}`);
-    });
+      ws.on('close', () => {
+        log.debug(logTag, `WebSocket cerrado [${sourceLabel}]: ${url.substring(0, 60)}`);
+      });
 
-    ws.on('socketerror', (err) => {
-      log.warn(logTag, `WebSocket error: ${err}`);
+      ws.on('socketerror', (err) => {
+        log.warn(logTag, `WebSocket error [${sourceLabel}]: ${err}`);
+      });
     });
+  }
+
+  // --- WEBSOCKET INTERCEPTION (main page) ---
+  listenWebSockets(page, 'main');
+
+  // --- WEBSOCKET INTERCEPTION (iframes) ---
+  // Evolution y otros proveedores corren el juego dentro de iframes
+  // Playwright no captura WS de iframes automaticamente en algunos casos
+  // Escuchamos nuevos frames y registramos sus WebSockets
+  page.on('frameattached', (frame) => {
+    try {
+      const frameUrl = frame.url();
+      log.debug(logTag, `Frame adjuntado: ${frameUrl.substring(0, 80)}...`);
+      
+      // Escuchar WebSockets dentro del frame
+      // En Playwright, frame hereda los eventos de la pagina,
+      // pero para iframes cross-origin necesitamos escuchar a nivel de contexto
+      listenWebSockets(frame, 'frame');
+    } catch (e) {
+      // Frame puede no soportar eventos
+    }
   });
 
   // --- FETCH/XHR INTERCEPTION ---

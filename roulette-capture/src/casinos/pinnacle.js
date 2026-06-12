@@ -99,27 +99,44 @@ class PinnacleCasino extends BaseCasino {
   async _waitForTable() {
     log.info(this.name, 'Esperando que la mesa de Pinnacle cargue...');
 
+    // Safety: si la pagina fue cerrada o es null, no intentar nada
+    if (!this.page || this.page.isClosed()) {
+      log.error(this.name, 'Pagina cerrada o null en _waitForTable - abortando');
+      throw new Error('Pagina no disponible');
+    }
+
     try {
       // Pinnacle carga el juego en un iframe de Evolution
       // Esperar por el iframe del proveedor
       try {
-        await this.page.waitForSelector('iframe', { timeout: 90000 });
+        await this.page.waitForSelector('iframe', { timeout: 60000 });
         log.info(this.name, 'Iframe de juego detectado');
       } catch (e) {
+        // Verificar si la pagina sigue viva
+        if (!this.page || this.page.isClosed()) {
+          throw new Error('Pagina se cerro durante la espera');
+        }
+
         // Pinnacle a veces usa un div contenedor en vez de iframe directo
-        // Verificar si hay contenedor de juego
-        const hasGame = await this.page.evaluate(() => {
-          const containers = document.querySelectorAll(
-            '[class*="game-iframe"], [class*="casino-game"], [id*="game"], ' +
-            '[class*="live-game"], [class*="evolution"], [class*="egs"]'
-          );
-          return containers.length > 0;
-        });
-        if (hasGame) {
-          log.info(this.name, 'Contenedor de juego detectado (no iframe directo)');
-        } else {
-          log.warn(this.name, 'No se detecto contenedor de juego, esperando adicional...');
-          await randomDelay(5000, 10000);
+        try {
+          const hasGame = await this.page.evaluate(() => {
+            const containers = document.querySelectorAll(
+              '[class*="game-iframe"], [class*="casino-game"], [id*="game"], ' +
+              '[class*="live-game"], [class*="evolution"], [class*="egs"]'
+            );
+            return containers.length > 0;
+          });
+          if (hasGame) {
+            log.info(this.name, 'Contenedor de juego detectado (no iframe directo)');
+          } else {
+            log.warn(this.name, 'No se detecto contenedor de juego, esperando adicional...');
+            await randomDelay(5000, 10000);
+          }
+        } catch (evalErr) {
+          if (!this.page || this.page.isClosed()) {
+            throw new Error('Pagina se cerro durante evaluate');
+          }
+          log.warn(this.name, `Error evaluando DOM: ${evalErr.message}`);
         }
       }
 
@@ -127,11 +144,18 @@ class PinnacleCasino extends BaseCasino {
       await randomDelay(5000, 10000);
 
       // Mirar la mesa (comportamiento humano)
-      await lookAtRouletteTable(this.page);
+      try {
+        await lookAtRouletteTable(this.page);
+      } catch (e) {
+        log.warn(this.name, `Error en lookAtRouletteTable: ${e.message}`);
+      }
 
       // Verificar actividad
       let active = false;
       for (let i = 0; i < 10; i++) {
+        if (!this.page || this.page.isClosed()) {
+          throw new Error('Pagina se cerro durante verificacion de actividad');
+        }
         await randomDelay(2000, 3000);
         try {
           const hasGame = await this.page.evaluate(() => {
@@ -155,6 +179,7 @@ class PinnacleCasino extends BaseCasino {
       }
     } catch (e) {
       log.warn(this.name, `Timeout esperando mesa: ${e.message}`);
+      throw e; // Re-lanzar para que el orchestrator sepa que fallo
     }
   }
 
