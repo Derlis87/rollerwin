@@ -40,6 +40,9 @@ function generateProfile() {
 }
 
 function getProfile() {
+  if (!currentProfile) {
+    generateProfile();
+  }
   return currentProfile;
 }
 
