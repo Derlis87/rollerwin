@@ -33,8 +33,11 @@ function loadConfig() {
     ROTATION_INTERVAL_MIN: '45',
     ROTATION_INTERVAL_MAX: '120',
     NO_SPIN_TIMEOUT: '120',
-    HEADED: process.env.HEADED || 'false',
+    HEADED: process.env.HEADED || 'true',
     LOG_LEVEL: 'info',
+    CHROME_PATH: process.env.CHROME_PATH || '',
+    CDP_PORT: process.env.CDP_PORT || '9222',
+    CHROME_PROFILE: process.env.CHROME_PROFILE || './chrome-profile',
   };
 
   let envVars = {};

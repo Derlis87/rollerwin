@@ -1,314 +1,365 @@
 // ============================================================
-// ws-interceptor.js - Interceptor de WebSocket/Fetch/DOM con Playwright
-// Captura numeros de ruleta a nivel de red - mucho mas robusto que extension
+// ws-interceptor.js v3.1 - Captura via inyección CDP en iframes
+// ============================================================
+// ESTRATEGIA:
+//   1. Obtener sesión CDP del browser (no de la page)
+//   2. Usar Target.setAutoAttach para recibir eventos de NUEVOS iframes
+//   3. En cada Target.attachedToTarget:
+//      a. Crear sesión CDP dedicada para ese target
+//      b. Llamar Page.addScriptToEvaluateOnNewDocument con worldName:''
+//      c. Llamar Runtime.runIfWaitingForDebugger para resumir
+//   4. Los hooks de WS/Fetch/XHR en el script inyectado envían
+//      números via window.parent.postMessage
+//   5. Node.js escucha page.on('console') para los logs del script
+//      Y también page.evaluate para leer el postMessage
+//
+// NOTA CRÍTICA: Esto SOLO funciona si Chrome se lanza con:
+//   --disable-site-isolation-trials
+//   --disable-features=IsolateOrigins,site-per-process
+//   Sin estos flags, Chrome separa los iframes en procesos OOPIF
+//   y Page.addScriptToEvaluateOnNewDocument NO se ejecuta en ellos.
 // ============================================================
 const log = require('../utils/logger');
+const { getInjectScript } = require('./inject-capture');
 
-// --- Campos conocidos donde los casinos envian el resultado ---
-const RESULT_FIELDS = [
-  'number', 'result', 'resultNumber', 'winningNumber',
-  'ball_number', 'pocket_number', 'roulette_number', 'finalNumber',
-  'game_number', 'displayNumber', 'winningPocket', 'drawResult',
-  'gameResult', 'result_number', 'win_number', 'game_result',
-  'rouletteResult', 'rouletteNumber', 'luckyNumber', 'betResult',
-];
+function setupNetworkInterception(page, casinoName, onNumberDetected, options = {}) {
+  let logTag = casinoName;
+  let liveActive = false;
+  let liveActiveTime = 0;
+  let stopped = false;
+  let injectCount = 0;
+  let numberCount = 0;
+  let _lastNumber = -1;
 
-// --- Regex patterns para extraer de texto crudo ---
-const NUMBER_PATTERNS = [
-  /"?(?:resultNumber|winningNumber|ball_number|pocket_number|finalNumber|displayNumber|winningPocket|roulette_number|result_number|game_number|game_result)"?\s*[:=]\s*"?(\d{1,2})"?/i,
-  /"(?:number|result)"\s*:\s*(\d{1,2})/gi,
-  /"value"\s*:\s*(\d{1,2})/gi,
-];
+  const _onNumber = (number, source) => {
+    if (stopped) return;
+    if (number === _lastNumber) return; // Dedup simple
+    _lastNumber = number;
+    numberCount++;
 
-/**
- * Extrae un numero de ruleta (0-36) de un objeto JSON recursivamente
- */
-function extractFromObject(obj, depth = 0) {
-  if (depth > 15 || !obj || typeof obj !== 'object') return null;
-
-  // Si es array, buscar en cada elemento
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      const result = extractFromObject(item, depth + 1);
-      if (result !== null) return result;
+    if (!liveActive) {
+      log.debug(logTag, `[GRACE] ${number} bloqueado [${source}]`);
+      return;
     }
-    return null;
-  }
+    log.info(logTag, `*** NUMERO CAPTURADO: ${number} [${source}] ***`);
+    onNumberDetected(number, source);
+  };
 
-  // Buscar en keys conocidas
-  for (const key of Object.keys(obj)) {
-    const lowerKey = key.toLowerCase();
+  // ========================================
+  // MÉTODO 1: Escuchar console.log del script inyectado
+  //   El script inyectado hace console.log('[RW-INJECT] RESULTADO: N ...')
+  //   Node.js lo captura via page.on('console')
+  // ========================================
+  page.on('console', (msg) => {
+    if (stopped) return;
+    const text = msg.text();
+    if (!text.includes('[RW-INJECT]')) return;
 
-    // Match con campos conocidos
-    if (RESULT_FIELDS.some(f => lowerKey.includes(f.toLowerCase()))) {
-      const val = obj[key];
-      if (typeof val === 'number' && val >= 0 && val <= 36 && Number.isInteger(val)) {
-        return val;
-      }
-      // Podria ser string: "15"
-      if (typeof val === 'string') {
-        const parsed = parseInt(val, 10);
-        if (!isNaN(parsed) && parsed >= 0 && parsed <= 36) return parsed;
+    // Capturar números del log
+    if (text.includes('RESULTADO:')) {
+      const match = text.match(/RESULTADO:\s*(\d{1,2})\s/);
+      if (match) {
+        const n = parseInt(match[1], 10);
+        _onNumber(n, 'console-log');
       }
     }
-
-    // Recursivo en objetos anidados
-    if (typeof obj[key] === 'object' && obj[key] !== null) {
-      const nested = extractFromObject(obj[key], depth + 1);
-      if (nested !== null) return nested;
+    // Loggear otros eventos
+    else if (text.includes('WS conectado:')) {
+      log.info(logTag, `  [WS] ${text.split('[RW-INJECT]')[1]?.trim() || ''}`);
     }
-  }
-
-  return null;
-}
-
-/**
- * Extrae un numero de texto crudo usando regex
- */
-function extractFromText(text) {
-  if (!text || typeof text !== 'string') return null;
-  let lastMatch = null;
-
-  for (const pattern of NUMBER_PATTERNS) {
-    // Reset lastIndex para regex con 'g' flag
-    pattern.lastIndex = 0;
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-      const num = parseInt(match[1], 10);
-      if (num >= 0 && num <= 36) {
-        lastMatch = num;
-      }
+    else if (text.includes('DEDUP:')) {
+      log.debug(logTag, `  [DEDUP] ${text.split('[RW-INJECT]')[1]?.trim() || ''}`);
     }
-  }
-
-  return lastMatch; // Retorna el ULTIMO match (resultado mas reciente)
-}
-
-/**
- * Procesa un mensaje WebSocket/Fetch y retorna un numero 0-36 o null
- */
-function extractNumber(messageData) {
-  if (!messageData) return null;
-
-  // Si ya es un numero valido
-  if (typeof messageData === 'number') {
-    return (messageData >= 0 && messageData <= 36) ? messageData : null;
-  }
-
-  let text = '';
-  if (typeof messageData === 'string') {
-    text = messageData;
-  } else if (Buffer.isBuffer(messageData)) {
-    text = messageData.toString('utf-8');
-  } else if (typeof messageData === 'object') {
-    text = JSON.stringify(messageData);
-  }
-
-  if (!text) return null;
-
-  // 1. Intentar parsear como JSON
-  try {
-    // Manejar formato Socket.io: "42["event",{...}]"
-    if (text.startsWith('42')) {
-      const jsonStr = text.slice(2);
-      const parsed = JSON.parse(jsonStr);
-      if (Array.isArray(parsed)) {
-        for (const item of parsed) {
-          if (typeof item === 'object' && item !== null) {
-            const fromObj = extractFromObject(item);
-            if (fromObj !== null) return fromObj;
-          }
-        }
-      }
+    else {
+      log.debug(logTag, `  ${text.substring(0, 150)}`);
     }
+  });
 
-    // JSON directo
-    const parsed = JSON.parse(text);
-    const fromObj = extractFromObject(parsed);
-    if (fromObj !== null) return fromObj;
-  } catch (e) {
-    // No es JSON valido, intentar con regex
-  }
+  // ========================================
+  // MÉTODO 2: Escuchar mensajes via postMessage
+  //   El script inyectado en los iframes hace:
+  //   window.parent.postMessage({source:'rw-capture', number:N}, '*')
+  //   Escuchamos esto en la página principal
+  // ========================================
+  const setupPostMessageListener = async () => {
+    try {
+      await page.evaluate(() => {
+        if (window.__rwListenerAdded) return;
+        window.__rwListenerAdded = true;
 
-  // 2. Regex en texto crudo
-  return extractFromText(text);
-}
-
-/**
- * Scanner DOM - Busca numeros en el DOM visible (fallback)
- */
-async function scanDOMForNumbers(page) {
-  try {
-    const result = await page.evaluate(() => {
-      // Selectores donde los casinos muestran el resultado
-      const selectors = [
-        '[class*="winning-number"]',
-        '[class*="result-display"]',
-        '[class*="result-number"]',
-        '[class*="roulette-result"]',
-        '[class*="game-result"]',
-        '[data-result-number]',
-        '[data-winning-number]',
-        '[class*="last-number"]',
-        '[class*="current-number"]',
-        '[class*="ball-number"]',
-        '[class*="pocket"]',
-        '.winning-number',
-        '.result-number',
-        '.game-result',
-        '.roulette-number',
-      ];
-
-      for (const selector of selectors) {
-        const elements = document.querySelectorAll(selector);
-        for (const el of elements) {
-          // Obtener texto visible
-          const text = el.textContent?.trim() || el.innerText?.trim() || '';
-          const num = parseInt(text, 10);
-          if (!isNaN(num) && num >= 0 && num <= 36) {
-            // Verificar que es visible
-            const rect = el.getBoundingClientRect();
-            if (rect.width > 0 && rect.height > 0) {
-              return { number: num, selector, text };
+        // Escuchar postMessage desde iframes
+        window.addEventListener('message', function(event) {
+          try {
+            var data = event.data;
+            if (data && data.source === 'rw-capture' && typeof data.number === 'number') {
+              // Usar console.log para que Node.js lo capture via page.on('console')
+              console.log('[RW-PARENT] NUMBER:' + data.number + ':HOOK:' + (data.sourceHook || '?') + ':HOST:' + (data.hostname || '?'));
             }
-          }
-          // Tambien intentar con data attributes
-          const dataNum = el.getAttribute('data-result-number') ||
-                         el.getAttribute('data-winning-number') ||
-                         el.getAttribute('data-number');
-          if (dataNum) {
-            const parsed = parseInt(dataNum, 10);
-            if (!isNaN(parsed) && parsed >= 0 && parsed <= 36) return { number: parsed, selector, text: dataNum };
+          } catch(e) {}
+        });
+
+        console.log('[RW-PARENT] Listener de postMessage activo');
+      });
+      log.info(logTag, 'Listener postMessage configurado en página principal');
+    } catch (err) {
+      log.warn(logTag, `Error configurando postMessage listener: ${err.message}`);
+    }
+  };
+
+  // ========================================
+  // MÉTODO 3: Escuchar console.log del PARENT listener
+  //   (captura los [RW-PARENT] NUMBER:N mensajes)
+  // ========================================
+  // Ya está cubierto por page.on('console') arriba, pero lo hacemos explícito:
+  // Se agrega un segundo listener que capture los mensajes del parent
+
+  // ========================================
+  // MÉTODO 4: Inyectar en TODOS los frames via CDP
+  //   Usar Target.setAutoAttach para detectar NUEVOS iframes
+  //   e inyectar el script de captura en cada uno
+  // ========================================
+  const setupCDPInjection = async () => {
+    try {
+      // Obtener sesión CDP del browser (necesitamos nivel browser, no page)
+      const browserSession = await page.context().newCDPSession(page);
+
+      // Escuchar consola para mensajes [RW-PARENT]
+      browserSession.on('Runtime.consoleAPICalled', (params) => {
+        if (stopped) return;
+        const text = (params.args || []).map(a => {
+          try { return a.value || a.description || ''; }
+          catch(e) { return ''; }
+        }).join(' ');
+
+        if (text.includes('[RW-PARENT] NUMBER:')) {
+          const match = text.match(/NUMBER:(\d{1,2}):HOOK:([^:]+):HOST:([^\s]+)/);
+          if (match) {
+            const n = parseInt(match[1], 10);
+            const hook = match[2] || '?';
+            const host = match[3] || '?';
+            _onNumber(n, `postMsg-${hook}@${host}`);
           }
         }
-      }
-      return null;
-    });
-    return result;
-  } catch (e) {
-    log.debug('interceptor', 'DOM scan error:', e.message);
-    return null;
-  }
-}
+      });
 
-/**
- * Configura la interceptacion de red en una pagina de Playwright
- * Retorna un callback que se llama con cada numero detectado
- */
-function setupNetworkInterception(page, casinoName, onNumberDetected) {
-  const logTag = 'ws-' + casinoName;
+      // Habilitar Target events
+      // Auto-attach a NUEVOS iframes cuando se creen
+      await browserSession.send('Target.setAutoAttach', {
+        autoAttach: true,
+        waitForDebuggerOnStart: true,
+        flatten: false,  // IMPORTANTE: false = cada target tiene su propia sesión
+      });
 
-  // --- Helper: escuchar WebSockets en una pagina o frame ---
-  function listenWebSockets(target, sourceLabel) {
-    target.on('websocket', (ws) => {
-      const url = ws.url();
-      log.info(logTag, `WebSocket conectado [${sourceLabel}]: ${url.substring(0, 100)}...`);
+      browserSession.on('Target.attachedToTarget', async (event) => {
+        if (stopped) return;
+        const { targetInfo, sessionId } = event;
+        const targetUrl = targetInfo.url || '';
+        const targetType = targetInfo.type || '';
 
-      ws.on('framereceived', (frame) => {
+        log.info(logTag, `Target: ${targetType} | ${targetUrl.substring(0, 80)}`);
+
         try {
-          const payload = frame.payload;
-          if (!payload || payload.length < 2) return;
+          // Habilitar Page en ESTE target específico
+          await browserSession.send('Page.enable', {}, sessionId);
 
-          const number = extractNumber(payload);
-          if (number !== null) {
-            log.info(logTag, `Numero detectado via WS [${sourceLabel}]: ${number}`);
-            onNumberDetected(number, 'websocket');
-          }
-        } catch (e) {
-          // Silencioso - frames rotos son normales
+          // Inyectar el script de captura en MAIN world de ESTE target
+          await browserSession.send('Page.addScriptToEvaluateOnNewDocument', {
+            source: getInjectScript(),
+            worldName: '',       // MAIN world (mismo contexto que el juego)
+            runImmediately: true,
+          }, sessionId);
+
+          // Habilitar Runtime y Console para ver los logs
+          await browserSession.send('Runtime.enable', {}, sessionId);
+          await browserSession.send('Console.enable', {}, sessionId);
+
+          // MÉTODO DE RESPALDO: Habilitar Network para capturar WS frames
+          // Esto funciona incluso si la inyección del script falla
+          await browserSession.send('Network.enable', {}, sessionId);
+
+          // Escuchar WS frames directamente desde CDP
+          const wsFrameHandler = (params) => {
+            if (stopped) return;
+            const payload = params.response && params.response.payloadData;
+            if (!payload || typeof payload !== 'string') return;
+            if (payload.length < 5) return;
+
+            // Usar la misma lógica de detección que el script inyectado
+            try {
+              // Evolution: {type:X, args:{recentResults:[["N"],...]}}
+              const evoMatch = payload.match(/"recentResults"\s*:\s*\[\s*\[\s*"(\d{1,2})"\s*\]/);
+              if (evoMatch) {
+                const n = parseInt(evoMatch[1], 10);
+                if (n >= 0 && n <= 36) {
+                  _onNumber(n, `cdp-ws-recentResults@${targetUrl.substring(0, 30)}`);
+                  return;
+                }
+              }
+
+              // Regex general
+              const patterns = [
+                /"resultNumber"\s*:\s*(\d{1,2})\b/gi,
+                /"winningNumber"\s*:\s*(\d{1,2})\b/gi,
+                /"winning_number"\s*:\s*(\d{1,2})\b/gi,
+                /"ball_number"\s*:\s*(\d{1,2})\b/gi,
+              ];
+              let lastMatch = null;
+              for (const pat of patterns) {
+                pat.lastIndex = 0;
+                let m;
+                while ((m = pat.exec(payload)) !== null) {
+                  const n = parseInt(m[1], 10);
+                  if (n >= 0 && n <= 36) lastMatch = n;
+                }
+              }
+              if (lastMatch !== null) {
+                _onNumber(lastMatch, `cdp-ws-regex@${targetUrl.substring(0, 30)}`);
+              }
+            } catch(e) {}
+          };
+
+          browserSession.on('Network.webSocketFrameReceived', wsFrameHandler);
+
+          injectCount++;
+          log.info(logTag, `✓ Script + Network habilitado en ${targetType} #${injectCount}: ${targetUrl.substring(0, 60)}`);
+
+          // También escuchar console desde ESTE target
+          browserSession.on('Runtime.consoleAPICalled', (params) => {
+            if (stopped) return;
+            const text = (params.args || []).map(a => {
+              try { return a.value || a.description || ''; }
+              catch(e) { return ''; }
+            }).join(' ');
+
+            if (text.includes('[RW-INJECT] RESULTADO:')) {
+              const match = text.match(/RESULTADO:\s*(\d{1,2})\s/);
+              if (match) {
+                const n = parseInt(match[1], 10);
+                const hookMatch = text.match(/—\s*(\S+)/);
+                const hook = hookMatch ? hookMatch[1] : 'iframe';
+                _onNumber(n, hook);
+              }
+            }
+            else if (text.includes('[RW-INJECT] WS conectado:')) {
+              log.info(logTag, `  [iframe-WS] ${text.split('WS conectado:')[1]?.trim() || ''}`);
+            }
+          });
+
+        } catch (err) {
+          log.debug(logTag, `Error inyectando en target: ${err.message}`);
         }
+
+        // CRÍTICO: Resumir el target para que el juego cargue
+        try {
+          await browserSession.send('Runtime.runIfWaitingForDebugger', {}, sessionId);
+        } catch (e) {}
       });
 
-      ws.on('close', () => {
-        log.debug(logTag, `WebSocket cerrado [${sourceLabel}]: ${url.substring(0, 60)}`);
-      });
+      log.info(logTag, 'CDP auto-injection configurada (Target.setAutoAttach)');
 
-      ws.on('socketerror', (err) => {
-        log.warn(logTag, `WebSocket error [${sourceLabel}]: ${err}`);
-      });
-    });
-  }
-
-  // --- WEBSOCKET INTERCEPTION (main page) ---
-  listenWebSockets(page, 'main');
-
-  // --- WEBSOCKET INTERCEPTION (iframes) ---
-  // Evolution y otros proveedores corren el juego dentro de iframes
-  // Playwright no captura WS de iframes automaticamente en algunos casos
-  // Escuchamos nuevos frames y registramos sus WebSockets
-  page.on('frameattached', (frame) => {
-    try {
-      const frameUrl = frame.url();
-      log.debug(logTag, `Frame adjuntado: ${frameUrl.substring(0, 80)}...`);
-      
-      // Escuchar WebSockets dentro del frame
-      // En Playwright, frame hereda los eventos de la pagina,
-      // pero para iframes cross-origin necesitamos escuchar a nivel de contexto
-      listenWebSockets(frame, 'frame');
-    } catch (e) {
-      // Frame puede no soportar eventos
+    } catch (err) {
+      log.warn(logTag, `Error CDP injection: ${err.message}`);
     }
-  });
-
-  // --- FETCH/XHR INTERCEPTION ---
-  // Interceptamos respuestas de endpoints que contienen resultados
-  page.on('response', async (response) => {
-    try {
-      const url = response.url();
-      const urlLower = url.toLowerCase();
-
-      // Filtrar URLs relevantes
-      const isRelevant =
-        (urlLower.includes('result') || urlLower.includes('roulette') ||
-         urlLower.includes('evolution') || urlLower.includes('round') ||
-         urlLower.includes('wheel') || urlLower.includes('game')) &&
-        !urlLower.includes('history') && !urlLower.includes('state') &&
-        !urlLower.includes('stats') && !urlLower.includes('analytics') &&
-        !urlLower.includes('config') && !urlLower.includes('asset') &&
-        !urlLower.includes('.js') && !urlLower.includes('.css') &&
-        !urlLower.includes('.png') && !urlLower.includes('.jpg');
-
-      if (!isRelevant) return;
-
-      const contentType = response.headers()['content-type'] || '';
-      if (!contentType.includes('json') && !contentType.includes('text')) return;
-
-      const body = await response.text().catch(() => null);
-      if (!body || body.length > 50000) return; // Ignorar respuestas enormes
-
-      const number = extractNumber(body);
-      if (number !== null) {
-        log.info(logTag, `Numero detectado via Fetch/XHR: ${number} (URL: ${url.substring(0, 80)})`);
-        onNumberDetected(number, 'fetch');
-      }
-    } catch (e) {
-      // Silencioso
-    }
-  });
-
-  // --- DOM SCANNER (fallback periodico) ---
-  // Se llama desde el casino module cuando no hay capturas por un tiempo
-  const domScanner = {
-    lastScanResult: null,
-    lastScanTime: 0,
   };
 
-  domScanner.scan = async () => {
-    const result = await scanDOMForNumbers(page);
-    if (result) {
-      // Solo reportar si es diferente al ultimo escaneo (evitar duplicados de DOM)
-      if (domScanner.lastScanResult !== result.number || Date.now() - domScanner.lastScanTime > 15000) {
-        log.info(logTag, `Numero detectado via DOM: ${result.number} (${result.selector})`);
-        domScanner.lastScanResult = result.number;
-        domScanner.lastScanTime = Date.now();
-        return result.number;
+  // ========================================
+  // MÉTODO 5: Re-inyección periódica
+  //   Escanea frames existentes cada 5s y re-inyecta si es necesario
+  // ========================================
+  const reinjectInterval = setInterval(async () => {
+    if (stopped || !page || page.isClosed()) return;
+
+    try {
+      // Verificar frames actuales
+      const frames = page.frames();
+      for (const frame of frames) {
+        const url = frame.url();
+        if (!url.includes('evolution') && !url.includes('pragmatic') &&
+            !url.includes('everymatrix') && !url.includes('evo-games')) continue;
+
+        try {
+          // Intentar inyectar directamente en el frame via evaluate
+          // Esto SÓLO funciona si el frame está en el mismo proceso (no OOPIF)
+          await frame.evaluate(() => {
+            if (window.__rwInjected) return 'already';
+            // Si no está inyectado, el script principal lo hará via CDP
+            return 'need-inject';
+          });
+        } catch(e) {
+          // Cross-origin — normal, el CDP Target.setAutoAttach lo maneja
+        }
       }
-    }
-    return null;
+    } catch(e) {}
+  }, 5000);
+
+  // ========================================
+  // MÉTODO 6: Polling del postMessage listener como RESPALDO
+  //   Verifica si hay números pendientes en la página principal
+  // ========================================
+  const pollInterval = setInterval(async () => {
+    if (stopped || !page || page.isClosed()) return;
+    try {
+      const result = await page.evaluate(() => {
+        if (window.__rwPendingNumber !== undefined) {
+          var n = window.__rwPendingNumber;
+          var src = window.__rwPendingSource || 'poll';
+          window.__rwPendingNumber = undefined;
+          window.__rwPendingSource = undefined;
+          return { number: n, source: src };
+        }
+        return null;
+      }).catch(() => null);
+
+      if (result && typeof result.number === 'number') {
+        _onNumber(result.number, result.source);
+      }
+    } catch(e) {}
+  }, 3000);
+
+  // ========================================
+  // INICIALIZACIÓN
+  // ========================================
+  log.info(logTag, 'Configurando captura v3.1 (CDP inyección MAIN world)...');
+
+  setupPostMessageListener().catch(e => log.debug(logTag, `postMessage: ${e.message}`));
+  setupCDPInjection().catch(e => log.warn(logTag, `CDP setup: ${e.message}`));
+
+  const scanner = {
+    activateLiveCapture(graceMs = 0) {
+      if (graceMs > 0) {
+        log.info(logTag, `Activando captura en ${graceMs}ms (grace)...`);
+        setTimeout(() => {
+          if (!stopped) {
+            liveActive = true;
+            liveActiveTime = Date.now();
+            log.info(logTag, '>>> CAPTURA EN VIVO ACTIVADA <<<');
+          }
+        }, graceMs);
+      } else {
+        liveActive = true;
+        liveActiveTime = Date.now();
+        log.info(logTag, '>>> CAPTURA EN VIVO ACTIVADA <<<');
+      }
+    },
+
+    async scan() {
+      return null;
+    },
+
+    stop() {
+      stopped = true;
+      liveActive = false;
+      if (reinjectInterval) clearInterval(reinjectInterval);
+      if (pollInterval) clearInterval(pollInterval);
+      log.info(logTag, `Captura detenida. Inyecciones: ${injectCount}, Números: ${numberCount}`);
+    },
+
+    getStats() {
+      return { injectCount, numberCount, liveActive, liveActiveTime };
+    },
   };
 
-  log.info(logTag, 'Interceptacion de red configurada (WebSocket + Fetch + DOM)');
-  return domScanner;
+  return scanner;
 }
 
-module.exports = { setupNetworkInterception, extractNumber, extractFromObject, extractFromText, scanDOMForNumbers };
+module.exports = { setupNetworkInterception };

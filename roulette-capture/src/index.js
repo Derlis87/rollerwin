@@ -1,155 +1,144 @@
 // ============================================================
-// index.js - Punto de entrada principal
-// Roulette Capture System v1.0 - Multi-Casino 24/7
+// index.js v2 - Punto de entrada — Chrome REAL via CDP
+// ============================================================
+// CAMBIO FUNDAMENTAL: En vez de lanzar Chromium de Playwright,
+// lanzamos Chrome REAL con --remote-debugging-port y nos
+// conectamos via CDP. Esto permite:
+//   1. Usar Page.addScriptToEvaluateOnNewDocument en MAIN world
+//   2. Los iframes cross-origin corren en el mismo proceso
+//   3. Los hooks de WebSocket/Fetch/XHR se ejecutan DENTRO del juego
 // ============================================================
 
 const { chromium } = require('playwright');
 const { loadConfig } = require('./config');
-const { getLaunchOptions, createStealthContext, getProfile } = require('./browser/stealth');
-const { startHumanBehavior, stopHumanBehavior, humanPause } = require('./browser/human-behavior');
+const { getLaunchOptions, createStealthContext, getProfile, launchRealChrome } = require('./browser/stealth');
+const { startHumanBehavior, stopHumanBehavior, setCaptureActive } = require('./browser/human-behavior');
 const { RollerWinAPI } = require('./api/rollerwin-api');
-const { BetFuryCasino } = require('./casinos/betfury');
 const { PinnacleCasino } = require('./casinos/pinnacle');
+const { BetFuryCasino } = require('./casinos/betfury');
 const { StakeCasino } = require('./casinos/stake');
 const { Orchestrator } = require('./orchestrator');
 const log = require('./utils/logger');
 
-// ============================================================
-// BANNER
-// ============================================================
 function printBanner() {
   console.log('');
-  console.log('  ██████╗ ███████╗ █████╗ ██╗  ████████╗██╗███╗   ███╗███████╗');
-  console.log('  ██╔══██╗██╔════╝██╔══██╗██║  ╚══██╔══╝██║████╗ ████║██╔════╝');
-  console.log('  ██████╔╝█████╗  ███████║██║     ██║   ██║██╔████╔██║█████╗  ');
-  console.log('  ██╔══██╗██╔══╝  ██╔══██║██║     ██║   ██║██║╚██╔╝██║██╔══╝  ');
-  console.log('  ██║  ██║███████╗██║  ██║███████╗██║   ██║██║ ╚═╝ ██║███████╗');
-  console.log('  ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚══════╝╚═╝   ╚═╝╚═╝     ╚═╝╚══════╝');
-  console.log('');
-  console.log('  Multi-Casino Roulette Capture System v1.0');
-  console.log('  Comportamiento humano | Anti-deteccion | 24/7');
+  console.log('  ╔══════════════════════════════════════════════════╗');
+  console.log('  ║   ROULETTE CAPTURE SYSTEM v2.0                  ║');
+  console.log('  ║   Inyección MAIN world en iframes               ║');
+  console.log('  ║   Chrome REAL + CDP + postMessage bridge        ║');
+  console.log('  ╚══════════════════════════════════════════════════╝');
   console.log('');
 }
 
-// ============================================================
-// MAIN
-// ============================================================
 async function main() {
   printBanner();
 
-  // 1. Cargar configuracion
   const config = loadConfig();
   log.setLevel(config.LOG_LEVEL);
 
-  log.info('system', 'Configuracion cargada');
+  log.info('system', 'Configuración cargada');
   log.info('system', `Casinos activos: ${config.activeCasinos.join(', ')}`);
-  log.info('system', `Modo: ${config.headed ? 'VISIBLE (head: false)' : 'HEADLESS (invisible)'}`);
   log.info('system', `RollerWin API: ${config.ROLLERWIN_API_URL}`);
 
-  // 2. Crear cliente API
   const apiClient = new RollerWinAPI(config.ROLLERWIN_API_URL);
 
-  // 3. Crear instancias de casinos
+  // Crear instancias de casinos
   const casinoInstances = [];
-  if (config.betfuryEnabled) {
-    casinoInstances.push(new BetFuryCasino(config, apiClient));
-  }
-  if (config.pinnacleEnabled) {
-    casinoInstances.push(new PinnacleCasino(config, apiClient));
-  }
-  if (config.stakeEnabled) {
-    casinoInstances.push(new StakeCasino(config, apiClient));
-  }
+  if (config.betfuryEnabled) casinoInstances.push(new BetFuryCasino(config, apiClient));
+  if (config.pinnacleEnabled) casinoInstances.push(new PinnacleCasino(config, apiClient));
+  if (config.stakeEnabled) casinoInstances.push(new StakeCasino(config, apiClient));
 
-  // 4. Lanzar navegador con stealth
-  log.info('system', 'Lanzando navegador con anti-deteccion...');
-  const launchOptions = getLaunchOptions(config);
-  const profile = getProfile();
-
-  log.info('system', `  User-Agent: ${profile.ua.substring(0, 60)}...`);
-  log.info('system', `  Viewport: ${profile.vp.width}x${profile.vp.height}`);
-  log.info('system', `  Locale: ${profile.locale} | TZ: ${profile.tz}`);
-
+  // ========================================
+  // LANZAR NAVEGADOR
+  // ========================================
   let browser;
-  try {
-    browser = await chromium.launch(launchOptions);
-    log.info('system', 'Navegador lanzado correctamente');
-  } catch (err) {
-    log.error('system', `Error lanzando navegador: ${err.message}`);
-    log.error('system', 'Asegurate de tener Playwright instalado: npx playwright install chromium');
-    process.exit(1);
-  }
+  let context;
 
-  // 5. Crear contexto con stealth
-  const context = await createStealthContext(browser, config);
+  if (config.headed && config.CHROME_PATH) {
+    // MODO HEADED: Lanzar Chrome REAL y conectar via CDP
+    log.info('system', 'Lanzando Chrome REAL con anti-OOPIF...');
+    const profile = getProfile();
+    log.info('system', `  UA: ${profile.ua.substring(0, 60)}...`);
+    log.info('system', `  Locale: ${profile.locale} | TZ: ${profile.tz}`);
 
-  // Inyectar cookies de sesion si existen (para mantener login)
-  // El usuario puede exportar sus cookies desde el navegador
-  const cookiesPath = './config/cookies.json';
-  try {
-    const fs = require('fs');
-    if (fs.existsSync(cookiesPath)) {
-      const cookies = JSON.parse(fs.readFileSync(cookiesPath, 'utf-8'));
-      await context.addCookies(cookies);
-      log.info('system', `Cookies cargadas desde ${cookiesPath} (${cookies.length} cookies)`);
-    } else {
-      log.info('system', 'No se encontraron cookies guardadas - se usara sesion nueva');
-      log.info('system', 'Si necesitas login, exporta las cookies de tu navegador a config/cookies.json');
+    try {
+      const port = await launchRealChrome(config);
+      log.info('system', `Chrome REAL escuchando en puerto ${port}`);
+
+      // Conectar via CDP
+      browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+      log.info('system', 'Conectado a Chrome via CDP');
+
+      // Obtener el contexto por defecto (con las cookies ya guardadas)
+      const contexts = browser.contexts();
+      if (contexts.length > 0) {
+        context = contexts[0];
+        log.info('system', 'Usando contexto existente de Chrome (con cookies)');
+      } else {
+        context = await browser.newContext();
+        log.info('system', 'Creado nuevo contexto en Chrome');
+      }
+    } catch (err) {
+      log.error('system', `Error con Chrome REAL: ${err.message}`);
+      log.error('system', 'Verifica que CHROME_PATH en .env apunte a chrome.exe / google-chrome');
+      process.exit(1);
     }
-  } catch (e) {
-    log.debug('system', 'No se pudieron cargar cookies (es normal si no existen)');
+  } else {
+    // MODO HEADLESS: Usar Chromium de Playwright
+    log.info('system', 'Lanzando Chromium (headless) con anti-OOPIF...');
+    const launchOptions = getLaunchOptions(config);
+    const profile = launchOptions.profile;
+
+    log.info('system', `  UA: ${profile.ua.substring(0, 60)}...`);
+
+    browser = await chromium.launch({
+      headless: !config.headed,
+      args: launchOptions.args,
+      ignoreDefaultArgs: ['--enable-automation'],
+      channel: 'chromium',
+    });
+    log.info('system', 'Chromium lanzado');
+
+    context = await createStealthContext(browser, config);
+    log.info('system', 'Contexto stealth creado');
   }
 
-  // 6. Iniciar orquestador
+  // ========================================
+  // INICIAR ORQUESTADOR
+  // ========================================
   const orchestrator = new Orchestrator(casinoInstances, config, apiClient);
 
-  // Manejo de senales
+  // Manejo de señales
   let shuttingDown = false;
   const shutdown = async (signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log('');
-    log.warn('system', `Recibida señal ${signal} - cerrando...`);
+    log.warn('system', `Señal ${signal} — cerrando...`);
     await orchestrator.stop();
     stopHumanBehavior();
-    await context.close().catch(() => {});
-    await browser.close().catch(() => {});
-    log.info('system', 'Sistema cerrado correctamente. Chau!');
+    try { await context.close(); } catch(e) {}
+    // NO cerrar browser si es CDP (Chrome REAL se mantiene abierto)
+    if (!config.headed || !config.CHROME_PATH) {
+      try { await browser.close(); } catch(e) {}
+    }
+    log.info('system', 'Sistema cerrado');
     process.exit(0);
   };
 
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('uncaughtException', async (err) => {
-    log.error('system', `Excepcion no capturada: ${err.message}`);
-    log.error('system', err.stack);
+    log.error('system', `Excepción: ${err.message}`);
   });
   process.on('unhandledRejection', (err) => {
     log.error('system', `Promise rechazada: ${err}`);
   });
 
-  // 7. Iniciar captura
   try {
     await orchestrator.start(context);
 
-    // Iniciar comportamiento humano en la pagina activa
-    // Lo hacemos periodicamente en la pagina del casino activo
-    const humanBehaviorLoop = setInterval(() => {
-      if (!orchestrator.running || !orchestrator.currentCasino?.page) return;
-      const page = orchestrator.currentCasino.page;
-      if (!page.isClosed()) {
-        startHumanBehavior(page, config);
-      }
-    }, 30000); // Re-evaluar cada 30s
-
-    // Mantener el proceso vivo
-    log.info('system', '');
-    log.info('system', '  ═══════════════════════════════════════════');
-    log.info('system', '  Sistema de captura activo - Ctrl+C para detener');
-    log.info('system', '  ═══════════════════════════════════════════');
-    log.info('system', '');
-
-    // Loop para mantener vivo el proceso y guardar cookies periodicamente
+    // Guardar cookies periódicamente
     const cookieSaveLoop = setInterval(async () => {
       if (!orchestrator.running) return;
       try {
@@ -157,38 +146,43 @@ async function main() {
         const fs = require('fs');
         if (!fs.existsSync('./config')) fs.mkdirSync('./config', { recursive: true });
         fs.writeFileSync('./config/cookies.json', JSON.stringify(cookies, null, 2));
-        log.debug('system', `Cookies guardadas (${cookies.length} cookies)`);
-      } catch (e) {
-        // Silencioso
-      }
-    }, 300000); // Cada 5 minutos
+        log.debug('system', `Cookies guardadas (${cookies.length})`);
+      } catch (e) {}
+    }, 300000);
 
-    // Loop infinito para mantener el proceso vivo
+    log.info('system', '');
+    log.info('system', '  ═══════════════════════════════════════════');
+    log.info('system', '  Sistema activo — Ctrl+C para detener');
+    log.info('system', '  ═══════════════════════════════════════════');
+    log.info('system', '');
+
+    // Loop principal
     while (orchestrator.running) {
       await new Promise(r => setTimeout(r, 5000));
 
-      // Verificar que el browser sigue vivo
       if (browser && !browser.isConnected()) {
-        log.error('system', 'Browser se desconecto! Reiniciando...');
+        log.error('system', 'Browser desconectado! Reconectando...');
         await orchestrator.stop();
         stopHumanBehavior();
 
-        browser = await chromium.launch(launchOptions);
-        const newContext = await createStealthContext(browser, config);
+        if (config.headed && config.CHROME_PATH) {
+          const port = await launchRealChrome(config);
+          browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+          const contexts = browser.contexts();
+          context = contexts.length > 0 ? contexts[0] : await browser.newContext();
+        } else {
+          browser = await chromium.launch({
+            headless: true,
+            args: ['--disable-site-isolation-trials', '--disable-features=IsolateOrigins,site-per-process'],
+            ignoreDefaultArgs: ['--enable-automation'],
+            channel: 'chromium',
+          });
+          context = await createStealthContext(browser, config);
+        }
 
-        // Re-cargar cookies
-        try {
-          const fs = require('fs');
-          if (fs.existsSync(cookiesPath)) {
-            const cookies = JSON.parse(fs.readFileSync(cookiesPath, 'utf-8'));
-            await newContext.addCookies(cookies);
-          }
-        } catch (e) { /* ok */ }
-
-        await orchestrator.start(newContext);
+        await orchestrator.start(context);
       }
     }
-
   } catch (err) {
     log.error('system', `Error fatal: ${err.message}`);
     log.error('system', err.stack);
@@ -196,8 +190,7 @@ async function main() {
   }
 }
 
-// Ejecutar
 main().catch(err => {
-  console.error('Error fatal al iniciar:', err);
+  console.error('Error fatal:', err);
   process.exit(1);
 });
