@@ -1,47 +1,76 @@
 @echo off
+chcp 65001 >nul 2>nul
 echo ============================================
 echo   ROULETTE CAPTURE SYSTEM - UPDATE v3.0
 echo ============================================
 echo.
 
-REM Verificar que git esta disponible
-where git >nul 2>nul
-if %errorlevel% neq 0 (
-    echo ERROR: Git no encontrado. Instala git desde https://git-scm.com/
-    pause
-    exit /b 1
-)
+set REPO=https://raw.githubusercontent.com/Derlis87/rollerwin/main/roulette-capture
+set TEMP_DIR=%TEMP%\roulette-capture-update
 
-echo [1/4] Deteniendo procesos anteriores...
-taskkill /F /IM node.exe >nul 2>nul
-timeout /t 2 /nobreak >nul
+echo [1/5] Creando carpeta temporal...
+if exist "%TEMP_DIR%" rmdir /s /q "%TEMP_DIR%"
+mkdir "%TEMP_DIR%"
 
-echo [2/4] Descargando actualizaciones...
-git pull origin main
-if %errorlevel% neq 0 (
-    echo ERROR: No se pudo hacer git pull. Hace commit de tus cambios primero.
-    pause
-    exit /b 1
-)
+echo [2/5] Descargando archivos actualizados desde GitHub...
+echo.
 
-echo [3/4] Verificando archivos del extension...
-if not exist "extension\manifest.json" (
-    echo ERROR: No se encontro extension\manifest.json
-    echo Asegurate de que la carpeta 'extension' existe con:
-    echo   - manifest.json
-    echo   - background.js
-    echo   - content.js
-    echo   - inject-main.js
-    pause
-    exit /b 1
-)
+REM --- Archivos principales ---
+call :DownloadFile "%REPO%/src/index.js" "%TEMP_DIR%\src\index.js"
+call :DownloadFile "%REPO%/src/config.js" "%TEMP_DIR%\src\config.js"
+call :DownloadFile "%REPO%/src/orchestrator.js" "%TEMP_DIR%\src\orchestrator.js"
 
-echo [4/4] Instalando dependencias...
+REM --- Browser ---
+call :DownloadFile "%REPO%/src/browser/stealth.js" "%TEMP_DIR%\src\browser\stealth.js"
+call :DownloadFile "%REPO%/src/browser/human-behavior.js" "%TEMP_DIR%\src\browser\human-behavior.js"
+
+REM --- Capture ---
+call :DownloadFile "%REPO%/src/capture/extension-bridge.js" "%TEMP_DIR%\src\capture\extension-bridge.js"
+call :DownloadFile "%REPO%/src/capture/number-processor.js" "%TEMP_DIR%\src\capture\number-processor.js"
+call :DownloadFile "%REPO%/src/capture/ws-interceptor.js" "%TEMP_DIR%\src\capture\ws-interceptor.js"
+call :DownloadFile "%REPO%/src/capture/inject-capture.js" "%TEMP_DIR%\src\capture\inject-capture.js"
+
+REM --- Casinos ---
+call :DownloadFile "%REPO%/src/casinos/base-casino.js" "%TEMP_DIR%\src\casinos\base-casino.js"
+call :DownloadFile "%REPO%/src/casinos/betfury.js" "%TEMP_DIR%\src\casinos\betfury.js"
+call :DownloadFile "%REPO%/src/casinos/pinnacle.js" "%TEMP_DIR%\src\casinos\pinnacle.js"
+call :DownloadFile "%REPO%/src/casinos/stake.js" "%TEMP_DIR%\src\casinos\stake.js"
+
+REM --- API ---
+call :DownloadFile "%REPO%/src/api/rollerwin-api.js" "%TEMP_DIR%\src\api\rollerwin-api.js"
+
+REM --- Utils ---
+call :DownloadFile "%REPO%/src/utils/logger.js" "%TEMP_DIR%\src\utils\logger.js"
+call :DownloadFile "%REPO%/src/utils/helpers.js" "%TEMP_DIR%\src\utils\helpers.js"
+call :DownloadFile "%REPO%/src/utils/export-cookies.js" "%TEMP_DIR%\src\utils\export-cookies.js"
+
+REM --- Extension ---
+call :DownloadFile "%REPO%/extension/manifest.json" "%TEMP_DIR%\extension\manifest.json"
+call :DownloadFile "%REPO%/extension/background.js" "%TEMP_DIR%\extension\background.js"
+call :DownloadFile "%REPO%/extension/content.js" "%TEMP_DIR%\extension\content.js"
+call :DownloadFile "%REPO%/extension/inject-main.js" "%TEMP_DIR%\extension\inject-main.js"
+
+REM --- Package ---
+call :DownloadFile "%REPO%/package.json" "%TEMP_DIR%\package.json"
+call :DownloadFile "%REPO%/package-lock.json" "%TEMP_DIR%\package-lock.json"
+
+echo.
+echo [3/5] Copiando archivos actualizados...
+REM Copiar src/
+xcopy /y /q "%TEMP_DIR%\src\*" "src\" >nul 2>nul
+REM Copiar extension/
+xcopy /y /q "%TEMP_DIR%\extension\*" "extension\" >nul 2>nul
+REM Copiar package files
+copy /y "%TEMP_DIR%\package.json" "package.json" >nul 2>nul
+copy /y "%TEMP_DIR%\package-lock.json" "package-lock.json" >nul 2>nul
+
+echo [4/5] Limpiando carpeta temporal...
+rmdir /s /q "%TEMP_DIR%"
+
+echo [5/5] Instalando dependencias...
 call npm install
 if %errorlevel% neq 0 (
-    echo ERROR: npm install fallo
-    pause
-    exit /b 1
+    echo WARNING: npm install tuvo advertencias, pero puede continuar
 )
 
 echo.
@@ -51,9 +80,22 @@ echo ============================================
 echo.
 echo   Para iniciar: npm start
 echo.
-echo   IMPORTANTE:
-echo   - Verifica que CHROME_PATH en .env apunte a tu chrome.exe
-echo   - El puerto 19555 debe estar libre
-echo   - Chrome se abrira con el extension de captura
+echo   NOTA: Tu archivo .env se conservo intacto
 echo.
 pause
+exit /b 0
+
+REM --- Funcion para descargar un archivo ---
+:DownloadFile
+set "URL=%~1"
+set "DEST=%~2"
+REM Crear directorio destino si no existe
+powershell -Command "[System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName('%DEST%'))" >nul 2>nul
+REM Descargar archivo
+powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object System.Net.WebClient).DownloadFile('%URL%', '%DEST%')" 2>nul
+if exist "%DEST%" (
+    echo   OK: %~nx2
+) else (
+    echo   FALLO: %~nx2
+)
+exit /b 0
