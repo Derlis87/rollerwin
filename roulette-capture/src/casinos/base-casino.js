@@ -1,8 +1,17 @@
 // ============================================================
-// base-casino.js - Clase base para todos los casinos
-// Define la interfaz que cada casino debe implementar
+// base-casino.js v2 - Clase base para todos los casinos
+// CAPTURA via Chrome Extension (hybrid approach)
 // ============================================================
-const { setupNetworkInterception } = require('../capture/ws-interceptor');
+// La captura de numeros NO se hace via CDP (eso no funciona con OOPIFs).
+// En su lugar:
+//   1. Chrome se lanza con un extension (--load-extension)
+//   2. El extension inyecta codigo en MAIN world de TODOS los frames
+//   3. El extension detecta numeros via hooks de WebSocket/Fetch/XHR
+//   4. El extension envia numeros via fetch a localhost:19555
+//   5. ExtensionBridge (HTTP server en Node.js) los recibe
+//
+// Esta clase solo maneja: navegacion, login, espera de mesa, recovery
+// ============================================================
 const { NumberProcessor } = require('../capture/number-processor');
 const { randomDelay } = require('../utils/helpers');
 const log = require('../utils/logger');
@@ -14,14 +23,15 @@ class BaseCasino {
     this.api = apiClient;
     this.page = null;
     this.context = null;
-    this.domScanner = null;
     this.processor = new NumberProcessor(name);
     this.running = false;
     this.recoveryCount = 0;
     this.consecutiveRecoveryFails = 0;
     this.status = 'idle';
     this.url = '';
-    this.dynamicUrl = null; // URL override desde el dashboard
+    this.dynamicUrl = null;
+    this.graceActive = false;
+    this.graceTimeout = null;
   }
 
   /**
@@ -46,7 +56,6 @@ class BaseCasino {
     try {
       if (!this.page || this.page.isClosed()) return false;
       return await this.page.evaluate(() => {
-        // Verificar que hay iframes de juego activos
         const iframes = document.querySelectorAll('iframe');
         return iframes.length > 0;
       }).catch(() => false);
@@ -57,36 +66,36 @@ class BaseCasino {
 
   /**
    * Inicia la captura en este casino
+   * NOTA: La captura real la hace el Chrome extension.
+   * Aqui solo navegamos y esperamos a que la mesa cargue.
    */
   async start(context) {
     this.context = context;
     this.running = true;
     this.status = 'connecting';
 
-    log.info(this.name, `Iniciando captura...`);
+    log.info(this.name, `Iniciando conexion...`);
     log.info(this.name, `URL: ${this.getRouletteURL()}`);
+    log.info(this.name, `Captura via Chrome Extension (hybrid mode)`);
 
     try {
       // 1. Crear nueva pagina
       this.page = await this.context.newPage();
 
-      // 2. Configurar interceptacion de red
-      this.domScanner = setupNetworkInterception(
-        this.page,
-        this.name,
-        (number, source) => this._onNumberDetected(number, source)
-      );
-
-      // 3. Navegar al casino (implementacion especifica)
+      // 2. Navegar al casino (implementacion especifica)
       await this.navigate();
 
-      // 4. Esperar a que la mesa cargue
+      // 3. Esperar a que la mesa cargue
       await this._waitForTable();
+
+      // 4. Activar grace period (ignorar numeros por 15s para estabilizar)
+      this._activateGrace(15000);
 
       this.status = 'capturing';
       this.recoveryCount = 0;
       this.consecutiveRecoveryFails = 0;
-      log.info(this.name, `Captura activa - esperando numeros...`);
+      log.info(this.name, `Mesa lista — captura activa via extension`);
+      log.info(this.name, `Esperando numeros del Chrome extension...`);
 
       return true;
     } catch (err) {
@@ -103,6 +112,11 @@ class BaseCasino {
     this.running = false;
     this.status = 'idle';
 
+    if (this.graceTimeout) {
+      clearTimeout(this.graceTimeout);
+      this.graceTimeout = null;
+    }
+
     try {
       if (this.page && !this.page.isClosed()) {
         await this.page.close().catch(() => {});
@@ -112,7 +126,6 @@ class BaseCasino {
     }
 
     this.page = null;
-    this.domScanner = null;
     this.processor.reset();
     log.info(this.name, 'Captura detenida');
   }
@@ -125,35 +138,27 @@ class BaseCasino {
     this.recoveryCount++;
     this.consecutiveRecoveryFails++;
 
-    log.warn(this.name, `Recovery #${this.recoveryCount} - intentando restaurar captura...`);
+    log.warn(this.name, `Recovery #${this.recoveryCount} — intentando restaurar...`);
 
     try {
-      // Cerrar pagina actual si existe
       if (this.page && !this.page.isClosed()) {
         await this.page.close().catch(() => {});
         this.page = null;
       }
 
-      // Esperar antes de reintentar (delay aleatorio para parecer humano)
       await randomDelay(this.config.recoveryMin, this.config.recoveryMax);
 
-      // Si superamos maximos intentos, no seguir
       if (this.consecutiveRecoveryFails > this.config.maxRecovery) {
-        log.error(this.name, `Maximos recovery alcanzados (${this.config.maxRecovery}) - necesita rotacion`);
+        log.error(this.name, `Maximos recovery alcanzados (${this.config.maxRecovery})`);
         this.status = 'error';
         return false;
       }
 
       // Re-navegar
       this.page = await this.context.newPage();
-      this.domScanner = setupNetworkInterception(
-        this.page,
-        this.name,
-        (number, source) => this._onNumberDetected(number, source)
-      );
-
       await this.navigate();
       await this._waitForTable();
+      this._activateGrace(15000);
 
       this.status = 'capturing';
       this.consecutiveRecoveryFails = 0;
@@ -168,14 +173,11 @@ class BaseCasino {
 
   /**
    * Espera a que la mesa de ruleta este lista
-   * Override en subclase para lógica específica
    */
   async _waitForTable() {
-    // Esperar generica: esperar que aparezca un iframe
     try {
       await this.page.waitForSelector('iframe', { timeout: 60000 });
       log.info(this.name, 'Iframe de juego detectado');
-      // Esperar adicional para que el juego internamente cargue
       await randomDelay(3000, 6000);
     } catch (e) {
       log.warn(this.name, 'Timeout esperando iframe, continuando...');
@@ -183,28 +185,39 @@ class BaseCasino {
   }
 
   /**
-   * Callback cuando se detecta un numero
+   * Callback cuando se detecta un numero (llamado desde ExtensionBridge)
    */
-  async _onNumberDetected(number, source) {
+  async onNumberFromExtension(number, source) {
     if (!this.running) return;
+
+    // Grace period: ignorar numeros al inicio
+    if (this.graceActive) {
+      log.debug(this.name, `[GRACE] ${number} bloqueado [${source}]`);
+      return;
+    }
+
     await this.processor.process(number, source, (num, color) => this.api.sendNumber(num, color));
   }
 
   /**
-   * Scanner DOM periodico (llamar desde el loop principal)
+   * Grace period: ignorar numeros por N ms despues de conectar
+   */
+  _activateGrace(ms) {
+    this.graceActive = true;
+    if (this.graceTimeout) clearTimeout(this.graceTimeout);
+    this.graceTimeout = setTimeout(() => {
+      this.graceActive = false;
+      log.info(this.name, '>>> CAPTURA EN VIVO ACTIVADA <<<');
+    }, ms);
+    log.info(this.name, `Grace period de ${ms}ms activado`);
+  }
+
+  /**
+   * Scanner DOM periodico — no hace nada en modo extension
+   * (el extension ya escanea el DOM internamente)
    */
   async runDOMScan() {
-    if (!this.running || !this.domScanner || !this.page || this.page.isClosed()) return null;
-    try {
-      const number = await this.domScanner.scan();
-      if (number !== null) {
-        await this._onNumberDetected(number, 'dom-scan');
-        return number;
-      }
-    } catch (e) {
-      // Silencioso
-    }
-    return null;
+    // No-op en modo extension
   }
 
   /**
@@ -217,6 +230,7 @@ class BaseCasino {
       recoveryCount: this.recoveryCount,
       url: this.dynamicUrl || this.getRouletteURL(),
       dynamicUrl: this.dynamicUrl,
+      captureMode: 'extension',
     };
   }
 }

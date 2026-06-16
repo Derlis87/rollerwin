@@ -38,6 +38,7 @@ function loadConfig() {
     CHROME_PATH: process.env.CHROME_PATH || '',
     CDP_PORT: process.env.CDP_PORT || '9222',
     CHROME_PROFILE: process.env.CHROME_PROFILE || './chrome-profile',
+    BRIDGE_PORT: process.env.BRIDGE_PORT || '19555',
   };
 
   let envVars = {};
@@ -78,6 +79,7 @@ function loadConfig() {
   config.rotationMin = parseNum('ROTATION_INTERVAL_MIN');
   config.rotationMax = parseNum('ROTATION_INTERVAL_MAX');
   config.noSpinTimeout = parseNum('NO_SPIN_TIMEOUT');
+  config.bridgePort = parseInt(config.BRIDGE_PORT, 10) || 19555;
 
   // Casinos activos ordenados
   config.activeCasinos = [];

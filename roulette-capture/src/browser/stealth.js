@@ -1,11 +1,12 @@
 // ============================================================
-// stealth.js v2 - Anti-detección + flags OOPIF para captura
+// stealth.js v3 - Chrome REAL + Extension de captura + CDP
 // ============================================================
+const path = require('path');
 const { randInt } = require('../utils/helpers');
 
 const USER_AGENTS = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
   'Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
@@ -43,59 +44,11 @@ function getProfile() {
 }
 
 // ============================================================
-// Opciones para lanzar Chrome REAL via CDP
-// ============================================================
-function getLaunchOptions(config) {
-  const profile = generateProfile();
-  const chromePath = config.CHROME_PATH || null;
-
-  if (config.headed && chromePath) {
-    // MODO CDP: Conectar a Chrome REAL en puerto 9222
-    // Chrome se lanza por separado con flags anti-OOPIF
-    return {
-      // No lanzamos nada — Chrome ya está corriendo
-      cdpMode: true,
-      cdpUrl: `http://127.0.0.1:9222`,
-      chromePath,
-      profile,
-    };
-  }
-
-  // MODO PLAYWRIGHT: Lanzar Chromium con flags anti-OOPIF
-  const args = [
-    `--user-agent=${profile.ua}`,
-    `--lang=${profile.locale}`,
-    `--timezone-id=${profile.tz}`,
-    '--disable-blink-features=AutomationControlled',
-    '--disable-notifications',
-    '--disable-default-apps',
-    '--no-first-run',
-    '--no-default-browser-check',
-    // CRÍTICO: Deshabilitar aislamiento de sitios para que los iframes
-    // corran en el MISMO proceso y Page.addScriptToEvaluateOnNewDocument
-    // pueda inyectar en ellos
-    '--disable-site-isolation-trials',
-    '--disable-features=IsolateOrigins,site-per-process',
-    '--disable-web-security',
-    // Para captura de iframes
-    '--allow-running-insecure-content',
-  ];
-
-  return {
-    headless: !config.headed,
-    args,
-    ignoreDefaultArgs: ['--enable-automation'],
-    channel: 'chromium',
-    cdpMode: false,
-    profile,
-  };
-}
-
-// ============================================================
-// Lanzar Chrome REAL y conectar via CDP
+// Lanzar Chrome REAL con extension de captura + CDP
 // ============================================================
 const { execSync, spawn } = require('child_process');
 const net = require('net');
+const fs = require('fs');
 
 async function launchRealChrome(config) {
   const profile = currentProfile || generateProfile();
@@ -106,54 +59,91 @@ async function launchRealChrome(config) {
     throw new Error('CHROME_PATH no configurado en .env — necesario para modo headed');
   }
 
+  // Verificar que el directorio de extension existe
+  const extensionDir = path.resolve(__dirname, '../../extension');
+  if (!fs.existsSync(path.join(extensionDir, 'manifest.json'))) {
+    throw new Error(`Extension no encontrada en ${extensionDir} — falta manifest.json`);
+  }
+
   // Matar procesos existentes en el puerto
   try {
     if (process.platform === 'win32') {
-      execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, { encoding: 'utf8' });
-      execSync(`for /f "tokens=5" %a in ('netstat -ano ^| findstr :${port} ^| findstr LISTENING') do taskkill /F /PID %a`, { encoding: 'utf8', stdio: 'ignore' });
+      // Windows: matar chrome.exe que estén usando el puerto
+      try {
+        const out = execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, { encoding: 'utf8' });
+        const pids = [...new Set(
+          out.split('\n')
+            .map(line => line.trim().split(/\s+/).pop())
+            .filter(pid => pid && !isNaN(pid))
+        )];
+        for (const pid of pids) {
+          try {
+            execSync(`taskkill /F /PID ${pid}`, { encoding: 'utf8', stdio: 'ignore' });
+          } catch (e) {}
+        }
+      } catch (e) {
+        // No hay procesos en el puerto, OK
+      }
     } else {
-      execSync(`lsof -ti:${port} | xargs kill -9 2>/dev/null || true`, { encoding: 'utf8' });
+      try {
+        execSync(`lsof -ti:${port} | xargs kill -9 2>/dev/null || true`, { encoding: 'utf8' });
+      } catch (e) {}
     }
   } catch (e) {}
 
   // Esperar a que el puerto se libere
-  await new Promise(r => setTimeout(r, 1000));
+  await new Promise(r => setTimeout(r, 1500));
 
   const profileDir = config.CHROME_PROFILE || './chrome-profile';
 
+  // Resolver rutas absolutas para Chrome (Windows necesita esto)
+  const absExtensionDir = path.resolve(extensionDir).replace(/\\/g, '/');
+  const absProfileDir = path.resolve(profileDir).replace(/\\/g, '/');
+
   const chromeArgs = [
     `--remote-debugging-port=${port}`,
-    `--user-data-dir=${profileDir}`,
+    `--user-data-dir=${absProfileDir}`,
     `--user-agent=${profile.ua}`,
     `--lang=${profile.locale}`,
+    // CRÍTICO: Cargar el extension de captura
+    `--load-extension=${absExtensionDir}`,
+    `--disable-extensions-except=${absExtensionDir}`,
+    // Anti-deteccion
     '--disable-blink-features=AutomationControlled',
     '--disable-notifications',
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-infobars',
-    // CRÍTICO para inyección en iframes cross-origin:
-    // Estos flags hacen que los iframes NO se separen en procesos distintos
-    '--disable-site-isolation-trials',
-    '--disable-features=IsolateOrigins,site-per-process',
-    '--disable-web-security',
-    '--allow-running-insecure-content',
     // Evitar que Chrome se cierre solo
     '--disable-backgrounding-occluded-windows',
     '--disable-renderer-backgrounding',
   ];
 
   // Lanzar Chrome
-  const chrome = spawn(chromePath, chromeArgs, {
-    detached: !process.platform === 'win32',
-    stdio: 'ignore',
-  });
+  let chrome;
+  const isWin = process.platform === 'win32';
 
-  if (process.platform !== 'win32') {
+  if (isWin) {
+    // En Windows, usar shell: true y detached
+    chrome = spawn(chromePath, chromeArgs, {
+      detached: true,
+      stdio: 'ignore',
+      shell: true,
+    });
+    chrome.unref(); // No esperar a que Chrome termine
+  } else {
+    chrome = spawn(chromePath, chromeArgs, {
+      detached: true,
+      stdio: 'ignore',
+    });
     chrome.unref();
   }
 
+  const log = require('../utils/logger');
+  log.info('chrome', `Chrome lanzado con extension en: ${absExtensionDir}`);
+
   // Esperar a que el puerto esté escuchando
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 40; i++) {
     await new Promise(r => setTimeout(r, 500));
     const alive = await new Promise((resolve) => {
       const sock = net.createConnection({ port, host: '127.0.0.1' }, () => {
@@ -165,11 +155,12 @@ async function launchRealChrome(config) {
       sock.on('timeout', () => { sock.destroy(); resolve(false); });
     });
     if (alive) {
+      log.info('chrome', `Chrome CDP listo en puerto ${port}`);
       return port;
     }
   }
 
-  throw new Error(`Chrome no respondió en el puerto ${port} después de 15 segundos`);
+  throw new Error(`Chrome no respondió en el puerto ${port} después de 20 segundos`);
 }
 
 // ============================================================
@@ -234,4 +225,4 @@ async function createStealthContext(browser, config) {
   return context;
 }
 
-module.exports = { getLaunchOptions, createStealthContext, getProfile, generateProfile, launchRealChrome };
+module.exports = { createStealthContext, getProfile, generateProfile, launchRealChrome };

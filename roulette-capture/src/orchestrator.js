@@ -1,9 +1,11 @@
 // ============================================================
-// orchestrator.js - Orquestador principal
-// Consulta pipeline-status de RollerWin para saber si debe capturar
-// Solo captura cuando el usuario activa Auto Capture en el dashboard
+// orchestrator.js v2 - Orquestador principal (Extension mode)
 // ============================================================
-const { randomDelay, randInt } = require('./utils/helpers');
+// Consulta pipeline-status de RollerWin para saber si debe capturar.
+// La captura REAL la hace el Chrome Extension — el orquestador solo
+// maneja navegacion, login, recovery y tab switching.
+// ============================================================
+const { randomDelay } = require('./utils/helpers');
 const log = require('./utils/logger');
 
 class Orchestrator {
@@ -12,35 +14,34 @@ class Orchestrator {
     this.config = config;
     this.api = apiClient;
     this.running = false;
-    this.capturing = false; // Solo true cuando auto-capture está activo en RollerWin
+    this.capturing = false;
     this.context = null;
     this.currentCasino = null;
     this.statusCheckInterval = null;
-    this.domScanInterval = null;
-    this.statsInterval = null;
     this.pipelinePollInterval = null;
+    this.statsInterval = null;
     this.sessionStartTime = 0;
     this.lastPipelineTable = '';
     this.lastPipelineCasino = '';
   }
 
   /**
-   * Inicia el orquestador - NO empieza a capturar, espera señal del dashboard
+   * Inicia el orquestador
    */
   async start(context) {
     this.context = context;
     this.running = true;
     this.sessionStartTime = Date.now();
 
-    log.info('orchestrator', 'Sistema iniciado - ESPERANDO que actives Auto Capture en RollerWin');
-    log.info('orchestrator', 'El script va a consultar el dashboard cada 5 segundos');
+    log.info('orchestrator', 'Sistema iniciado — ESPERANDO que actives Auto Capture en RollerWin');
+    log.info('orchestrator', 'El script consulta el dashboard cada 5 segundos');
 
     // Verificar API de RollerWin
     const apiOk = await this.api.healthCheck();
     if (apiOk) {
       log.info('orchestrator', 'RollerWin API responde correctamente');
     } else {
-      log.warn('orchestrator', 'RollerWin API no responde - verificando...');
+      log.warn('orchestrator', 'RollerWin API no responde — verificando...');
     }
 
     // Polling del pipeline-status cada 5 segundos
@@ -53,13 +54,6 @@ class Orchestrator {
       if (this.running && this.capturing) this._healthCheck();
     }, 30000);
 
-    // DOM Scanner periodico
-    this.domScanInterval = setInterval(() => {
-      if (this.running && this.capturing && this.currentCasino) {
-        this.currentCasino.runDOMScan().catch(() => {});
-      }
-    }, 10000);
-
     // Stats cada 60 segundos
     this.statsInterval = setInterval(() => {
       if (this.running) this._printStats();
@@ -67,7 +61,7 @@ class Orchestrator {
   }
 
   /**
-   * Consulta /api/capture/pipeline-status para saber si debe capturar
+   * Consulta /api/capture/pipeline-status
    */
   async _pollPipelineStatus() {
     try {
@@ -80,7 +74,6 @@ class Orchestrator {
       const casino = data.casino || '';
 
       if (shouldBeActive && !this.capturing) {
-        // === ACABAN DE ACTIVAR AUTO CAPTURE ===
         log.info('orchestrator', '');
         log.info('orchestrator', '>>> AUTO CAPTURE ACTIVADO desde RollerWin <<<');
         log.info('orchestrator', `    Casino: ${casino}`);
@@ -91,11 +84,9 @@ class Orchestrator {
         this.lastPipelineTable = table;
         this.lastPipelineCasino = casino;
 
-        // Iniciar captura en la mesa indicada
         await this._startCaptureForTable(casino, table);
 
       } else if (!shouldBeActive && this.capturing) {
-        // === DESACTIVARON AUTO CAPTURE ===
         log.info('orchestrator', '>>> AUTO CAPTURE DESACTIVADO desde RollerWin <<<');
         this.capturing = false;
         if (this.currentCasino) {
@@ -104,9 +95,8 @@ class Orchestrator {
         }
 
       } else if (shouldBeActive && this.capturing) {
-        // === SIGUE ACTIVO - verificar si cambiaron de mesa ===
         if (table !== this.lastPipelineTable || casino !== this.lastPipelineCasino) {
-          log.info('orchestrator', `Cambio de mesa detectado: ${this.lastPipelineCasino} -> ${casino}`);
+          log.info('orchestrator', `Cambio de mesa: ${this.lastPipelineCasino} -> ${casino}`);
           this.lastPipelineTable = table;
           this.lastPipelineCasino = casino;
           if (this.currentCasino) {
@@ -115,7 +105,6 @@ class Orchestrator {
           await this._startCaptureForTable(casino, table);
         }
       }
-      // Si no está activo y no estaba capturando, no hacer nada (esperar)
 
     } catch (err) {
       log.debug('orchestrator', `Error consultando pipeline: ${err.message}`);
@@ -123,14 +112,11 @@ class Orchestrator {
   }
 
   /**
-   * Inicia la captura en la mesa especificada por el dashboard
+   * Inicia la captura en la mesa especificada
    */
   async _startCaptureForTable(casinoName, tableUrl) {
-    // Buscar el casino adecuado por nombre
     let casino = this.casinos.find(c => c.name === casinoName);
-
     if (!casino) {
-      // Si no matchea por nombre, intentar por URL
       casino = this.casinos.find(c => tableUrl.includes(c.name));
     }
 
@@ -140,12 +126,12 @@ class Orchestrator {
       return;
     }
 
-    // Setear la URL dinamica que viene del dashboard
     casino.dynamicUrl = tableUrl;
-
     this.currentCasino = casino;
+
     log.info('orchestrator', `>>> Conectando a: ${casino.name.toUpperCase()}`);
     log.info('orchestrator', `    URL: ${tableUrl}`);
+    log.info('orchestrator', `    (La captura la hace el Chrome Extension internamente)`);
 
     const success = await casino.start(this.context);
     if (!success) {
@@ -166,11 +152,9 @@ class Orchestrator {
     const stats = this.currentCasino.getStats();
     const secondsSinceCapture = stats.secondsSinceCapture;
 
-    // Si nunca se capturo nada, dar tiempo al juego para cargar (no recovery)
-    // Un numero de ruleta tarda ~30-60 seg entre giros
     if (secondsSinceCapture === Infinity || secondsSinceCapture === null) {
       log.debug('orchestrator',
-        `[${this.currentCasino.name}] Esperando primer captura... (sin timeout)`
+        `[${this.currentCasino.name}] Esperando primer captura...`
       );
       return;
     }
@@ -188,7 +172,7 @@ class Orchestrator {
       }
       const recovered = await this.currentCasino.recover();
       if (!recovered) {
-        log.error('orchestrator', `Recovery fallo - esperando proxima activacion`);
+        log.error('orchestrator', `Recovery fallo — esperando proxima activacion`);
         this.capturing = false;
       }
     }
@@ -213,18 +197,25 @@ class Orchestrator {
       totalCaptured += s.totalCaptured;
     }
 
+    // Bridge stats
+    const bridgeStats = global.__bridge ? global.__bridge.getStats() : {};
+    const bridgeRequests = bridgeStats.requestCount || 0;
+
     const captureStatus = this.capturing ? 'CAPTURANDO' : 'EN ESPERA (activa Auto Capture en RollerWin)';
+    const mode = 'EXTENSION (MAIN world)';
 
     log.info('stats',
       `\n` +
       `  ╔══════════════════════════════════════════════════╗\n` +
-      `  ║   ROULETTE CAPTURE SYSTEM - STATS                ║\n` +
+      `  ║   ROULETTE CAPTURE SYSTEM v3.0 - STATS          ║\n` +
       `  ╠══════════════════════════════════════════════════╣\n` +
       `  ║  Uptime:       ${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}\n` +
+      `  ║  Modo:         ${mode}\n` +
       `  ║  Estado:       ${captureStatus}\n` +
       `  ║  Casino:       ${this.currentCasino?.name.toUpperCase() || 'ninguno'}\n` +
-      `  ║  Enviados:     ${totalSent}\n` +
       `  ║  Capturados:   ${totalCaptured}\n` +
+      `  ║  Enviados:     ${totalSent}\n` +
+      `  ║  Bridge reqs:  ${bridgeRequests}\n` +
       `  ║  API errors:   ${apiStats.totalErrors}\n` +
       `  ╚══════════════════════════════════════════════════╝`
     );
@@ -239,7 +230,6 @@ class Orchestrator {
 
     if (this.pipelinePollInterval) clearInterval(this.pipelinePollInterval);
     if (this.statusCheckInterval) clearInterval(this.statusCheckInterval);
-    if (this.domScanInterval) clearInterval(this.domScanInterval);
     if (this.statsInterval) clearInterval(this.statsInterval);
 
     for (const casino of this.casinos) {

@@ -1,18 +1,16 @@
 // ============================================================
-// index.js v2 - Punto de entrada — Chrome REAL via CDP
+// index.js v3 - Punto de entrada — HYBRID APPROACH
 // ============================================================
-// CAMBIO FUNDAMENTAL: En vez de lanzar Chromium de Playwright,
-// lanzamos Chrome REAL con --remote-debugging-port y nos
-// conectamos via CDP. Esto permite:
-//   1. Usar Page.addScriptToEvaluateOnNewDocument en MAIN world
-//   2. Los iframes cross-origin corren en el mismo proceso
-//   3. Los hooks de WebSocket/Fetch/XHR se ejecutan DENTRO del juego
+// CAPTURA: Chrome Extension (injecta en MAIN world de iframes)
+// NAVEGACION: Node.js + Playwright CDP (login, navigate, recovery)
+// COMUNICACION: Extension → fetch localhost:19555 → Node.js → RollerWin API
 // ============================================================
 
 const { chromium } = require('playwright');
 const { loadConfig } = require('./config');
-const { getLaunchOptions, createStealthContext, getProfile, launchRealChrome } = require('./browser/stealth');
-const { startHumanBehavior, stopHumanBehavior, setCaptureActive } = require('./browser/human-behavior');
+const { createStealthContext, getProfile, launchRealChrome } = require('./browser/stealth');
+const { stopHumanBehavior } = require('./browser/human-behavior');
+const { ExtensionBridge } = require('./capture/extension-bridge');
 const { RollerWinAPI } = require('./api/rollerwin-api');
 const { PinnacleCasino } = require('./casinos/pinnacle');
 const { BetFuryCasino } = require('./casinos/betfury');
@@ -23,9 +21,9 @@ const log = require('./utils/logger');
 function printBanner() {
   console.log('');
   console.log('  ╔══════════════════════════════════════════════════╗');
-  console.log('  ║   ROULETTE CAPTURE SYSTEM v2.0                  ║');
-  console.log('  ║   Inyección MAIN world en iframes               ║');
-  console.log('  ║   Chrome REAL + CDP + postMessage bridge        ║');
+  console.log('  ║   ROULETTE CAPTURE SYSTEM v3.0                  ║');
+  console.log('  ║   Hybrid: Chrome Extension + Node.js CDP        ║');
+  console.log('  ║   Captura REAL en iframes cross-origin          ║');
   console.log('  ╚══════════════════════════════════════════════════╝');
   console.log('');
 }
@@ -40,6 +38,13 @@ async function main() {
   log.info('system', `Casinos activos: ${config.activeCasinos.join(', ')}`);
   log.info('system', `RollerWin API: ${config.ROLLERWIN_API_URL}`);
 
+  // ========================================
+  // INICIAR EXTENSION BRIDGE (HTTP server local)
+  // ========================================
+  const bridgePort = 19555;
+  const bridge = new ExtensionBridge(bridgePort);
+
+  // Crear API client
   const apiClient = new RollerWinAPI(config.ROLLERWIN_API_URL);
 
   // Crear instancias de casinos
@@ -48,15 +53,36 @@ async function main() {
   if (config.pinnacleEnabled) casinoInstances.push(new PinnacleCasino(config, apiClient));
   if (config.stakeEnabled) casinoInstances.push(new StakeCasino(config, apiClient));
 
+  // Iniciar bridge — el extension envia numeros aquí
+  try {
+    // Callback: cuando el bridge recibe un numero del extension,
+    // enviarlo al casino activo para procesamiento
+    bridge.start(async (number, source) => {
+      // Buscar el casino que esté capturando actualmente
+      const orchestrator_ref = global.__orchestrator;
+      if (orchestrator_ref && orchestrator_ref.currentCasino) {
+        await orchestrator_ref.currentCasino.onNumberFromExtension(number, source);
+      } else {
+        log.warn('bridge', `Numero ${number} recibido pero no hay casino activo`);
+      }
+    });
+
+    log.info('system', `Extension bridge activo en puerto ${bridgePort}`);
+    global.__bridge = bridge;
+  } catch (err) {
+    log.error('system', `No se pudo iniciar el bridge: ${err.message}`);
+    log.error('system', 'Asegurate de que el puerto 19555 esté libre');
+    process.exit(1);
+  }
+
   // ========================================
-  // LANZAR NAVEGADOR
+  // LANZAR NAVEGADOR CON EXTENSION
   // ========================================
   let browser;
   let context;
 
   if (config.headed && config.CHROME_PATH) {
-    // MODO HEADED: Lanzar Chrome REAL y conectar via CDP
-    log.info('system', 'Lanzando Chrome REAL con anti-OOPIF...');
+    log.info('system', 'Lanzando Chrome REAL con extension de captura...');
     const profile = getProfile();
     log.info('system', `  UA: ${profile.ua.substring(0, 60)}...`);
     log.info('system', `  Locale: ${profile.locale} | TZ: ${profile.tz}`);
@@ -73,40 +99,29 @@ async function main() {
       const contexts = browser.contexts();
       if (contexts.length > 0) {
         context = contexts[0];
-        log.info('system', 'Usando contexto existente de Chrome (con cookies)');
+        log.info('system', 'Usando contexto existente de Chrome');
       } else {
         context = await browser.newContext();
         log.info('system', 'Creado nuevo contexto en Chrome');
       }
     } catch (err) {
       log.error('system', `Error con Chrome REAL: ${err.message}`);
-      log.error('system', 'Verifica que CHROME_PATH en .env apunte a chrome.exe / google-chrome');
+      log.error('system', 'Verifica que CHROME_PATH en .env apunte a chrome.exe');
+      bridge.stop();
       process.exit(1);
     }
   } else {
-    // MODO HEADLESS: Usar Chromium de Playwright
-    log.info('system', 'Lanzando Chromium (headless) con anti-OOPIF...');
-    const launchOptions = getLaunchOptions(config);
-    const profile = launchOptions.profile;
-
-    log.info('system', `  UA: ${profile.ua.substring(0, 60)}...`);
-
-    browser = await chromium.launch({
-      headless: !config.headed,
-      args: launchOptions.args,
-      ignoreDefaultArgs: ['--enable-automation'],
-      channel: 'chromium',
-    });
-    log.info('system', 'Chromium lanzado');
-
-    context = await createStealthContext(browser, config);
-    log.info('system', 'Contexto stealth creado');
+    log.error('system', 'MODO HEADED REQUERIDO — la captura via extension necesita Chrome visible');
+    log.error('system', 'Set HEADED=true y CHROME_PATH en .env');
+    bridge.stop();
+    process.exit(1);
   }
 
   // ========================================
   // INICIAR ORQUESTADOR
   // ========================================
   const orchestrator = new Orchestrator(casinoInstances, config, apiClient);
+  global.__orchestrator = orchestrator;
 
   // Manejo de señales
   let shuttingDown = false;
@@ -117,11 +132,8 @@ async function main() {
     log.warn('system', `Señal ${signal} — cerrando...`);
     await orchestrator.stop();
     stopHumanBehavior();
+    bridge.stop();
     try { await context.close(); } catch(e) {}
-    // NO cerrar browser si es CDP (Chrome REAL se mantiene abierto)
-    if (!config.headed || !config.CHROME_PATH) {
-      try { await browser.close(); } catch(e) {}
-    }
     log.info('system', 'Sistema cerrado');
     process.exit(0);
   };
@@ -138,21 +150,10 @@ async function main() {
   try {
     await orchestrator.start(context);
 
-    // Guardar cookies periódicamente
-    const cookieSaveLoop = setInterval(async () => {
-      if (!orchestrator.running) return;
-      try {
-        const cookies = await context.cookies();
-        const fs = require('fs');
-        if (!fs.existsSync('./config')) fs.mkdirSync('./config', { recursive: true });
-        fs.writeFileSync('./config/cookies.json', JSON.stringify(cookies, null, 2));
-        log.debug('system', `Cookies guardadas (${cookies.length})`);
-      } catch (e) {}
-    }, 300000);
-
     log.info('system', '');
     log.info('system', '  ═══════════════════════════════════════════');
     log.info('system', '  Sistema activo — Ctrl+C para detener');
+    log.info('system', '  Captura via Chrome Extension (MAIN world)');
     log.info('system', '  ═══════════════════════════════════════════');
     log.info('system', '');
 
@@ -165,20 +166,10 @@ async function main() {
         await orchestrator.stop();
         stopHumanBehavior();
 
-        if (config.headed && config.CHROME_PATH) {
-          const port = await launchRealChrome(config);
-          browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-          const contexts = browser.contexts();
-          context = contexts.length > 0 ? contexts[0] : await browser.newContext();
-        } else {
-          browser = await chromium.launch({
-            headless: true,
-            args: ['--disable-site-isolation-trials', '--disable-features=IsolateOrigins,site-per-process'],
-            ignoreDefaultArgs: ['--enable-automation'],
-            channel: 'chromium',
-          });
-          context = await createStealthContext(browser, config);
-        }
+        const port = await launchRealChrome(config);
+        browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+        const contexts = browser.contexts();
+        context = contexts.length > 0 ? contexts[0] : await browser.newContext();
 
         await orchestrator.start(context);
       }
