@@ -123,23 +123,26 @@ async function launchRealChrome(config) {
   ];
 
   // Lanzar Chrome
+  // NOTA: NO usar shell:true — rompe rutas con espacios en Windows (ej: OneDrive)
+  // spawn sin shell pasa cada argumento correctamente incluso con espacios
   let chrome;
   const isWin = process.platform === 'win32';
 
+  const spawnOpts = {
+    detached: true,
+    stdio: 'ignore',
+  };
   if (isWin) {
-    // En Windows, usar shell: true y detached
-    chrome = spawn(chromePath, chromeArgs, {
-      detached: true,
-      stdio: 'ignore',
-      shell: true,
-    });
-    chrome.unref(); // No esperar a que Chrome termine
-  } else {
-    chrome = spawn(chromePath, chromeArgs, {
-      detached: true,
-      stdio: 'ignore',
-    });
-    chrome.unref();
+    spawnOpts.windowsHide = true;
+  }
+
+  chrome = spawn(chromePath, chromeArgs, spawnOpts);
+  chrome.unref(); // No esperar a que Chrome termine
+
+  // Verificar que el proceso arrancó
+  await new Promise(r => setTimeout(r, 1000));
+  if (chrome.exitCode !== null) {
+    throw new Error(`Chrome fallo al arrancar (codigo: ${chrome.exitCode}). Verifica CHROME_PATH: ${chromePath}`);
   }
 
   const log = require('../utils/logger');
