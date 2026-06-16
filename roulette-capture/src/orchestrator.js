@@ -33,16 +33,30 @@ class Orchestrator {
     this.running = true;
     this.sessionStartTime = Date.now();
 
-    log.info('orchestrator', 'Sistema iniciado — ESPERANDO que actives Auto Capture en RollerWin');
-    log.info('orchestrator', 'El script consulta el dashboard cada 5 segundos');
+    log.info('orchestrator', 'Sistema iniciado');
+    log.info('orchestrator', 'Consultando dashboard cada 5 segundos para Auto Capture');
 
     // Verificar API de RollerWin
     const apiOk = await this.api.healthCheck();
     if (apiOk) {
       log.info('orchestrator', 'RollerWin API responde correctamente');
     } else {
-      log.warn('orchestrator', 'RollerWin API no responde — verificando...');
+      log.warn('orchestrator', 'RollerWin API no responde — se auto-iniciara con el primer casino en 15s');
     }
+
+    // Auto-start: si en 15 segundos no hay señal del dashboard, empezar con el primer casino
+    this._autoStartTimer = setTimeout(() => {
+      if (this.running && !this.capturing) {
+        log.info('orchestrator', 'Sin señal del dashboard — auto-iniciando captura...');
+        this.capturing = true;
+        const firstCasino = this.casinos[0];
+        if (firstCasino) {
+          this.lastPipelineCasino = firstCasino.name;
+          this.lastPipelineTable = firstCasino.getRouletteURL();
+          this._startCaptureForTable(firstCasino.name, firstCasino.getRouletteURL());
+        }
+      }
+    }, 15000);
 
     // Polling del pipeline-status cada 5 segundos
     this.pipelinePollInterval = setInterval(() => {
@@ -228,6 +242,7 @@ class Orchestrator {
     this.running = false;
     this.capturing = false;
 
+    if (this._autoStartTimer) clearTimeout(this._autoStartTimer);
     if (this.pipelinePollInterval) clearInterval(this.pipelinePollInterval);
     if (this.statusCheckInterval) clearInterval(this.statusCheckInterval);
     if (this.statsInterval) clearInterval(this.statsInterval);
