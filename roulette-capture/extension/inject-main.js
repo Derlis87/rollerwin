@@ -4,11 +4,8 @@
 // Este script se ejecuta DENTRO del contexto JS de cada iframe
 // (incluyendo iframes cross-origin como Evolution y Pragmatic).
 //
-// Se inyecta via chrome.scripting.executeScript({world: 'MAIN', allFrames: true})
-// que es la UNICA forma de acceder al WebSocket real de los juegos.
-//
-// COMUNICACION:
-//   Este script → window.postMessage → content.js → background.js → fetch → Node.js
+// MODO DIAGNOSTICO: Loguea TODOS los mensajes WS/Fetch/XHR
+// para identificar el formato real de los datos.
 // ============================================================
 (function() {
   'use strict';
@@ -16,7 +13,9 @@
   window.__rwInjected = true;
 
   var hostname = location.hostname || '';
-  console.log('[RW-INJECT] Motor de captura activo en:', hostname);
+  var isTop = (window === window.top);
+  var frameInfo = isTop ? 'TOP' : 'FRAME';
+  console.log('%c[RW-INJECT] Motor activo: ' + frameInfo + ' — ' + hostname, 'color: #00ff00; font-weight: bold');
 
   var RED = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
   function getColor(n) { return n === 0 ? 'green' : RED.indexOf(n) >= 0 ? 'red' : 'black'; }
@@ -33,6 +32,9 @@
 
   function _markSent() { _lastSentTimestamp = Date.now(); }
 
+  // ═══ DIAGNOSTIC: contador de mensajes ═══
+  var diagStats = { ws: 0, fetch: 0, xhr: 0, postMsg: 0, sse: 0 };
+
   // ═══ ENVIAR numero via postMessage → content.js → background → Node.js ═══
   function sendNumber(n, source) {
     if (n < 0 || n > 36) return;
@@ -41,9 +43,8 @@
       return;
     }
     _markSent();
-    console.log('[RW-INJECT] RESULTADO:', n, '(' + getColor(n) + ')', '—', source, '[' + hostname + ']');
+    console.log('%c[RW-INJECT] ✅ RESULTADO: ' + n + ' (' + getColor(n) + ') — ' + source + ' [' + hostname + ']', 'color: #ff0; font-size: 14px; font-weight: bold; background: #000');
 
-    // Enviar via postMessage — content.js lo captura y reenvía al background
     try {
       window.postMessage({
         __rwCapture: true,
@@ -55,7 +56,6 @@
       }, '*');
     } catch(e) {}
 
-    // También intentar window.parent y window.top
     try { window.parent.postMessage({ __rwCapture: true, source: 'rw-capture', number: n, color: getColor(n), hostname: hostname, sourceHook: source }, '*'); } catch(e) {}
     if (window.parent !== window.top) {
       try { window.top.postMessage({ __rwCapture: true, source: 'rw-capture', number: n, color: getColor(n), hostname: hostname, sourceHook: source }, '*'); } catch(e) {}
@@ -105,7 +105,6 @@
           pathLow.indexOf('outcome') >= 0 || pathLow.indexOf('pocket') >= 0 ||
           pathLow.indexOf('recent') >= 0 || pathLow.indexOf('history') >= 0 ||
           pathLow.indexOf('number') >= 0) {
-        // Buscar numeros dentro del array
         for (var i = 0; i < obj.length; i++) {
           var item = obj[i];
           if (typeof item === 'number' && item >= 0 && item <= 36 && item === Math.floor(item)) {
@@ -113,7 +112,6 @@
             return;
           }
           if (Array.isArray(item) && item.length > 0) {
-            // Array de arrays como recentResults: [["5"],["32"],...]
             var last = item[item.length - 1];
             if (typeof last === 'string') {
               var n = tryNum(last);
@@ -127,7 +125,6 @@
             extractObj(item, depth + 1, pathStr + '[' + i + ']');
           }
         }
-        // También probar el último elemento si es objeto
         if (obj.length > 0) {
           var lastItem = obj[obj.length - 1];
           if (typeof lastItem === 'object' && lastItem !== null && !Array.isArray(lastItem)) {
@@ -145,7 +142,6 @@
         var n = tryNum(val);
         if (n !== null) { sendNumber(n, key + '@' + pathStr); return; }
       }
-      // Special: recentResults puede tener el numero como string en array
       if (key === 'recentResults' && Array.isArray(val) && val.length > 0) {
         var latest = val[val.length - 1];
         if (Array.isArray(latest) && latest.length > 0) {
@@ -192,7 +188,91 @@
   }
 
   // ══════════════════════════════════════
-  // HOOK WEBSOCKET — El más importante
+  // DIAGNOSTIC: Loguear TODOS los mensajes WS sin filtro
+  // ══════════════════════════════════════
+  function diagLogWS(data, wsUrl, direction) {
+    diagStats.ws++;
+    var msgNum = diagStats.ws;
+
+    // Determinar tipo de datos
+    var dataType = 'text';
+    var preview = '';
+    var size = 0;
+
+    if (typeof data === 'string') {
+      dataType = 'string';
+      size = data.length;
+      preview = data.length > 300 ? data.substring(0, 300) + '...[' + data.length + ' chars]' : data;
+    } else if (data instanceof ArrayBuffer) {
+      dataType = 'ArrayBuffer';
+      size = data.byteLength;
+      // Mostrar primeros bytes como hex
+      var bytes = new Uint8Array(data);
+      var hex = [];
+      var ascii = [];
+      var showBytes = Math.min(bytes.length, 64);
+      for (var i = 0; i < showBytes; i++) {
+        hex.push(('0' + bytes[i].toString(16)).slice(-2));
+        ascii.push(bytes[i] >= 32 && bytes[i] < 127 ? String.fromCharCode(bytes[i]) : '.');
+      }
+      preview = 'HEX: ' + hex.join(' ') + '\nASCII: ' + ascii.join('');
+      if (bytes.length > 64) preview += '\n...[' + bytes.length + ' bytes total]';
+
+      // Intentar decodificar como UTF-8
+      try {
+        var decoded = new TextDecoder('utf-8').decode(bytes);
+        if (decoded && decoded.length > 2) {
+          preview += '\nUTF8: ' + (decoded.length > 200 ? decoded.substring(0, 200) + '...' : decoded);
+        }
+      } catch(e) {}
+    } else if (data instanceof Blob) {
+      dataType = 'Blob';
+      size = data.size;
+      preview = 'Blob(' + data.size + ' bytes, type: ' + (data.type || 'unknown') + ')';
+    } else {
+      dataType = typeof data;
+      preview = String(data).substring(0, 200);
+    }
+
+    console.log(
+      '%c[RW-DIAG-WS #' + msgNum + '] ' + direction + ' | ' + dataType + ' | ' + size + ' bytes',
+      'color: #0af; font-weight: bold',
+      '\n  URL: ' + (wsUrl || '').substring(0, 120),
+      '\n  ' + preview.replace(/\n/g, '\n  ')
+    );
+
+    // Si parece JSON legible, parsearlo y mostrar estructura
+    if (dataType === 'string' && (data.charAt(0) === '{' || data.charAt(0) === '[')) {
+      try {
+        var parsed = JSON.parse(data);
+        var structure = describeStructure(parsed, 0);
+        console.log('%c[RW-DIAG-WS #' + msgNum + '] ESTRUCTURA:', 'color: #0af', structure);
+      } catch(e) {
+        // No es JSON valido
+      }
+    }
+  }
+
+  // Describir la estructura de un objeto JSON (para diagnostico)
+  function describeStructure(obj, depth) {
+    if (!obj || depth > 3) return String(obj);
+    if (typeof obj !== 'object') return typeof obj + ': ' + String(obj).substring(0, 50);
+    if (Array.isArray(obj)) {
+      if (obj.length === 0) return '[]';
+      return '[' + obj.length + ' items] ' + describeStructure(obj[0], depth + 1);
+    }
+    var keys = Object.keys(obj);
+    var parts = [];
+    for (var i = 0; i < Math.min(keys.length, 15); i++) {
+      var v = obj[keys[i]];
+      var type = Array.isArray(v) ? 'Array[' + v.length + ']' : typeof v;
+      parts.push(keys[i] + ': ' + type);
+    }
+    return '{' + parts.join(', ') + '}';
+  }
+
+  // ══════════════════════════════════════
+  // HOOK WEBSOCKET — Con logging diagnostico completo
   // ══════════════════════════════════════
   (function() {
     var OrigWS = window.WebSocket;
@@ -200,27 +280,32 @@
     OrigWS.__rwHooked = true;
 
     var ProxyWS = function(url, protocols) {
-      console.log('[RW-INJECT] WS conectado:', (url || '').substring(0, 100));
+      var shortUrl = (url || '').substring(0, 100);
+      console.log('%c[RW-INJECT] 🔌 WS conectado: ' + shortUrl, 'color: #f0f; font-weight: bold');
+
       var ws = protocols ? new OrigWS(url, protocols) : new OrigWS(url);
 
       ws.addEventListener('message', function(e) {
         try {
           var data = e.data;
 
+          // === DIAGNOSTIC: Loguear ANTES de cualquier procesamiento ===
+          diagLogWS(data, url, 'RECV');
+
+          // === PROCESAMIENTO: intentar extraer numero ===
+          var processData = data;
+
           // Manejar ArrayBuffer (Pragmatic envia binario)
-          if (typeof data !== 'string') {
-            if (data instanceof ArrayBuffer) {
+          if (typeof processData !== 'string') {
+            if (processData instanceof ArrayBuffer) {
               try {
-                // Intentar decodificar como UTF-8
-                data = new TextDecoder('utf-8').decode(new Uint8Array(data));
+                processData = new TextDecoder('utf-8').decode(new Uint8Array(processData));
               } catch(er) {
-                // Intentar Latin1 como fallback
                 try {
-                  data = String.fromCharCode.apply(null, new Uint8Array(data));
+                  processData = String.fromCharCode.apply(null, new Uint8Array(processData));
                 } catch(er2) { return; }
               }
-            } else if (data instanceof Blob) {
-              // Blob: leer como arraybuffer luego como string
+            } else if (processData instanceof Blob) {
               var reader = new FileReader();
               reader.onload = function() {
                 try {
@@ -229,64 +314,35 @@
                   _processWSText(text, url);
                 } catch(err) {}
               };
-              reader.readAsArrayBuffer(data);
+              reader.readAsArrayBuffer(processData);
               return;
             } else {
               return;
             }
           }
 
-          _processWSText(data, url);
+          _processWSText(processData, url);
         } catch(err) {}
       });
 
-      // Monitorear cierre de conexion
+      // Loguear mensajes enviados
+      var origSend = ws.send;
+      ws.send = function(data) {
+        diagLogWS(data, url, 'SEND');
+        return origSend.apply(ws, arguments);
+      };
+
       ws.addEventListener('close', function(e) {
-        console.log('[RW-INJECT] WS cerrado:', (url || '').substring(0, 60), 'code:', e.code);
+        console.log('[RW-INJECT] WS cerrado:', shortUrl, 'code:', e.code);
       });
 
       ws.addEventListener('error', function(e) {
-        console.log('[RW-INJECT] WS error:', (url || '').substring(0, 60));
+        console.log('[RW-INJECT] WS error:', shortUrl);
       });
 
       return ws;
     };
 
-    function _processWSText(data, wsUrl) {
-      if (!data || data.length < 3) return;
-
-      // Socket.io: 42["event",{...}] o 420["event",{...}]
-      if (data.charAt(0) === '4' && (data.charAt(1) === '2' || data.charAt(1) === '3')) {
-        try {
-          var jsonStart = data.indexOf('[');
-          if (jsonStart >= 0) {
-            var p = JSON.parse(data.substring(jsonStart));
-            if (Array.isArray(p) && p.length >= 2 && typeof p[1] === 'object') {
-              var evt = String(p[0] || '');
-              extractObj(p[1], 0, 'sio.' + evt);
-              extractFromText(data, 'sio.' + evt);
-            }
-          }
-        } catch(err) {}
-      }
-
-      // JSON directo
-      if (data.charAt(0) === '{' || data.charAt(0) === '[') {
-        try {
-          var parsed = JSON.parse(data);
-          extractObj(parsed, 0, 'ws');
-        } catch(err) {}
-        extractFromText(data, 'ws-raw');
-      }
-
-      // Evolution specific: buscar patrones en texto crudo
-      // Evolution a veces envia mensajes grandes con many results
-      if (data.indexOf('recentResults') >= 0) {
-        extractFromText(data, 'ws-evo-recent');
-      }
-    }
-
-    // Copiar propiedades estaticas y prototipo
     ProxyWS.prototype = OrigWS.prototype;
     ProxyWS.CONNECTING = OrigWS.CONNECTING;
     ProxyWS.OPEN = OrigWS.OPEN;
@@ -296,7 +352,7 @@
   })();
 
   // ══════════════════════════════════════
-  // HOOK FETCH
+  // HOOK FETCH — Con diagnostico
   // ══════════════════════════════════════
   (function() {
     var origFetch = window.fetch;
@@ -314,15 +370,24 @@
       var promise = origFetch.apply(this, arguments);
       var urlLow = (url || '').toLowerCase();
 
+      // Loguear fetch a URLs relevantes
       if (urlLow.indexOf('result') >= 0 || urlLow.indexOf('roulette') >= 0 ||
           urlLow.indexOf('evolution') >= 0 || urlLow.indexOf('round') >= 0 ||
           urlLow.indexOf('wheel') >= 0 || urlLow.indexOf('game') >= 0 ||
           urlLow.indexOf('pragmatic') >= 0 || urlLow.indexOf('state') >= 0 ||
-          urlLow.indexOf('update') >= 0 || urlLow.indexOf('event') >= 0) {
+          urlLow.indexOf('update') >= 0 || urlLow.indexOf('event') >= 0 ||
+          urlLow.indexOf('history') >= 0 || urlLow.indexOf('bet') >= 0) {
+
+        diagStats.fetch++;
+        console.log('%c[RW-DIAG-FETCH #' + diagStats.fetch + '] ' + (init?.method || 'GET') + ' ' + url.substring(0, 120), 'color: #f80; font-weight: bold');
+
         promise.then(function(r) {
           try {
             r.clone().text().then(function(text) {
               if (text) {
+                // DIAGNOSTIC: mostrar preview
+                console.log('%c[RW-DIAG-FETCH #' + diagStats.fetch + '] RESPONSE (' + text.length + ' chars):', 'color: #f80', text.substring(0, 500));
+
                 try { extractObj(JSON.parse(text), 0, 'fetch'); } catch(e) {}
                 extractFromText(text, 'fetch');
               }
@@ -336,7 +401,7 @@
   })();
 
   // ══════════════════════════════════════
-  // HOOK XHR
+  // HOOK XHR — Con diagnostico
   // ══════════════════════════════════════
   (function() {
     var origOpen = XMLHttpRequest.prototype.open;
@@ -353,10 +418,14 @@
             u.indexOf('evolution') >= 0 || u.indexOf('round') >= 0 ||
             u.indexOf('wheel') >= 0 || u.indexOf('game') >= 0 ||
             u.indexOf('pragmatic') >= 0 || u.indexOf('state') >= 0 ||
-            u.indexOf('update') >= 0 || u.indexOf('event') >= 0) {
+            u.indexOf('update') >= 0 || u.indexOf('event') >= 0 ||
+            u.indexOf('history') >= 0 || u.indexOf('bet') >= 0) {
           try {
             var t = self.responseText;
             if (t) {
+              diagStats.xhr++;
+              console.log('%c[RW-DIAG-XHR #' + diagStats.xhr + '] ' + self._rwUrl.substring(0, 120), 'color: #f80', t.substring(0, 500));
+
               try { extractObj(JSON.parse(t), 0, 'xhr'); } catch(e) {}
               extractFromText(t, 'xhr');
             }
@@ -368,7 +437,7 @@
   })();
 
   // ══════════════════════════════════════
-  // HOOK postMessage (incoming) — Los iframes se comunican asi
+  // HOOK postMessage (incoming)
   // ══════════════════════════════════════
   (function() {
     var orig = window.postMessage;
@@ -376,7 +445,21 @@
     orig.__rwHooked = true;
 
     window.postMessage = function(data, origin, transfer) {
-      try { if (typeof data === 'object' && data !== null) extractObj(data, 0, 'postMsg-out'); } catch(e) {}
+      try {
+        if (typeof data === 'object' && data !== null) {
+          diagStats.postMsg++;
+          // Solo loguear postMessages que parezcan de juego
+          var d = JSON.stringify(data);
+          if (d && (d.indexOf('result') >= 0 || d.indexOf('number') >= 0 ||
+              d.indexOf('winning') >= 0 || d.indexOf('game') >= 0 ||
+              d.indexOf('roulette') >= 0 || d.indexOf('round') >= 0 ||
+              d.indexOf('pocket') >= 0 || d.indexOf('spin') >= 0 ||
+              d.indexOf('bet') >= 0)) {
+            console.log('%c[RW-DIAG-POSTMSG-OUT]', 'color: #a0f', data);
+          }
+          extractObj(data, 0, 'postMsg-out');
+        }
+      } catch(e) {}
       return orig.call(window, data, origin, transfer);
     };
 
@@ -384,6 +467,14 @@
       try {
         var data = event.data;
         if (typeof data === 'object' && data !== null && !data.__rwCapture) {
+          var d = JSON.stringify(data);
+          if (d && (d.indexOf('result') >= 0 || d.indexOf('number') >= 0 ||
+              d.indexOf('winning') >= 0 || d.indexOf('game') >= 0 ||
+              d.indexOf('roulette') >= 0 || d.indexOf('round') >= 0 ||
+              d.indexOf('pocket') >= 0 || d.indexOf('spin') >= 0 ||
+              d.indexOf('bet') >= 0)) {
+            console.log('%c[RW-DIAG-POSTMSG-IN] from ' + (event.origin || '?'), 'color: #a0f', data);
+          }
           extractObj(data, 0, 'postMsg-in');
         }
       } catch(e) {}
@@ -391,7 +482,7 @@
   })();
 
   // ══════════════════════════════════════
-  // HOOK EventSource (SSE) — Algunos proveedores usan Server-Sent Events
+  // HOOK EventSource (SSE)
   // ══════════════════════════════════════
   (function() {
     var OrigES = window.EventSource;
@@ -399,12 +490,14 @@
     OrigES.__rwHooked = true;
 
     var ProxyES = function(url, opts) {
-      console.log('[RW-INJECT] EventSource conectado:', (url || '').substring(0, 80));
+      console.log('%c[RW-INJECT] SSE conectado: ' + (url || '').substring(0, 80), 'color: #f0f');
       var es = opts ? new OrigES(url, opts) : new OrigES(url);
 
       es.addEventListener('message', function(e) {
         try {
+          diagStats.sse++;
           if (e.data && typeof e.data === 'string') {
+            console.log('%c[RW-DIAG-SSE #' + diagStats.sse + ']', 'color: #f0f', e.data.substring(0, 500));
             try { extractObj(JSON.parse(e.data), 0, 'sse'); } catch(err) {}
             extractFromText(e.data, 'sse');
           }
@@ -422,13 +515,11 @@
   })();
 
   // ══════════════════════════════════════
-  // DOM SCANNER con MutationObserver
+  // DOM SCANNER mejorado
   // ══════════════════════════════════════
   (function() {
-    // Escanear el DOM periódicamente buscando elementos con números de ruleta
     var scanInterval = setInterval(function() {
       try {
-        // Buscar elementos comunes que muestran el último número
         var selectors = [
           '[class*="result"]', '[class*="winning"]', '[class*="number"]',
           '[class*="pocket"]', '[class*="roulette"]', '[class*="ball"]',
@@ -452,5 +543,19 @@
     }, 2000);
   })();
 
-  console.log('[RW-INJECT] Todos los hooks activos en:', hostname);
+  // ══════════════════════════════════════
+  // RESUMEN DIAGNOSTICO cada 30 segundos
+  // ══════════════════════════════════════
+  setInterval(function() {
+    if (diagStats.ws > 0 || diagStats.fetch > 0 || diagStats.xhr > 0 || diagStats.sse > 0) {
+      console.log(
+        '%c[RW-DIAG] Stats: WS=' + diagStats.ws + ' Fetch=' + diagStats.fetch +
+        ' XHR=' + diagStats.xhr + ' SSE=' + diagStats.sse + ' PostMsg=' + diagStats.postMsg +
+        ' | ' + frameInfo + ' @ ' + hostname,
+        'color: #ff0; font-weight: bold'
+      );
+    }
+  }, 30000);
+
+  console.log('%c[RW-INJECT] Todos los hooks activos en: ' + hostname + ' (' + frameInfo + ')', 'color: #00ff00; font-weight: bold');
 })();
