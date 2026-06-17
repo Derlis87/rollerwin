@@ -1,9 +1,9 @@
 // ============================================================
-// orchestrator.js v2 - Orquestador principal (Extension mode)
+// orchestrator.js v3.1 - Orquestador principal (CDP Injection)
 // ============================================================
 // Consulta pipeline-status de RollerWin para saber si debe capturar.
-// La captura REAL la hace el Chrome Extension — el orquestador solo
-// maneja navegacion, login, recovery y tab switching.
+// La captura REAL la hace CDP Injection en todos los frames —
+// el orquestador solo maneja navegacion, login, recovery.
 // ============================================================
 const { randomDelay } = require('./utils/helpers');
 const log = require('./utils/logger');
@@ -44,10 +44,10 @@ class Orchestrator {
       log.warn('orchestrator', 'RollerWin API no responde — se auto-iniciara con el primer casino en 15s');
     }
 
-    // Auto-start: si en 15 segundos no hay señal del dashboard, empezar con el primer casino
+    // Auto-start: si en 15 segundos no hay senal del dashboard, empezar con el primer casino
     this._autoStartTimer = setTimeout(() => {
       if (this.running && !this.capturing) {
-        log.info('orchestrator', 'Sin señal del dashboard — auto-iniciando captura...');
+        log.info('orchestrator', 'Sin senal del dashboard — auto-iniciando captura...');
         this.capturing = true;
         const firstCasino = this.casinos[0];
         if (firstCasino) {
@@ -145,7 +145,7 @@ class Orchestrator {
 
     log.info('orchestrator', `>>> Conectando a: ${casino.name.toUpperCase()}`);
     log.info('orchestrator', `    URL: ${tableUrl}`);
-    log.info('orchestrator', `    (La captura la hace el Chrome Extension internamente)`);
+    log.info('orchestrator', `    (Captura via CDP Injection en todos los frames)`);
 
     const success = await casino.start(this.context);
     if (!success) {
@@ -216,15 +216,14 @@ class Orchestrator {
     const bridgeRequests = bridgeStats.requestCount || 0;
 
     const captureStatus = this.capturing ? 'CAPTURANDO' : 'EN ESPERA (activa Auto Capture en RollerWin)';
-    const mode = 'EXTENSION (MAIN world)';
 
     log.info('stats',
       `\n` +
       `  ╔══════════════════════════════════════════════════╗\n` +
-      `  ║   ROULETTE CAPTURE SYSTEM v3.0 - STATS          ║\n` +
+      `  ║   ROULETTE CAPTURE SYSTEM v3.1 - STATS          ║\n` +
       `  ╠══════════════════════════════════════════════════╣\n` +
       `  ║  Uptime:       ${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}\n` +
-      `  ║  Modo:         ${mode}\n` +
+      `  ║  Modo:         CDP Injection (sin extension)\n` +
       `  ║  Estado:       ${captureStatus}\n` +
       `  ║  Casino:       ${this.currentCasino?.name.toUpperCase() || 'ninguno'}\n` +
       `  ║  Capturados:   ${totalCaptured}\n` +

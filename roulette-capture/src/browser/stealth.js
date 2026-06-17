@@ -1,5 +1,5 @@
 // ============================================================
-// stealth.js v3 - Chrome REAL + Extension de captura + CDP
+// stealth.js v3.1 - Chrome REAL + CDP (sin extension)
 // ============================================================
 const path = require('path');
 const { randInt } = require('../utils/helpers');
@@ -47,11 +47,10 @@ function getProfile() {
 }
 
 // ============================================================
-// Lanzar Chrome REAL con extension de captura + CDP
+// Lanzar Chrome REAL con CDP (sin extension)
 // ============================================================
 const { execSync, spawn } = require('child_process');
 const net = require('net');
-const fs = require('fs');
 
 async function launchRealChrome(config) {
   const profile = currentProfile || generateProfile();
@@ -62,16 +61,9 @@ async function launchRealChrome(config) {
     throw new Error('CHROME_PATH no configurado en .env — necesario para modo headed');
   }
 
-  // Verificar que el directorio de extension existe
-  const extensionDir = path.resolve(__dirname, '../../extension');
-  if (!fs.existsSync(path.join(extensionDir, 'manifest.json'))) {
-    throw new Error(`Extension no encontrada en ${extensionDir} — falta manifest.json`);
-  }
-
   // Matar procesos existentes en el puerto
   try {
     if (process.platform === 'win32') {
-      // Windows: matar chrome.exe que estén usando el puerto
       try {
         const out = execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, { encoding: 'utf8' });
         const pids = [...new Set(
@@ -99,33 +91,15 @@ async function launchRealChrome(config) {
 
   const profileDir = config.CHROME_PROFILE || './chrome-profile';
 
-  // Windows: copiar extension a temp sin espacios
-  // --load-extension falla silenciosamente con rutas con espacios (OneDrive, etc)
-  let absExtensionDir = path.resolve(extensionDir);
-  if (process.platform === 'win32' && absExtensionDir.includes(' ')) {
-    const os = require('os');
-    const tmpExtDir = path.join(os.tmpdir(), 'rw-capture-ext');
-    try {
-      if (fs.existsSync(tmpExtDir)) fs.rmSync(tmpExtDir, { recursive: true, force: true });
-      fs.cpSync(absExtensionDir, tmpExtDir, { recursive: true });
-      absExtensionDir = tmpExtDir;
-      console.log(`[CHROME] Extension copiada a: ${tmpExtDir}`);
-    } catch(e) {
-      console.error(`[CHROME] No se pudo copiar extension a temp: ${e.message}`);
-    }
-  }
-
   // Resolver rutas absolutas para Chrome (Windows necesita esto)
   const absProfileDir = path.resolve(profileDir).replace(/\\/g, '/');
-  absExtensionDir = absExtensionDir.replace(/\\/g, '/');
 
   const chromeArgs = [
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${absProfileDir}`,
     `--user-agent=${profile.ua}`,
     `--lang=${profile.locale}`,
-    // NOTA: Ya no se necesita --load-extension
-    // La captura se hace via CDP injection (sin extension)
+    // CDP Injection funciona sin extension
     // Anti-deteccion
     '--disable-blink-features=AutomationControlled',
     '--disable-notifications',
@@ -138,7 +112,7 @@ async function launchRealChrome(config) {
   ];
 
   // Lanzar Chrome
-  // NOTA: NO usar shell:true — rompe rutas con espacios en Windows (ej: OneDrive)
+  // NO usar shell:true — rompe rutas con espacios en Windows (ej: OneDrive)
   // spawn sin shell pasa cada argumento correctamente incluso con espacios
   let chrome;
   const isWin = process.platform === 'win32';
@@ -154,16 +128,16 @@ async function launchRealChrome(config) {
   chrome = spawn(chromePath, chromeArgs, spawnOpts);
   chrome.unref(); // No esperar a que Chrome termine
 
-  // Verificar que el proceso arrancó
+  // Verificar que el proceso arranco
   await new Promise(r => setTimeout(r, 1000));
   if (chrome.exitCode !== null) {
     throw new Error(`Chrome fallo al arrancar (codigo: ${chrome.exitCode}). Verifica CHROME_PATH: ${chromePath}`);
   }
 
   const log = require('../utils/logger');
-  log.info('chrome', `Chrome lanzado con extension en: ${absExtensionDir}`);
+  log.info('chrome', `Chrome lanzado (CDP sin extension)`);
 
-  // Esperar a que el puerto esté escuchando
+  // Esperar a que el puerto este escuchando
   for (let i = 0; i < 40; i++) {
     await new Promise(r => setTimeout(r, 500));
     const alive = await new Promise((resolve) => {
@@ -181,7 +155,7 @@ async function launchRealChrome(config) {
     }
   }
 
-  throw new Error(`Chrome no respondió en el puerto ${port} después de 20 segundos`);
+  throw new Error(`Chrome no respondio en el puerto ${port} despues de 20 segundos`);
 }
 
 // ============================================================
@@ -204,7 +178,7 @@ async function createStealthContext(browser, config) {
     },
   });
 
-  // Inyectar anti-detección
+  // Inyectar anti-deteccion
   await context.addInitScript(() => {
     Object.defineProperty(navigator, 'webdriver', {
       get: () => undefined,

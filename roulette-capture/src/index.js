@@ -1,9 +1,9 @@
 // ============================================================
-// index.js v3 - Punto de entrada — HYBRID APPROACH
+// index.js v3.1 - Punto de entrada — CDP INJECTION (sin extension)
 // ============================================================
-// CAPTURA: Chrome Extension (injecta en MAIN world de iframes)
+// CAPTURA: CDP Injection directa en todos los frames/contexts
 // NAVEGACION: Node.js + Playwright CDP (login, navigate, recovery)
-// COMUNICACION: Extension → fetch localhost:19555 → Node.js → RollerWin API
+// COMUNICACION: CDP hooks → fetch localhost:19555 → Node.js → RollerWin API
 // ============================================================
 
 const { chromium } = require('playwright');
@@ -21,8 +21,8 @@ const log = require('./utils/logger');
 function printBanner() {
   console.log('');
   console.log('  ╔══════════════════════════════════════════════════╗');
-  console.log('  ║   ROULETTE CAPTURE SYSTEM v3.0                  ║');
-  console.log('  ║   Hybrid: Chrome Extension + Node.js CDP        ║');
+  console.log('  ║   ROULETTE CAPTURE SYSTEM v3.1                  ║');
+  console.log('  ║   CDP Injection — Sin extension necesaria       ║');
   console.log('  ║   Captura REAL en iframes cross-origin          ║');
   console.log('  ╚══════════════════════════════════════════════════╝');
   console.log('');
@@ -34,12 +34,12 @@ async function main() {
   const config = loadConfig();
   log.setLevel(config.LOG_LEVEL);
 
-  log.info('system', 'Configuración cargada');
+  log.info('system', 'Configuracion cargada');
   log.info('system', `Casinos activos: ${config.activeCasinos.join(', ')}`);
   log.info('system', `RollerWin API: ${config.ROLLERWIN_API_URL}`);
 
   // ========================================
-  // INICIAR EXTENSION BRIDGE (HTTP server local)
+  // INICIAR BRIDGE (HTTP server local)
   // ========================================
   const bridgePort = 19555;
   const bridge = new ExtensionBridge(bridgePort);
@@ -53,12 +53,9 @@ async function main() {
   if (config.pinnacleEnabled) casinoInstances.push(new PinnacleCasino(config, apiClient));
   if (config.stakeEnabled) casinoInstances.push(new StakeCasino(config, apiClient));
 
-  // Iniciar bridge — el extension envia numeros aquí
+  // Iniciar bridge — los hooks CDP envian numeros aqui via fetch
   try {
-    // Callback: cuando el bridge recibe un numero del extension,
-    // enviarlo al casino activo para procesamiento
     bridge.start(async (number, source) => {
-      // Buscar el casino que esté capturando actualmente
       const orchestrator_ref = global.__orchestrator;
       if (orchestrator_ref && orchestrator_ref.currentCasino) {
         await orchestrator_ref.currentCasino.onNumberFromExtension(number, source);
@@ -67,16 +64,16 @@ async function main() {
       }
     });
 
-    log.info('system', `Extension bridge activo en puerto ${bridgePort}`);
+    log.info('system', `Bridge activo en puerto ${bridgePort} (recibe numeros de CDP hooks)`);
     global.__bridge = bridge;
   } catch (err) {
     log.error('system', `No se pudo iniciar el bridge: ${err.message}`);
-    log.error('system', 'Asegurate de que el puerto 19555 esté libre');
+    log.error('system', 'Asegurate de que el puerto 19555 este libre');
     process.exit(1);
   }
 
   // ========================================
-  // LANZAR NAVEGADOR CON EXTENSION
+  // LANZAR CHROME via CDP (sin extension)
   // ========================================
   let browser;
   let context;
@@ -123,13 +120,13 @@ async function main() {
   const orchestrator = new Orchestrator(casinoInstances, config, apiClient);
   global.__orchestrator = orchestrator;
 
-  // Manejo de señales
+  // Manejo de seniales
   let shuttingDown = false;
   const shutdown = async (signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log('');
-    log.warn('system', `Señal ${signal} — cerrando...`);
+    log.warn('system', `Senal ${signal} — cerrando...`);
     await orchestrator.stop();
     stopHumanBehavior();
     bridge.stop();
@@ -141,7 +138,7 @@ async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('uncaughtException', async (err) => {
-    log.error('system', `Excepción: ${err.message}`);
+    log.error('system', `Excepcion: ${err.message}`);
   });
   process.on('unhandledRejection', (err) => {
     log.error('system', `Promise rechazada: ${err}`);
@@ -153,7 +150,7 @@ async function main() {
     log.info('system', '');
     log.info('system', '  ═══════════════════════════════════════════');
     log.info('system', '  Sistema activo — Ctrl+C para detener');
-    log.info('system', '  Captura via Chrome Extension (MAIN world)');
+    log.info('system', '  Captura via CDP Injection (todos los frames)');
     log.info('system', '  ═══════════════════════════════════════════');
     log.info('system', '');
 
