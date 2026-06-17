@@ -1,15 +1,19 @@
 // ============================================================
-// cdp-inject.js v3 — Captura via CDP Target.setAutoAttach
+// cdp-inject.js v4 — Captura via Playwright frames + CDP
 // ============================================================
-// v1: Runtime.executionContextCreated — solo detecta contextos NUEVOS
-// v2: Target.setAutoAttach — mejor pero no inyectaba en frames ya cargados
-// v3: Target.setAutoAttach + Runtime.evaluate INMEDIATO en cada target
-//     + reInject funcional con Target.getTargets
-//     + Network fallback sin listener leaks
+// Enfoque: NO depender de Target.setAutoAttach (conflicta con Playwright).
+// En su lugar:
+//   1. Usar page.frames() para descubrir TODOS los frames
+//   2. Crear CDP session PER FRAME via newCDPSession(frame)
+//   3. Inyectar hooks via Runtime.evaluate en CADA frame
+//   4. page.on('frameattached') para frames nuevos
+//   5. Network.webSocketFrameReceived como fallback (nivel de red)
 //
-// Comunicacion:
-//   Metodo A: Hooks JS inyectados → fetch localhost:19555
-//   Metodo B: CDP Network.webSocketFrameReceived → Node.js directo
+// Ventaja sobre v1-v3:
+//   - Playwright maneja el tracking de frames (incluidos cross-origin)
+//   - newCDPSession(frame) funciona para iframes cross-origin
+//   - No hay conflicto con Target.setAutoAttach
+//   - Mas simple y confiable
 // ============================================================
 const log = require('../utils/logger');
 
@@ -31,14 +35,12 @@ const WS_NUMBER_PATTERNS = [
 function extractNumberFromWSPayload(payload) {
   if (!payload || typeof payload !== 'string' || payload.length < 5) return null;
 
-  // Evolution: recentResults:[["N"],...]
   const evoMatch = payload.match(/"recentResults"\s*:\s*\[\s*\[\s*"(\d{1,2})"\s*\]/);
   if (evoMatch) {
     const n = parseInt(evoMatch[1], 10);
     if (n >= 0 && n <= 36) return n;
   }
 
-  // Regex general — tomar el ULTIMO match (el mas reciente)
   let lastMatch = null;
   for (const pat of WS_NUMBER_PATTERNS) {
     pat.lastIndex = 0;
@@ -72,7 +74,7 @@ const CAPTURE_CODE = `
     if (now - _lastSent < 9000) return;
     _lastSent = now;
 
-    console.log('%c[RW-CDP] RESULTADO: ' + n + ' (' + getColor(n) + ') — ' + source, 'color: #0f0; font-size: 14px; font-weight: bold');
+    console.log('%c[RW-CDP] RESULTADO: ' + n + ' (' + getColor(n) + ') - ' + source, 'color: #0f0; font-size: 14px; font-weight: bold');
 
     try {
       fetch(BRIDGE_URL, {
@@ -309,278 +311,231 @@ const CAPTURE_CODE = `
 `;
 
 /**
- * CDPInjector v3 — Inyecta en TODOS los frames via CDP
+ * CDPInjector v4 — Playwright frames + per-frame CDP sessions
  * 
- * Mejoras sobre v2:
- * - Inyeccion INMEDIATA via Runtime.evaluate (no solo addScriptToEvaluateOnNewDocument)
- * - reInject() funcional: enumera targets y re-inyecta en todos
- * - Network listener sin leaks (un solo listener global)
- * - Scan periodico de targets para encontrar iframes perdidos
+ * Enfoque: usa page.frames() de Playwright para descubrir frames,
+ * luego crea CDP session para cada frame e inyecta hooks.
+ * Network fallback a nivel de pagina principal.
  */
 class CDPInjector {
   constructor(onNumberFromNetwork) {
-    this.mainSession = null;
-    this.attachedTargets = new Map(); // targetId -> { sessionId, url, type }
+    this.onNumberFromNetwork = onNumberFromNetwork;
+    this.page = null;
+    this.mainCdpSession = null;
+    this.injectedFrames = new Set(); // frame url -> timestamp
     this.injectCount = 0;
     this.networkNumberCount = 0;
     this.wsFrameCount = 0;
+    this.wsUrlLog = new Set(); // urls de WS vistas
     this.stopped = false;
-    this.onNumberFromNetwork = onNumberFromNetwork;
-    this._wsListenerBound = false; // evitar agregar listener multiples veces
-    this._scanInterval = null;
+    this._frameAttachedHandler = null;
+    this._frameNavigatedHandler = null;
+    this._reinjectInterval = null;
   }
 
   /**
-   * Inyecta en todos los frames de una pagina via Target.setAutoAttach
+   * Inyecta en todos los frames de la pagina
    */
   async injectInPage(page) {
     if (!page || page.isClosed()) return;
+    this.page = page;
     this.stopped = false;
 
+    // ===== 1. Network fallback a nivel de pagina principal =====
+    // Captura TODOS los WS frames (main + iframes) a nivel de red
     try {
-      // Crear sesion CDP para la pagina
-      this.mainSession = await page.context().newCDPSession(page);
+      this.mainCdpSession = await page.context().newCDPSession(page);
+      await this.mainCdpSession.send('Network.enable');
 
-      // ===== METODO 1: Target.setAutoAttach =====
-      await this.mainSession.send('Target.setAutoAttach', {
-        autoAttach: true,
-        waitForDebuggerOnStart: true,
-        flatten: false,
-      });
-
-      this.mainSession.on('Target.attachedToTarget', async (event) => {
-        if (this.stopped) return;
-        await this._onTargetAttached(event);
-      });
-
-      // Tambien escuchar cuando un target se detache
-      this.mainSession.on('Target.detachedFromTarget', (event) => {
-        const targetId = event.targetId;
-        if (targetId && this.attachedTargets.has(targetId)) {
-          this.attachedTargets.delete(targetId);
-          log.debug('cdp-inject', `Target detachado: ${targetId}`);
-        }
-      });
-
-      log.info('cdp-inject', 'Target.setAutoAttach activado — esperando iframes...');
-
-      // ===== METODO 2: Inyectar en la pagina principal =====
-      await this.mainSession.send('Runtime.enable');
-      await this.mainSession.send('Runtime.evaluate', {
-        expression: CAPTURE_CODE,
-        allowUnsafeEvalBlockedByCSP: true,
-      });
-      this.injectCount++;
-      log.info('cdp-inject', 'Codigo inyectado en pagina principal');
-
-      // ===== METODO 3: Network fallback (SINGLE listener) =====
-      await this._setupNetworkFallback(page);
-
-      // ===== METODO 4: Scan periodico de targets =====
-      // Cada 10 segundos, listar todos los targets y re-inyectar en los que no se han procesado
-      this._scanInterval = setInterval(() => {
-        if (this.stopped || !this.mainSession) return;
-        this._scanAndInjectMissing();
-      }, 10000);
-
-    } catch (err) {
-      log.error('cdp-inject', `Error en injectInPage: ${err.message}`);
-    }
-  }
-
-  /**
-   * Cuando un target (iframe) se attache, inyectar codigo en el
-   */
-  async _onTargetAttached(event) {
-    const { targetInfo, sessionId } = event;
-    const targetId = targetInfo.targetId;
-    const url = (targetInfo.url || '').substring(0, 120);
-    const type = targetInfo.type || '?';
-
-    // Solo nos interesan iframes y pages
-    if (type !== 'iframe' && type !== 'page') {
-      try { await this.mainSession.send('Runtime.runIfWaitingForDebugger', {}, sessionId); } catch(e) {}
-      return;
-    }
-
-    // No re-inyectar si ya fue procesado
-    if (this.attachedTargets.has(targetId)) {
-      try { await this.mainSession.send('Runtime.runIfWaitingForDebugger', {}, sessionId); } catch(e) {}
-      return;
-    }
-
-    this.attachedTargets.set(targetId, { sessionId, url, type });
-
-    try {
-      // 1. Registrar script para futuras navegaciones del frame
-      try {
-        await this.mainSession.send('Page.addScriptToEvaluateOnNewDocument', {
-          source: CAPTURE_CODE,
-          worldName: '',
-          runImmediately: true,
-        }, sessionId);
-      } catch(e) {
-        // Page domain puede no estar disponible en algunos targets
-        log.debug('cdp-inject', `addScriptToEvaluateOnNewDocument no disponible para ${type}: ${e.message.substring(0, 60)}`);
-      }
-
-      // 2. CRITICO: Inyectar INMEDIATAMENTE via Runtime.evaluate
-      //    addScriptToEvaluateOnNewDocument solo funciona para documentos FUTUROS.
-      //    El iframe ya esta cargado, necesitamos injectar AHORA.
-      try {
-        await this.mainSession.send('Runtime.enable', {}, sessionId);
-        await this.mainSession.send('Runtime.evaluate', {
-          expression: CAPTURE_CODE,
-          allowUnsafeEvalBlockedByCSP: true,
-        }, sessionId);
-      } catch(evalErr) {
-        log.debug('cdp-inject', `Runtime.evaluate fallo para ${type}: ${evalErr.message.substring(0, 60)}`);
-      }
-
-      // 3. Habilitar Network en este target para capturar WS frames
-      try {
-        await this.mainSession.send('Network.enable', {}, sessionId);
-      } catch(e) {
-        log.debug('cdp-inject', `Network.enable fallo para ${type}: ${e.message.substring(0, 60)}`);
-      }
-
-      this.injectCount++;
-      log.info('cdp-inject', `[${type}] Injectado #${this.injectCount}: ${url}`);
-
-    } catch (err) {
-      log.debug('cdp-inject', `Error inyectando en target ${type}: ${err.message.substring(0, 80)}`);
-    }
-
-    // CRITICO: Resumir el target para que el juego cargue
-    try {
-      await this.mainSession.send('Runtime.runIfWaitingForDebugger', {}, sessionId);
-    } catch (e) {}
-  }
-
-  /**
-   * Scan periodico: encontrar targets que no se detectaron via autoAttach
-   */
-  async _scanAndInjectMissing() {
-    try {
-      const result = await this.mainSession.send('Target.getTargets');
-      const targets = result.targetInfos || [];
-
-      for (const target of targets) {
-        if (this.stopped) return;
-
-        const targetId = target.targetId;
-        const type = target.type || '?';
-        const url = (target.url || '').substring(0, 120);
-
-        // Solo iframes que no hemos procesado
-        if (type !== 'iframe') continue;
-        if (this.attachedTargets.has(targetId)) continue;
-        if (!url || url === 'about:blank') continue;
-
-        // Intentar attache a este target
-        try {
-          const attachResult = await this.mainSession.send('Target.attachToTarget', {
-            targetId: targetId,
-            flatten: false,
-          });
-
-          const sessionId = attachResult.sessionId;
-
-          this.attachedTargets.set(targetId, { sessionId, url, type });
-
-          // Inyectar inmediatamente
-          try {
-            await this.mainSession.send('Runtime.enable', {}, sessionId);
-            await this.mainSession.send('Runtime.evaluate', {
-              expression: CAPTURE_CODE,
-              allowUnsafeEvalBlockedByCSP: true,
-            }, sessionId);
-          } catch(e) {}
-
-          try {
-            await this.mainSession.send('Network.enable', {}, sessionId);
-          } catch(e) {}
-
-          this.injectCount++;
-          log.info('cdp-inject', `[scan] Injectado #${this.injectCount} en ${type}: ${url}`);
-
-        } catch(attachErr) {
-          log.debug('cdp-inject', `No se pudo attache a target ${url}: ${attachErr.message.substring(0, 60)}`);
-        }
-      }
-    } catch(e) {
-      log.debug('cdp-inject', `Error en scan: ${e.message.substring(0, 60)}`);
-    }
-  }
-
-  /**
-   * Network fallback a nivel de pagina principal
-   * IMPORTANTE: Solo UN listener para evitar memory leaks
-   */
-  async _setupNetworkFallback(page) {
-    if (this._wsListenerBound) return;
-    this._wsListenerBound = true;
-
-    try {
-      // Un solo listener para todos los WS frames (main page + subtargets)
-      this.mainSession.on('Network.webSocketFrameReceived', (params) => {
+      this.mainCdpSession.on('Network.webSocketFrameReceived', (params) => {
         if (this.stopped) return;
         const payload = params.response && params.response.payloadData;
+        const requestId = params.requestId;
         if (!payload || typeof payload !== 'string') return;
 
         this.wsFrameCount++;
 
-        // Loggear cada 50 frames para no spamear
-        if (this.wsFrameCount <= 5 || this.wsFrameCount % 50 === 0) {
-          log.debug('cdp-inject', `[Network] WS frame #${this.wsFrameCount} (${payload.length} chars)`);
+        // Loggear preview de cada frame (primeros 3 y luego cada 100)
+        if (this.wsFrameCount <= 10 || this.wsFrameCount % 100 === 0) {
+          log.info('cdp-inject',
+            `[Network] WS frame #${this.wsFrameCount} (${payload.length} chars)` +
+            (payload.length > 0 ? ` preview: ${payload.substring(0, 120).replace(/\n/g, ' ')}` : '')
+          );
         }
 
         const n = extractNumberFromWSPayload(payload);
         if (n !== null) {
           this.networkNumberCount++;
-          log.info('cdp-inject', `[Network-Fallback] Numero ${n} detectado en WS frame`);
+          log.info('cdp-inject', `[Network] *** NUMERO ${n} detectado en WS frame ***`);
           if (this.onNumberFromNetwork) {
             this.onNumberFromNetwork(n, 'cdp-network');
           }
         }
       });
 
-      await this.mainSession.send('Network.enable');
-      log.info('cdp-inject', 'Network fallback activado (WebSocket frame interception)');
+      this.mainCdpSession.on('Network.webSocketCreated', (params) => {
+        if (this.stopped) return;
+        const url = params.url || '';
+        if (!this.wsUrlLog.has(url)) {
+          this.wsUrlLog.add(url);
+          log.info('cdp-inject', `[Network] WS conectado: ${url.substring(0, 100)}`);
+        }
+      });
+
+      log.info('cdp-inject', 'Network fallback activado (WebSocket interception)');
     } catch (err) {
-      log.debug('cdp-inject', `Network fallback error: ${err.message}`);
+      log.error('cdp-inject', `Error Network fallback: ${err.message}`);
+    }
+
+    // ===== 2. Escuchar frames nuevos =====
+    if (this._frameAttachedHandler) {
+      page.off('frameattached', this._frameAttachedHandler);
+    }
+    this._frameAttachedHandler = (frame) => {
+      if (this.stopped) return;
+      log.info('cdp-inject', `[frameattached] Nuevo frame detectado`);
+      // Esperar un poco a que el frame cargue
+      setTimeout(() => {
+        if (!this.stopped) this._injectIntoFrame(frame);
+      }, 3000);
+    };
+    page.on('frameattached', this._frameAttachedHandler);
+
+    // Tambien escuchar navegaciones dentro de frames (el iframe recarga)
+    if (this._frameNavigatedHandler) {
+      page.off('framenavigated', this._frameNavigatedHandler);
+    }
+    this._frameNavigatedHandler = (frame) => {
+      if (this.stopped) return;
+      if (frame === page.mainFrame()) return; // ignorar navegacion del main
+      log.info('cdp-inject', `[framenavigated] Frame navigo: ${frame.url().substring(0, 80)}`);
+      setTimeout(() => {
+        if (!this.stopped) this._injectIntoFrame(frame);
+      }, 3000);
+    };
+    page.on('framenavigated', this._frameNavigatedHandler);
+
+    // ===== 3. Inyectar en la pagina principal =====
+    await this._injectIntoFrame(page.mainFrame());
+
+    // ===== 4. Inyectar en todos los frames existentes =====
+    await this._injectIntoAllFrames();
+
+    // ===== 5. Re-scan cada 15s para encontrar frames que aparezcan tarde =====
+    if (this._reinjectInterval) clearInterval(this._reinjectInterval);
+    this._reinjectInterval = setInterval(() => {
+      if (!this.stopped && this.page && !this.page.isClosed()) {
+        this._injectIntoAllFrames();
+      }
+    }, 15000);
+  }
+
+  /**
+   * Inyectar en todos los frames actuales de la pagina
+   */
+  async _injectIntoAllFrames() {
+    if (!this.page || this.page.isClosed() || this.stopped) return;
+
+    const frames = this.page.frames();
+    const now = Date.now();
+
+    log.info('cdp-inject', `Scanning ${frames.length} frames...`);
+
+    // Listar URLs de todos los frames para debug
+    for (const f of frames) {
+      const url = f.url() || 'about:blank';
+      if (url !== 'about:blank' && url.length > 5) {
+        const isMain = f === this.page.mainFrame();
+        log.info('cdp-inject', `  ${isMain ? '[MAIN]' : '[FRAME]'} ${url.substring(0, 100)}`);
+      }
+    }
+
+    let injected = 0;
+    for (const frame of frames) {
+      try {
+        const url = frame.url();
+        if (url === 'about:blank' || url.length < 10) continue;
+
+        // No re-inyectar si fue inyectado hace menos de 30 segundos
+        if (this.injectedFrames.has(url) && now - (this.injectedFrames.get(url) || 0) < 30000) {
+          continue;
+        }
+
+        const success = await this._injectIntoFrame(frame);
+        if (success) injected++;
+      } catch (e) {
+        log.debug('cdp-inject', `Error en frame: ${e.message.substring(0, 60)}`);
+      }
+    }
+
+    if (injected > 0) {
+      log.info('cdp-inject', `Inyectado en ${injected} frame(s) nuevo(s) — total: ${this.injectCount}`);
     }
   }
 
   /**
-   * Re-inyectar en TODOS los targets existentes
-   * Llamado cada 20s desde base-casino.js
+   * Inyectar hooks en un frame especifico via CDP session
    */
-  async reInject(page) {
-    if (!page || page.isClosed() || !this.mainSession || this.stopped) return;
-    log.info('cdp-inject', `Re-inyectando en ${this.attachedTargets.size} targets...`);
+  async _injectIntoFrame(frame) {
+    if (this.stopped) return false;
 
-    // Resetear flag para permitir re-inyeccion
-    this.attachedTargets.clear();
-    this._wsListenerBound = false;
+    const url = frame.url();
+    if (!url || url === 'about:blank' || url.length < 10) return false;
 
-    // Re-inyectar en la pagina principal
     try {
-      await this.mainSession.send('Runtime.evaluate', {
-        expression: `(function(){ window.__rwCdpInjected = false; })()`,
-      });
-      await this.mainSession.send('Runtime.evaluate', {
+      // Crear CDP session para ESTE frame especifico
+      // Playwright usa el target ID interno del frame para crear la session
+      const session = await frame.page().context().newCDPSession(frame);
+
+      // Habilitar Runtime
+      await session.send('Runtime.enable');
+
+      // Inyectar en MAIN world (donde estan los WebSockets reales)
+      const result = await session.send('Runtime.evaluate', {
         expression: CAPTURE_CODE,
         allowUnsafeEvalBlockedByCSP: true,
       });
-      this.injectCount++;
-      log.info('cdp-inject', 'Re-inyectado en pagina principal');
-    } catch(e) {
-      log.debug('cdp-inject', `Re-inject main page fallo: ${e.message.substring(0, 60)}`);
-    }
 
-    // Enumerar y re-inyectar en todos los iframes
-    await this._scanAndInjectMissing();
+      // Marcar como inyectado
+      this.injectedFrames.set(url, Date.now());
+      this.injectCount++;
+
+      const isMain = frame === this.page.mainFrame();
+      const urlShort = url.substring(0, 80);
+      log.info('cdp-inject',
+        `#${this.injectCount} ${isMain ? '[MAIN]' : '[FRAME]'} OK: ${urlShort}`
+      );
+
+      // Detach la session (no la necesitamos mas, el codigo ya se ejecuto)
+      try { await session.detach(); } catch (e) {}
+
+      return true;
+    } catch (err) {
+      const msg = err.message || '';
+      const urlShort = url.substring(0, 60);
+
+      // Si es un error de "Target closed" o similar, no loggear como error
+      if (msg.includes('Target closed') || msg.includes('detached') || msg.includes('not attached')) {
+        log.debug('cdp-inject', `Frame no disponible: ${urlShort}`);
+      } else {
+        log.debug('cdp-inject', `Fallo inject: ${urlShort} — ${msg.substring(0, 80)}`);
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Re-inyectar — limpiar cache y escanear todo de nuevo
+   */
+  async reInject(page) {
+    if (!page || page.isClosed() || this.stopped) return;
+    log.info('cdp-inject', 'Re-inyectando (limpiando cache)...');
+
+    // Limpiar cache de inyecciones para forzar re-inyeccion
+    this.injectedFrames.clear();
+
+    // Re-inyectar en todo
+    await this._injectIntoAllFrames();
   }
 
   /**
@@ -589,22 +544,32 @@ class CDPInjector {
   async cleanup() {
     this.stopped = true;
 
-    if (this._scanInterval) {
-      clearInterval(this._scanInterval);
-      this._scanInterval = null;
+    if (this._reinjectInterval) {
+      clearInterval(this._reinjectInterval);
+      this._reinjectInterval = null;
     }
 
-    if (this.mainSession) {
-      try {
-        await this.mainSession.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: false });
-      } catch(e) {}
-      try { await this.mainSession.detach(); } catch(e) {}
+    if (this.page) {
+      if (this._frameAttachedHandler) {
+        this.page.off('frameattached', this._frameAttachedHandler);
+      }
+      if (this._frameNavigatedHandler) {
+        this.page.off('framenavigated', this._frameNavigatedHandler);
+      }
     }
 
-    this.mainSession = null;
-    this.attachedTargets.clear();
-    this._wsListenerBound = false;
-    log.info('cdp-inject', `Limpieza completada. Inyecciones: ${this.injectCount}, Network numeros: ${this.networkNumberCount}, WS frames: ${this.wsFrameCount}`);
+    if (this.mainCdpSession) {
+      try { await this.mainCdpSession.detach(); } catch (e) {}
+    }
+
+    this.page = null;
+    this.mainCdpSession = null;
+    this.injectedFrames.clear();
+    this.wsUrlLog.clear();
+
+    log.info('cdp-inject',
+      `Cleanup: injects=${this.injectCount}, network_nums=${this.networkNumberCount}, ws_frames=${this.wsFrameCount}`
+    );
   }
 
   getStats() {
@@ -612,7 +577,8 @@ class CDPInjector {
       injectCount: this.injectCount,
       networkNumberCount: this.networkNumberCount,
       wsFrameCount: this.wsFrameCount,
-      attachedTargets: this.attachedTargets.size,
+      injectedFrames: this.injectedFrames.size,
+      wsConnections: this.wsUrlLog.size,
     };
   }
 }

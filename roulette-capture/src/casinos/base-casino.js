@@ -82,20 +82,14 @@ class BaseCasino {
       // 3. Esperar a que la mesa cargue
       await this._waitForTable();
 
-      // 4. Inyectar codigo de captura via CDP en TODOS los frames
-      //    Target.setAutoAttach detecta iframes automaticamente
-      //    Network.webSocketFrameReceived como fallback de red
-      log.info(this.name, 'Inyectando captura via CDP (Target.setAutoAttach)...');
-      await this.cdpInjector.injectInPage(this.page);
+      // 4. Esperar que los iframes internos carguen bien
+      //    El iframe de Evolution tarda en cargar su JS y conectar WS
+      log.info(this.name, 'Esperando 10s a que el juego interne cargue...');
+      await randomDelay(8000, 12000);
 
-      // 5. Re-inyectar cada 20s (los iframes se recargan)
-      this._reinjectInterval = setInterval(async () => {
-        if (this.running && this.page && !this.page.isClosed()) {
-          try {
-            await this.cdpInjector.reInject(this.page);
-          } catch(e) {}
-        }
-      }, 20000);
+      // 5. Inyectar codigo de captura via CDP en TODOS los frames
+      log.info(this.name, 'Inyectando captura via CDP en todos los frames...');
+      await this.cdpInjector.injectInPage(this.page);
 
       // 6. Activar grace period
       this._activateGrace(15000);
@@ -173,16 +167,11 @@ class BaseCasino {
       await this.navigate();
       await this._waitForTable();
 
-      // Re-inyectar CDP
-      await this.cdpInjector.injectInPage(this.page);
+      // Esperar y re-inyectar CDP
+      log.info(this.name, 'Esperando 8s a que el juego interne cargue...');
+      await randomDelay(6000, 10000);
 
-      this._reinjectInterval = setInterval(async () => {
-        if (this.running && this.page && !this.page.isClosed()) {
-          try {
-            await this.cdpInjector.reInject(this.page);
-          } catch(e) {}
-        }
-      }, 20000);
+      await this.cdpInjector.injectInPage(this.page);
 
       this._activateGrace(15000);
 
@@ -201,7 +190,6 @@ class BaseCasino {
     try {
       await this.page.waitForSelector('iframe', { timeout: 60000 });
       log.info(this.name, 'Iframe de juego detectado');
-      await randomDelay(3000, 6000);
     } catch (e) {
       log.warn(this.name, 'Timeout esperando iframe, continuando...');
     }
