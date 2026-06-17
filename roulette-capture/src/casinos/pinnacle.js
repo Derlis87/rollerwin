@@ -35,6 +35,12 @@ class PinnacleCasino extends BaseCasino {
     log.info(this.name, 'Intentando login automatico...');
 
     try {
+      // Safety: verificar que la pagina sigue viva
+      if (!this.page || this.page.isClosed() || this._wasStopped()) {
+        log.warn(this.name, 'Pagina cerrada antes de login');
+        return false;
+      }
+
       // Navegar a la pagina de login de Pinnacle
       log.info(this.name, 'Navegando a pagina de login...');
       await this.page.goto('https://www.pinnacle.com/es/login', {
@@ -300,6 +306,12 @@ class PinnacleCasino extends BaseCasino {
     const url = this.getRouletteURL();
     log.info(this.name, 'Navegando a Pinnacle...');
 
+    // Safety check
+    if (!this.page || this.page.isClosed() || this._wasStopped()) {
+      log.warn(this.name, 'Pagina no disponible para navegar');
+      return;
+    }
+
     // Ir a la home principal primero para establecer cookies
     await this.page.goto('https://www.pinnacle.com/es/', {
       waitUntil: 'domcontentloaded',
@@ -340,10 +352,14 @@ class PinnacleCasino extends BaseCasino {
 
     // === LOGIN ===
     // 1. Verificar si ya hay sesion activa (cookies guardadas)
-    let loggedIn = await this._isLoggedIn();
+    //    (solo si seguimos running)
+    let loggedIn = false;
+    if (!this._wasStopped()) {
+      loggedIn = await this._isLoggedIn();
+    }
 
     // 2. Si no, intentar login automatico con credenciales del .env
-    if (!loggedIn) {
+    if (!loggedIn && !this._wasStopped()) {
       log.info(this.name, 'No hay sesion activa, intentando login...');
       loggedIn = await this._login();
     }

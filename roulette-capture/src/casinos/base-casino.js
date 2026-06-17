@@ -1,18 +1,6 @@
 // ============================================================
-// base-casino.js v3 - Clase base para todos los casinos
-// CAPTURA via CDP Injection (SIN extension)
-// ============================================================
-// CDP puede inyectar codigo en TODOS los execution contexts,
-// incluidos iframes cross-origin (Evolution, Pragmatic, etc).
-// Ya no necesita --load-extension.
-//
-// Flujo:
-//   1. Node.js conecta a Chrome via CDP
-//   2. Navega al casino, hace login
-//   3. CDPInjector inyecta hooks en todos los frames
-//   4. Los hooks detectan numeros via WS/Fetch/XHR/DOM
-//   5. Los hooks envian numeros via fetch a localhost:19555
-//   6. ExtensionBridge recibe y procesa
+// base-casino.js v3.1.1 - Clase base para todos los casinos
+// CDP Injection (SIN extension) — Playwright frames + CDP
 // ============================================================
 const { NumberProcessor } = require('../capture/number-processor');
 const { CDPInjector } = require('../capture/cdp-inject');
@@ -36,7 +24,6 @@ class BaseCasino {
     this.dynamicUrl = null;
     this.graceActive = false;
     this.graceTimeout = null;
-    this._reinjectInterval = null;
   }
 
   getRouletteURL() {
@@ -61,6 +48,13 @@ class BaseCasino {
   }
 
   /**
+   * Check si fuimos detenidos durante una operacion async
+   */
+  _wasStopped() {
+    return !this.running;
+  }
+
+  /**
    * Inicia la captura en este casino
    */
   async start(context) {
@@ -70,22 +64,26 @@ class BaseCasino {
 
     log.info(this.name, `Iniciando conexion...`);
     log.info(this.name, `URL: ${this.getRouletteURL()}`);
-    log.info(this.name, `Captura via CDP Injection (sin extension)`);
+    log.info(this.name, `CDP Injection v4 (Playwright frames)`);
 
     try {
       // 1. Crear nueva pagina
       this.page = await this.context.newPage();
+      if (this._wasStopped()) { log.warn(this.name, 'Cancelado antes de navegar'); return false; }
 
       // 2. Navegar al casino (implementacion especifica)
       await this.navigate();
+      if (this._wasStopped()) { log.warn(this.name, 'Cancelado durante navegacion'); return false; }
 
-      // 3. Esperar a que la mesa cargue
+      // 3. Esperar a que la mesa cargue (iframe detectado)
       await this._waitForTable();
+      if (this._wasStopped()) { log.warn(this.name, 'Cancelado esperando mesa'); return false; }
 
       // 4. Esperar que los iframes internos carguen bien
       //    El iframe de Evolution tarda en cargar su JS y conectar WS
       log.info(this.name, 'Esperando 10s a que el juego interne cargue...');
       await randomDelay(8000, 12000);
+      if (this._wasStopped()) { log.warn(this.name, 'Cancelado esperando carga del juego'); return false; }
 
       // 5. Inyectar codigo de captura via CDP en TODOS los frames
       log.info(this.name, 'Inyectando captura via CDP en todos los frames...');
@@ -102,6 +100,10 @@ class BaseCasino {
 
       return true;
     } catch (err) {
+      if (this._wasStopped()) {
+        log.warn(this.name, `Operacion cancelada: ${err.message}`);
+        return false;
+      }
       log.error(this.name, `Error iniciando captura: ${err.message}`);
       this.status = 'error';
       return false;
@@ -115,11 +117,6 @@ class BaseCasino {
     if (this.graceTimeout) {
       clearTimeout(this.graceTimeout);
       this.graceTimeout = null;
-    }
-
-    if (this._reinjectInterval) {
-      clearInterval(this._reinjectInterval);
-      this._reinjectInterval = null;
     }
 
     await this.cdpInjector.cleanup();
@@ -136,6 +133,8 @@ class BaseCasino {
   }
 
   async recover() {
+    if (!this.running) return false;
+
     this.status = 'recovering';
     this.recoveryCount++;
     this.consecutiveRecoveryFails++;
@@ -143,11 +142,6 @@ class BaseCasino {
     log.warn(this.name, `Recovery #${this.recoveryCount} — intentando restaurar...`);
 
     try {
-      if (this._reinjectInterval) {
-        clearInterval(this._reinjectInterval);
-        this._reinjectInterval = null;
-      }
-
       await this.cdpInjector.cleanup();
 
       if (this.page && !this.page.isClosed()) {
@@ -226,11 +220,12 @@ class BaseCasino {
   getStats() {
     return {
       ...this.processor.getStats(),
+      ...this.cdpInjector.getStats(),
       status: this.status,
       recoveryCount: this.recoveryCount,
       url: this.dynamicUrl || this.getRouletteURL(),
       dynamicUrl: this.dynamicUrl,
-      captureMode: 'cdp-injection',
+      captureMode: 'cdp-injection-v4',
     };
   }
 }

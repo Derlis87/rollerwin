@@ -1,9 +1,5 @@
 // ============================================================
-// orchestrator.js v3.1 - Orquestador principal (CDP Injection)
-// ============================================================
-// Consulta pipeline-status de RollerWin para saber si debe capturar.
-// La captura REAL la hace CDP Injection en todos los frames —
-// el orquestador solo maneja navegacion, login, recovery.
+// orchestrator.js v3.1.1 - Orquestador principal (CDP Injection)
 // ============================================================
 const { randomDelay } = require('./utils/helpers');
 const log = require('./utils/logger');
@@ -15,6 +11,7 @@ class Orchestrator {
     this.api = apiClient;
     this.running = false;
     this.capturing = false;
+    this._starting = false; // LOCK: evita que stop() interrumpa start()
     this.context = null;
     this.currentCasino = null;
     this.statusCheckInterval = null;
@@ -25,9 +22,6 @@ class Orchestrator {
     this.lastPipelineCasino = '';
   }
 
-  /**
-   * Inicia el orquestador
-   */
   async start(context) {
     this.context = context;
     this.running = true;
@@ -46,7 +40,7 @@ class Orchestrator {
 
     // Auto-start: si en 15 segundos no hay senal del dashboard, empezar con el primer casino
     this._autoStartTimer = setTimeout(() => {
-      if (this.running && !this.capturing) {
+      if (this.running && !this.capturing && !this._starting) {
         log.info('orchestrator', 'Sin senal del dashboard — auto-iniciando captura...');
         this.capturing = true;
         const firstCasino = this.casinos[0];
@@ -101,6 +95,11 @@ class Orchestrator {
         await this._startCaptureForTable(casino, table);
 
       } else if (!shouldBeActive && this.capturing) {
+        // NO detener si estamos en medio de un start/recovery
+        if (this._starting) {
+          log.debug('orchestrator', 'Dashboard dice desactivar, pero hay start en progreso — ignorando');
+          return;
+        }
         log.info('orchestrator', '>>> AUTO CAPTURE DESACTIVADO desde RollerWin <<<');
         this.capturing = false;
         if (this.currentCasino) {
@@ -129,31 +128,44 @@ class Orchestrator {
    * Inicia la captura en la mesa especificada
    */
   async _startCaptureForTable(casinoName, tableUrl) {
-    let casino = this.casinos.find(c => c.name === casinoName);
-    if (!casino) {
-      casino = this.casinos.find(c => tableUrl.includes(c.name));
-    }
-
-    if (!casino) {
-      log.error('orchestrator', `No se encontro modulo para casino: ${casinoName}`);
-      log.error('orchestrator', `Casinos disponibles: ${this.casinos.map(c => c.name).join(', ')}`);
+    // Lock para evitar que stop() interrumpa
+    if (this._starting) {
+      log.warn('orchestrator', 'Ya hay un inicio en progreso — ignorando');
       return;
     }
+    this._starting = true;
 
-    casino.dynamicUrl = tableUrl;
-    this.currentCasino = casino;
-
-    log.info('orchestrator', `>>> Conectando a: ${casino.name.toUpperCase()}`);
-    log.info('orchestrator', `    URL: ${tableUrl}`);
-    log.info('orchestrator', `    (Captura via CDP Injection en todos los frames)`);
-
-    const success = await casino.start(this.context);
-    if (!success) {
-      log.error('orchestrator', `Fallo al iniciar ${casino.name}, intentando recovery...`);
-      const recovered = await casino.recover();
-      if (!recovered) {
-        log.error('orchestrator', `Recovery fallo para ${casino.name}`);
+    try {
+      let casino = this.casinos.find(c => c.name === casinoName);
+      if (!casino) {
+        casino = this.casinos.find(c => tableUrl.includes(c.name));
       }
+
+      if (!casino) {
+        log.error('orchestrator', `No se encontro modulo para casino: ${casinoName}`);
+        log.error('orchestrator', `Casinos disponibles: ${this.casinos.map(c => c.name).join(', ')}`);
+        return;
+      }
+
+      casino.dynamicUrl = tableUrl;
+      this.currentCasino = casino;
+
+      log.info('orchestrator', `>>> Conectando a: ${casino.name.toUpperCase()}`);
+      log.info('orchestrator', `    URL: ${tableUrl}`);
+      log.info('orchestrator', `    (CDP Injection v4 — Playwright frames)`);
+
+      const success = await casino.start(this.context);
+      if (!success) {
+        log.error('orchestrator', `Fallo al iniciar ${casino.name}, intentando recovery...`);
+        const recovered = await casino.recover();
+        if (!recovered) {
+          log.error('orchestrator', `Recovery fallo para ${casino.name}`);
+          this.capturing = false;
+          this.currentCasino = null;
+        }
+      }
+    } finally {
+      this._starting = false;
     }
   }
 
@@ -161,7 +173,7 @@ class Orchestrator {
    * Monitoreo de salud
    */
   async _healthCheck() {
-    if (!this.currentCasino || !this.capturing) return;
+    if (!this.currentCasino || !this.capturing || this._starting) return;
 
     const stats = this.currentCasino.getStats();
     const secondsSinceCapture = stats.secondsSinceCapture;
@@ -204,11 +216,13 @@ class Orchestrator {
     const apiStats = this.api.getStats();
     let totalSent = 0;
     let totalCaptured = 0;
+    let cdpStats = {};
 
     for (const casino of this.casinos) {
       const s = casino.getStats();
       totalSent += s.totalSent;
       totalCaptured += s.totalCaptured;
+      if (s.injectCount !== undefined) cdpStats = s;
     }
 
     // Bridge stats
@@ -220,15 +234,18 @@ class Orchestrator {
     log.info('stats',
       `\n` +
       `  ╔══════════════════════════════════════════════════╗\n` +
-      `  ║   ROULETTE CAPTURE SYSTEM v3.1 - STATS          ║\n` +
+      `  ║   ROULETTE CAPTURE v3.1.1 - STATS              ║\n` +
       `  ╠══════════════════════════════════════════════════╣\n` +
       `  ║  Uptime:       ${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}\n` +
-      `  ║  Modo:         CDP Injection (sin extension)\n` +
+      `  ║  Modo:         CDP Injection v4 (Playwright frames)\n` +
       `  ║  Estado:       ${captureStatus}\n` +
       `  ║  Casino:       ${this.currentCasino?.name.toUpperCase() || 'ninguno'}\n` +
       `  ║  Capturados:   ${totalCaptured}\n` +
       `  ║  Enviados:     ${totalSent}\n` +
       `  ║  Bridge reqs:  ${bridgeRequests}\n` +
+      `  ║  CDP injects:  ${cdpStats.injectCount || 0}\n` +
+      `  ║  WS frames:    ${cdpStats.wsFrameCount || 0}\n` +
+      `  ║  WS conex.:    ${cdpStats.wsConnections || 0}\n` +
       `  ║  API errors:   ${apiStats.totalErrors}\n` +
       `  ╚══════════════════════════════════════════════════╝`
     );
@@ -240,6 +257,7 @@ class Orchestrator {
   async stop() {
     this.running = false;
     this.capturing = false;
+    this._starting = false;
 
     if (this._autoStartTimer) clearTimeout(this._autoStartTimer);
     if (this.pipelinePollInterval) clearInterval(this.pipelinePollInterval);

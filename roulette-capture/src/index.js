@@ -21,9 +21,9 @@ const log = require('./utils/logger');
 function printBanner() {
   console.log('');
   console.log('  ╔══════════════════════════════════════════════════╗');
-  console.log('  ║   ROULETTE CAPTURE SYSTEM v3.1                  ║');
-  console.log('  ║   CDP Injection — Sin extension necesaria       ║');
-  console.log('  ║   Captura REAL en iframes cross-origin          ║');
+  console.log('  ║   ROULETTE CAPTURE SYSTEM v3.1.1                ║');
+  console.log('  ║   CDP Injection v4 — Playwright frames          ║');
+  console.log('  ║   Si ves v3.1 aqui, NO actualizaste — corre update.bat ║');
   console.log('  ╚══════════════════════════════════════════════════╝');
   console.log('');
 }
