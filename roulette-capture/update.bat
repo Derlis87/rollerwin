@@ -25,6 +25,7 @@ call :DownloadFile "%REPO%/src/browser/stealth.js" "%TEMP_DIR%\src\browser\steal
 call :DownloadFile "%REPO%/src/browser/human-behavior.js" "%TEMP_DIR%\src\browser\human-behavior.js"
 
 REM --- Capture ---
+call :DownloadFile "%REPO%/src/capture/cdp-inject.js" "%TEMP_DIR%\src\capture\cdp-inject.js"
 call :DownloadFile "%REPO%/src/capture/extension-bridge.js" "%TEMP_DIR%\src\capture\extension-bridge.js"
 call :DownloadFile "%REPO%/src/capture/number-processor.js" "%TEMP_DIR%\src\capture\number-processor.js"
 call :DownloadFile "%REPO%/src/capture/ws-interceptor.js" "%TEMP_DIR%\src\capture\ws-interceptor.js"

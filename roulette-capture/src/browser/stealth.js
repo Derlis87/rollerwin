@@ -124,9 +124,8 @@ async function launchRealChrome(config) {
     `--user-data-dir=${absProfileDir}`,
     `--user-agent=${profile.ua}`,
     `--lang=${profile.locale}`,
-    // CRÍTICO: Cargar el extension de captura
-    `--load-extension=${absExtensionDir}`,
-    `--disable-extensions-except=${absExtensionDir}`,
+    // NOTA: Ya no se necesita --load-extension
+    // La captura se hace via CDP injection (sin extension)
     // Anti-deteccion
     '--disable-blink-features=AutomationControlled',
     '--disable-notifications',

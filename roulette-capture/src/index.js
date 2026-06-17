@@ -82,7 +82,7 @@ async function main() {
   let context;
 
   if (config.headed && config.CHROME_PATH) {
-    log.info('system', 'Lanzando Chrome REAL con extension de captura...');
+    log.info('system', 'Lanzando Chrome REAL para captura via CDP...');
     const profile = getProfile();
     log.info('system', `  UA: ${profile.ua.substring(0, 60)}...`);
     log.info('system', `  Locale: ${profile.locale} | TZ: ${profile.tz}`);
@@ -111,7 +111,7 @@ async function main() {
       process.exit(1);
     }
   } else {
-    log.error('system', 'MODO HEADED REQUERIDO — la captura via extension necesita Chrome visible');
+    log.error('system', 'MODO HEADED REQUERIDO — la captura necesita Chrome visible');
     log.error('system', 'Set HEADED=true y CHROME_PATH en .env');
     bridge.stop();
     process.exit(1);

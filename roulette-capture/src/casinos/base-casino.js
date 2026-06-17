@@ -1,18 +1,21 @@
 // ============================================================
-// base-casino.js v2 - Clase base para todos los casinos
-// CAPTURA via Chrome Extension (hybrid approach)
+// base-casino.js v3 - Clase base para todos los casinos
+// CAPTURA via CDP Injection (SIN extension)
 // ============================================================
-// La captura de numeros NO se hace via CDP (eso no funciona con OOPIFs).
-// En su lugar:
-//   1. Chrome se lanza con un extension (--load-extension)
-//   2. El extension inyecta codigo en MAIN world de TODOS los frames
-//   3. El extension detecta numeros via hooks de WebSocket/Fetch/XHR
-//   4. El extension envia numeros via fetch a localhost:19555
-//   5. ExtensionBridge (HTTP server en Node.js) los recibe
+// CDP puede inyectar codigo en TODOS los execution contexts,
+// incluidos iframes cross-origin (Evolution, Pragmatic, etc).
+// Ya no necesita --load-extension.
 //
-// Esta clase solo maneja: navegacion, login, espera de mesa, recovery
+// Flujo:
+//   1. Node.js conecta a Chrome via CDP
+//   2. Navega al casino, hace login
+//   3. CDPInjector inyecta hooks en todos los frames
+//   4. Los hooks detectan numeros via WS/Fetch/XHR/DOM
+//   5. Los hooks envian numeros via fetch a localhost:19555
+//   6. ExtensionBridge recibe y procesa
 // ============================================================
 const { NumberProcessor } = require('../capture/number-processor');
+const { CDPInjector } = require('../capture/cdp-inject');
 const { randomDelay } = require('../utils/helpers');
 const log = require('../utils/logger');
 
@@ -24,6 +27,7 @@ class BaseCasino {
     this.page = null;
     this.context = null;
     this.processor = new NumberProcessor(name);
+    this.cdpInjector = new CDPInjector();
     this.running = false;
     this.recoveryCount = 0;
     this.consecutiveRecoveryFails = 0;
@@ -32,26 +36,18 @@ class BaseCasino {
     this.dynamicUrl = null;
     this.graceActive = false;
     this.graceTimeout = null;
+    this._reinjectInterval = null;
   }
 
-  /**
-   * URL de la mesa - usa dynamicUrl si fue seteada por el dashboard
-   */
   getRouletteURL() {
     if (this.dynamicUrl) return this.dynamicUrl;
     throw new Error('getRouletteURL() debe ser implementado o se debe setear dynamicUrl');
   }
 
-  /**
-   * Navega a la pagina del casino y espera a que cargue (override en subclase)
-   */
   async navigate() {
     throw new Error('navigate() debe ser implementado por la subclase');
   }
 
-  /**
-   * Verifica si la mesa esta activa y el juego esta corriendo
-   */
   async isTableAlive() {
     try {
       if (!this.page || this.page.isClosed()) return false;
@@ -66,8 +62,6 @@ class BaseCasino {
 
   /**
    * Inicia la captura en este casino
-   * NOTA: La captura real la hace el Chrome extension.
-   * Aqui solo navegamos y esperamos a que la mesa cargue.
    */
   async start(context) {
     this.context = context;
@@ -76,7 +70,7 @@ class BaseCasino {
 
     log.info(this.name, `Iniciando conexion...`);
     log.info(this.name, `URL: ${this.getRouletteURL()}`);
-    log.info(this.name, `Captura via Chrome Extension (hybrid mode)`);
+    log.info(this.name, `Captura via CDP Injection (sin extension)`);
 
     try {
       // 1. Crear nueva pagina
@@ -88,14 +82,27 @@ class BaseCasino {
       // 3. Esperar a que la mesa cargue
       await this._waitForTable();
 
-      // 4. Activar grace period (ignorar numeros por 15s para estabilizar)
+      // 4. Inyectar codigo de captura via CDP en TODOS los frames
+      log.info(this.name, 'Inyectando captura via CDP en todos los frames...');
+      await this.cdpInjector.injectInPage(this.page);
+
+      // 5. Re-inyectar cada 20s (los iframes se recargan)
+      this._reinjectInterval = setInterval(async () => {
+        if (this.running && this.page && !this.page.isClosed()) {
+          try {
+            await this.cdpInjector.reInject(this.page);
+          } catch(e) {}
+        }
+      }, 20000);
+
+      // 6. Activar grace period
       this._activateGrace(15000);
 
       this.status = 'capturing';
       this.recoveryCount = 0;
       this.consecutiveRecoveryFails = 0;
-      log.info(this.name, `Mesa lista — captura activa via extension`);
-      log.info(this.name, `Esperando numeros del Chrome extension...`);
+      log.info(this.name, `Mesa lista — captura activa via CDP`);
+      log.info(this.name, `Esperando numeros (WS/Fetch/XHR/DOM)...`);
 
       return true;
     } catch (err) {
@@ -105,9 +112,6 @@ class BaseCasino {
     }
   }
 
-  /**
-   * Detiene la captura y cierra la pagina
-   */
   async stop() {
     this.running = false;
     this.status = 'idle';
@@ -117,22 +121,24 @@ class BaseCasino {
       this.graceTimeout = null;
     }
 
+    if (this._reinjectInterval) {
+      clearInterval(this._reinjectInterval);
+      this._reinjectInterval = null;
+    }
+
+    await this.cdpInjector.cleanup();
+
     try {
       if (this.page && !this.page.isClosed()) {
         await this.page.close().catch(() => {});
       }
-    } catch (e) {
-      // Silencioso
-    }
+    } catch (e) {}
 
     this.page = null;
     this.processor.reset();
     log.info(this.name, 'Captura detenida');
   }
 
-  /**
-   * Intenta recuperar la sesion sin cerrar el navegador completo
-   */
   async recover() {
     this.status = 'recovering';
     this.recoveryCount++;
@@ -141,6 +147,13 @@ class BaseCasino {
     log.warn(this.name, `Recovery #${this.recoveryCount} — intentando restaurar...`);
 
     try {
+      if (this._reinjectInterval) {
+        clearInterval(this._reinjectInterval);
+        this._reinjectInterval = null;
+      }
+
+      await this.cdpInjector.cleanup();
+
       if (this.page && !this.page.isClosed()) {
         await this.page.close().catch(() => {});
         this.page = null;
@@ -154,10 +167,21 @@ class BaseCasino {
         return false;
       }
 
-      // Re-navegar
       this.page = await this.context.newPage();
       await this.navigate();
       await this._waitForTable();
+
+      // Re-inyectar CDP
+      await this.cdpInjector.injectInPage(this.page);
+
+      this._reinjectInterval = setInterval(async () => {
+        if (this.running && this.page && !this.page.isClosed()) {
+          try {
+            await this.cdpInjector.reInject(this.page);
+          } catch(e) {}
+        }
+      }, 20000);
+
       this._activateGrace(15000);
 
       this.status = 'capturing';
@@ -171,9 +195,6 @@ class BaseCasino {
     }
   }
 
-  /**
-   * Espera a que la mesa de ruleta este lista
-   */
   async _waitForTable() {
     try {
       await this.page.waitForSelector('iframe', { timeout: 60000 });
@@ -190,7 +211,6 @@ class BaseCasino {
   async onNumberFromExtension(number, source) {
     if (!this.running) return;
 
-    // Grace period: ignorar numeros al inicio
     if (this.graceActive) {
       log.debug(this.name, `[GRACE] ${number} bloqueado [${source}]`);
       return;
@@ -199,9 +219,6 @@ class BaseCasino {
     await this.processor.process(number, source, (num, color) => this.api.sendNumber(num, color));
   }
 
-  /**
-   * Grace period: ignorar numeros por N ms despues de conectar
-   */
   _activateGrace(ms) {
     this.graceActive = true;
     if (this.graceTimeout) clearTimeout(this.graceTimeout);
@@ -212,17 +229,10 @@ class BaseCasino {
     log.info(this.name, `Grace period de ${ms}ms activado`);
   }
 
-  /**
-   * Scanner DOM periodico — no hace nada en modo extension
-   * (el extension ya escanea el DOM internamente)
-   */
   async runDOMScan() {
-    // No-op en modo extension
+    // No-op — CDP injection maneja el DOM scanning
   }
 
-  /**
-   * Retorna estadisticas actuales
-   */
   getStats() {
     return {
       ...this.processor.getStats(),
@@ -230,7 +240,7 @@ class BaseCasino {
       recoveryCount: this.recoveryCount,
       url: this.dynamicUrl || this.getRouletteURL(),
       dynamicUrl: this.dynamicUrl,
-      captureMode: 'extension',
+      captureMode: 'cdp-injection',
     };
   }
 }
