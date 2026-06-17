@@ -27,7 +27,7 @@ class BaseCasino {
     this.page = null;
     this.context = null;
     this.processor = new NumberProcessor(name);
-    this.cdpInjector = new CDPInjector();
+    this.cdpInjector = new CDPInjector((n, src) => this.onNumberFromExtension(n, src));
     this.running = false;
     this.recoveryCount = 0;
     this.consecutiveRecoveryFails = 0;
@@ -83,7 +83,9 @@ class BaseCasino {
       await this._waitForTable();
 
       // 4. Inyectar codigo de captura via CDP en TODOS los frames
-      log.info(this.name, 'Inyectando captura via CDP en todos los frames...');
+      //    Target.setAutoAttach detecta iframes automaticamente
+      //    Network.webSocketFrameReceived como fallback de red
+      log.info(this.name, 'Inyectando captura via CDP (Target.setAutoAttach)...');
       await this.cdpInjector.injectInPage(this.page);
 
       // 5. Re-inyectar cada 20s (los iframes se recargan)
