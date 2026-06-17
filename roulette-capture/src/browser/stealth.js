@@ -99,9 +99,25 @@ async function launchRealChrome(config) {
 
   const profileDir = config.CHROME_PROFILE || './chrome-profile';
 
+  // Windows: copiar extension a temp sin espacios
+  // --load-extension falla silenciosamente con rutas con espacios (OneDrive, etc)
+  let absExtensionDir = path.resolve(extensionDir);
+  if (process.platform === 'win32' && absExtensionDir.includes(' ')) {
+    const os = require('os');
+    const tmpExtDir = path.join(os.tmpdir(), 'rw-capture-ext');
+    try {
+      if (fs.existsSync(tmpExtDir)) fs.rmSync(tmpExtDir, { recursive: true, force: true });
+      fs.cpSync(absExtensionDir, tmpExtDir, { recursive: true });
+      absExtensionDir = tmpExtDir;
+      console.log(`[CHROME] Extension copiada a: ${tmpExtDir}`);
+    } catch(e) {
+      console.error(`[CHROME] No se pudo copiar extension a temp: ${e.message}`);
+    }
+  }
+
   // Resolver rutas absolutas para Chrome (Windows necesita esto)
-  const absExtensionDir = path.resolve(extensionDir).replace(/\\/g, '/');
   const absProfileDir = path.resolve(profileDir).replace(/\\/g, '/');
+  absExtensionDir = absExtensionDir.replace(/\\/g, '/');
 
   const chromeArgs = [
     `--remote-debugging-port=${port}`,
