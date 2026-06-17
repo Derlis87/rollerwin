@@ -47,6 +47,9 @@ REM --- Package ---
 call :DownloadFile "%REPO%/package.json" "%TEMP_DIR%\package.json"
 call :DownloadFile "%REPO%/package-lock.json" "%TEMP_DIR%\package-lock.json"
 
+REM --- .env.example ---
+call :DownloadFile "%REPO%/.env.example" "%TEMP_DIR%\.env.example"
+
 echo.
 echo [3/5] Copiando archivos actualizados...
 REM Copiar src/
@@ -70,6 +73,19 @@ if exist "src\capture\inject-capture.js" (
     echo   Eliminado: inject-capture.js (reemplazado por cdp-inject.js)
 )
 
+echo.
+echo [3.7/5] Verificando .env...
+if not exist ".env" (
+    if exist "%TEMP_DIR%\.env.example" (
+        copy /y "%TEMP_DIR%\.env.example" ".env" >nul 2>nul
+        echo   Creado .env desde .env.example — EDITA CHROME_PATH!
+    ) else (
+        echo   WARNING: No se encontro .env.example
+    )
+) else (
+    echo   .env existe — conservado intacto
+)
+
 echo [4/5] Limpiando carpeta temporal...
 rmdir /s /q "%TEMP_DIR%"
 
@@ -81,13 +97,13 @@ if %errorlevel% neq 0 (
 
 echo.
 echo ============================================
-echo   ACTUALIZACION v3.1 COMPLETADA
+echo   ACTUALIZACION v3.1.1 COMPLETADA
 echo ============================================
 echo.
 echo   Cambios:
 echo   - CDP Injection reemplaza Chrome Extension
 echo   - Ya no necesita --load-extension
-echo   - Captura en todos los frames automaticamente
+echo   - Inyeccion inmediata en iframes ya cargados (fix cross-origin)
 echo   - Archivos obsoletos eliminados
 echo.
 echo   Para iniciar: npm start
