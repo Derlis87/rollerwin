@@ -1,9 +1,10 @@
 // ============================================================
-// base-casino.js v3.1.1 - Clase base para todos los casinos
-// CDP Injection (SIN extension) — Playwright frames + CDP
+// base-casino.js v5.0 - Clase base — captura por OCR
+// SIN CDP, SIN extension, SIN WebSocket
+// Toma screenshots y usa Tesseract.js para leer el resultado
 // ============================================================
 const { NumberProcessor } = require('../capture/number-processor');
-const { CDPInjector } = require('../capture/cdp-inject');
+const { OCRCapture } = require('../capture/ocr-capture');
 const { randomDelay } = require('../utils/helpers');
 const log = require('../utils/logger');
 
@@ -15,12 +16,11 @@ class BaseCasino {
     this.page = null;
     this.context = null;
     this.processor = new NumberProcessor(name);
-    this.cdpInjector = new CDPInjector((n, src) => this.onNumberFromExtension(n, src));
+    this.ocr = new OCRCapture(config, (num) => this._onOCRNumber(num));
     this.running = false;
     this.recoveryCount = 0;
     this.consecutiveRecoveryFails = 0;
     this.status = 'idle';
-    this.url = '';
     this.dynamicUrl = null;
     this.graceActive = false;
     this.graceTimeout = null;
@@ -47,24 +47,21 @@ class BaseCasino {
     }
   }
 
-  /**
-   * Check si fuimos detenidos durante una operacion async
-   */
   _wasStopped() {
     return !this.running;
   }
 
   /**
-   * Inicia la captura en este casino
+   * Inicia la captura: navega al casino y empieza OCR
    */
   async start(context) {
     this.context = context;
     this.running = true;
     this.status = 'connecting';
 
-    log.info(this.name, `Iniciando conexion...`);
+    log.info(this.name, 'Iniciando conexion...');
     log.info(this.name, `URL: ${this.getRouletteURL()}`);
-    log.info(this.name, `CDP Injection v4 (Playwright frames)`);
+    log.info(this.name, 'Modo: OCR (Tesseract.js) — sin CDP, sin extension');
 
     try {
       // 1. Crear nueva pagina
@@ -79,24 +76,22 @@ class BaseCasino {
       await this._waitForTable();
       if (this._wasStopped()) { log.warn(this.name, 'Cancelado esperando mesa'); return false; }
 
-      // 4. Esperar que los iframes internos carguen bien
-      //    El iframe de Evolution tarda en cargar su JS y conectar WS
+      // 4. Esperar que el juego interne cargue bien
       log.info(this.name, 'Esperando 10s a que el juego interne cargue...');
       await randomDelay(8000, 12000);
-      if (this._wasStopped()) { log.warn(this.name, 'Cancelado esperando carga del juego'); return false; }
+      if (this._wasStopped()) { log.warn(this.name, 'Cancelado esperando carga'); return false; }
 
-      // 5. Inyectar codigo de captura via CDP en TODOS los frames
-      log.info(this.name, 'Inyectando captura via CDP en todos los frames...');
-      await this.cdpInjector.injectInPage(this.page);
+      // 5. Iniciar captura OCR
+      log.info(this.name, 'Iniciando escaneo OCR de la pantalla...');
+      this.ocr.start(this.page);
 
-      // 6. Activar grace period
+      // 6. Grace period (ignorar numeros de la carga inicial)
       this._activateGrace(15000);
 
       this.status = 'capturing';
       this.recoveryCount = 0;
       this.consecutiveRecoveryFails = 0;
-      log.info(this.name, `Mesa lista — captura activa via CDP`);
-      log.info(this.name, `Esperando numeros (WS/Fetch/XHR/DOM)...`);
+      log.info(this.name, '>>> CAPTURA OCR ACTIVA — esperando numeros... <<<');
 
       return true;
     } catch (err) {
@@ -119,7 +114,7 @@ class BaseCasino {
       this.graceTimeout = null;
     }
 
-    await this.cdpInjector.cleanup();
+    await this.ocr.cleanup();
 
     try {
       if (this.page && !this.page.isClosed()) {
@@ -142,7 +137,7 @@ class BaseCasino {
     log.warn(this.name, `Recovery #${this.recoveryCount} — intentando restaurar...`);
 
     try {
-      await this.cdpInjector.cleanup();
+      await this.ocr.cleanup();
 
       if (this.page && !this.page.isClosed()) {
         await this.page.close().catch(() => {});
@@ -161,17 +156,15 @@ class BaseCasino {
       await this.navigate();
       await this._waitForTable();
 
-      // Esperar y re-inyectar CDP
       log.info(this.name, 'Esperando 8s a que el juego interne cargue...');
       await randomDelay(6000, 10000);
 
-      await this.cdpInjector.injectInPage(this.page);
-
+      this.ocr.start(this.page);
       this._activateGrace(15000);
 
       this.status = 'capturing';
       this.consecutiveRecoveryFails = 0;
-      log.info(this.name, `Recovery exitoso despues de ${this.recoveryCount} intentos`);
+      log.info(this.name, `Recovery exitoso`);
       return true;
     } catch (err) {
       log.error(this.name, `Recovery fallido: ${err.message}`);
@@ -190,17 +183,17 @@ class BaseCasino {
   }
 
   /**
-   * Callback cuando se detecta un numero (llamado desde ExtensionBridge)
+   * Callback cuando OCR detecta un numero
    */
-  async onNumberFromExtension(number, source) {
+  async _onOCRNumber(number) {
     if (!this.running) return;
 
     if (this.graceActive) {
-      log.debug(this.name, `[GRACE] ${number} bloqueado [${source}]`);
+      log.debug(this.name, `[GRACE] ${number} bloqueado`);
       return;
     }
 
-    await this.processor.process(number, source, (num, color) => this.api.sendNumber(num, color));
+    await this.processor.process(number, 'ocr', (num, color) => this.api.sendNumber(num, color));
   }
 
   _activateGrace(ms) {
@@ -213,19 +206,14 @@ class BaseCasino {
     log.info(this.name, `Grace period de ${ms}ms activado`);
   }
 
-  async runDOMScan() {
-    // No-op — CDP injection maneja el DOM scanning
-  }
-
   getStats() {
     return {
       ...this.processor.getStats(),
-      ...this.cdpInjector.getStats(),
+      ...this.ocr.getStats(),
       status: this.status,
       recoveryCount: this.recoveryCount,
       url: this.dynamicUrl || this.getRouletteURL(),
-      dynamicUrl: this.dynamicUrl,
-      captureMode: 'cdp-injection-v4',
+      captureMode: 'ocr-v5',
     };
   }
 }

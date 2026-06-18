@@ -1,16 +1,16 @@
 // ============================================================
-// index.js v3.1 - Punto de entrada — CDP INJECTION (sin extension)
+// index.js v5.0 - Punto de entrada — OCR SIMPLE
 // ============================================================
-// CAPTURA: CDP Injection directa en todos los frames/contexts
-// NAVEGACION: Node.js + Playwright CDP (login, navigate, recovery)
-// COMUNICACION: CDP hooks → fetch localhost:19555 → Node.js → RollerWin API
+// CAPTURA: Screenshot + Tesseract.js OCR
+// NAVEGACION: Playwright CDP (login, navigate)
+// COMUNICACION: OCR detecta numero → NumberProcessor → RollerWin API
+// SIN CDP injection, SIN extension, SIN WebSocket, SIN bridge
 // ============================================================
 
 const { chromium } = require('playwright');
 const { loadConfig } = require('./config');
-const { createStealthContext, getProfile, launchRealChrome } = require('./browser/stealth');
+const { getProfile, launchRealChrome } = require('./browser/stealth');
 const { stopHumanBehavior } = require('./browser/human-behavior');
-const { ExtensionBridge } = require('./capture/extension-bridge');
 const { RollerWinAPI } = require('./api/rollerwin-api');
 const { PinnacleCasino } = require('./casinos/pinnacle');
 const { BetFuryCasino } = require('./casinos/betfury');
@@ -21,9 +21,9 @@ const log = require('./utils/logger');
 function printBanner() {
   console.log('');
   console.log('  ╔══════════════════════════════════════════════════╗');
-  console.log('  ║   ROULETTE CAPTURE SYSTEM v3.1.1                ║');
-  console.log('  ║   CDP Injection v4 — Playwright frames          ║');
-  console.log('  ║   Si ves v3.1 aqui, NO actualizaste — corre update.bat ║');
+  console.log('  ║   ROULETTE CAPTURE SYSTEM v5.0                  ║');
+  console.log('  ║   Modo: OCR (Tesseract.js) — SIMPLE             ║');
+  console.log('  ║   Captura el numero visible de la pantalla      ║');
   console.log('  ╚══════════════════════════════════════════════════╝');
   console.log('');
 }
@@ -37,12 +37,8 @@ async function main() {
   log.info('system', 'Configuracion cargada');
   log.info('system', `Casinos activos: ${config.activeCasinos.join(', ')}`);
   log.info('system', `RollerWin API: ${config.ROLLERWIN_API_URL}`);
-
-  // ========================================
-  // INICIAR BRIDGE (HTTP server local)
-  // ========================================
-  const bridgePort = 19555;
-  const bridge = new ExtensionBridge(bridgePort);
+  log.info('system', `OCR interval: ${config.OCR_INTERVAL || 3000}ms`);
+  log.info('system', `OCR region: x=${config.OCR_CROP_X || 0} y=${config.OCR_CROP_Y || 50} w=${config.OCR_CROP_W || 1920} h=${config.OCR_CROP_H || 400}`);
 
   // Crear API client
   const apiClient = new RollerWinAPI(config.ROLLERWIN_API_URL);
@@ -53,46 +49,30 @@ async function main() {
   if (config.pinnacleEnabled) casinoInstances.push(new PinnacleCasino(config, apiClient));
   if (config.stakeEnabled) casinoInstances.push(new StakeCasino(config, apiClient));
 
-  // Iniciar bridge — los hooks CDP envian numeros aqui via fetch
-  try {
-    bridge.start(async (number, source) => {
-      const orchestrator_ref = global.__orchestrator;
-      if (orchestrator_ref && orchestrator_ref.currentCasino) {
-        await orchestrator_ref.currentCasino.onNumberFromExtension(number, source);
-      } else {
-        log.warn('bridge', `Numero ${number} recibido pero no hay casino activo`);
-      }
-    });
-
-    log.info('system', `Bridge activo en puerto ${bridgePort} (recibe numeros de CDP hooks)`);
-    global.__bridge = bridge;
-  } catch (err) {
-    log.error('system', `No se pudo iniciar el bridge: ${err.message}`);
-    log.error('system', 'Asegurate de que el puerto 19555 este libre');
+  if (casinoInstances.length === 0) {
+    log.error('system', 'No hay casinos activos. Activa al menos uno en .env');
     process.exit(1);
   }
 
   // ========================================
-  // LANZAR CHROME via CDP (sin extension)
+  // LANZAR CHROME via CDP
   // ========================================
   let browser;
   let context;
 
   if (config.headed && config.CHROME_PATH) {
-    log.info('system', 'Lanzando Chrome REAL para captura via CDP...');
+    log.info('system', 'Lanzando Chrome...');
     const profile = getProfile();
     log.info('system', `  UA: ${profile.ua.substring(0, 60)}...`);
     log.info('system', `  Locale: ${profile.locale} | TZ: ${profile.tz}`);
 
     try {
       const port = await launchRealChrome(config);
-      log.info('system', `Chrome REAL escuchando en puerto ${port}`);
+      log.info('system', `Chrome escuchando en puerto ${port}`);
 
-      // Conectar via CDP
       browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
       log.info('system', 'Conectado a Chrome via CDP');
 
-      // Obtener el contexto por defecto (con las cookies ya guardadas)
       const contexts = browser.contexts();
       if (contexts.length > 0) {
         context = contexts[0];
@@ -102,15 +82,13 @@ async function main() {
         log.info('system', 'Creado nuevo contexto en Chrome');
       }
     } catch (err) {
-      log.error('system', `Error con Chrome REAL: ${err.message}`);
+      log.error('system', `Error con Chrome: ${err.message}`);
       log.error('system', 'Verifica que CHROME_PATH en .env apunte a chrome.exe');
-      bridge.stop();
       process.exit(1);
     }
   } else {
-    log.error('system', 'MODO HEADED REQUERIDO — la captura necesita Chrome visible');
+    log.error('system', 'MODO HEADED REQUERIDO');
     log.error('system', 'Set HEADED=true y CHROME_PATH en .env');
-    bridge.stop();
     process.exit(1);
   }
 
@@ -118,7 +96,6 @@ async function main() {
   // INICIAR ORQUESTADOR
   // ========================================
   const orchestrator = new Orchestrator(casinoInstances, config, apiClient);
-  global.__orchestrator = orchestrator;
 
   // Manejo de seniales
   let shuttingDown = false;
@@ -129,7 +106,6 @@ async function main() {
     log.warn('system', `Senal ${signal} — cerrando...`);
     await orchestrator.stop();
     stopHumanBehavior();
-    bridge.stop();
     try { await context.close(); } catch(e) {}
     log.info('system', 'Sistema cerrado');
     process.exit(0);
@@ -150,7 +126,7 @@ async function main() {
     log.info('system', '');
     log.info('system', '  ═══════════════════════════════════════════');
     log.info('system', '  Sistema activo — Ctrl+C para detener');
-    log.info('system', '  Captura via CDP Injection (todos los frames)');
+    log.info('system', '  Captura via OCR (lee el numero de la pantalla)');
     log.info('system', '  ═══════════════════════════════════════════');
     log.info('system', '');
 

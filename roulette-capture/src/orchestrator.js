@@ -1,7 +1,6 @@
 // ============================================================
-// orchestrator.js v3.1.1 - Orquestador principal (CDP Injection)
+// orchestrator.js v5.0 - Orquestador (OCR simple)
 // ============================================================
-const { randomDelay } = require('./utils/helpers');
 const log = require('./utils/logger');
 
 class Orchestrator {
@@ -11,7 +10,7 @@ class Orchestrator {
     this.api = apiClient;
     this.running = false;
     this.capturing = false;
-    this._starting = false; // LOCK: evita que stop() interrumpa start()
+    this._starting = false;
     this.context = null;
     this.currentCasino = null;
     this.statusCheckInterval = null;
@@ -28,6 +27,7 @@ class Orchestrator {
     this.sessionStartTime = Date.now();
 
     log.info('orchestrator', 'Sistema iniciado');
+    log.info('orchestrator', 'Modo: OCR (Tesseract.js) — captura visual de pantalla');
     log.info('orchestrator', 'Consultando dashboard cada 5 segundos para Auto Capture');
 
     // Verificar API de RollerWin
@@ -38,7 +38,7 @@ class Orchestrator {
       log.warn('orchestrator', 'RollerWin API no responde — se auto-iniciara con el primer casino en 15s');
     }
 
-    // Auto-start: si en 15 segundos no hay senal del dashboard, empezar con el primer casino
+    // Auto-start si no hay senal del dashboard en 15 segundos
     this._autoStartTimer = setTimeout(() => {
       if (this.running && !this.capturing && !this._starting) {
         log.info('orchestrator', 'Sin senal del dashboard — auto-iniciando captura...');
@@ -68,9 +68,6 @@ class Orchestrator {
     }, 60000);
   }
 
-  /**
-   * Consulta /api/capture/pipeline-status
-   */
   async _pollPipelineStatus() {
     try {
       const baseUrl = this.config.ROLLERWIN_API_URL.replace('/api/capture/receive', '');
@@ -95,7 +92,6 @@ class Orchestrator {
         await this._startCaptureForTable(casino, table);
 
       } else if (!shouldBeActive && this.capturing) {
-        // NO detener si estamos en medio de un start/recovery
         if (this._starting) {
           log.debug('orchestrator', 'Dashboard dice desactivar, pero hay start en progreso — ignorando');
           return;
@@ -124,11 +120,7 @@ class Orchestrator {
     }
   }
 
-  /**
-   * Inicia la captura en la mesa especificada
-   */
   async _startCaptureForTable(casinoName, tableUrl) {
-    // Lock para evitar que stop() interrumpa
     if (this._starting) {
       log.warn('orchestrator', 'Ya hay un inicio en progreso — ignorando');
       return;
@@ -152,7 +144,7 @@ class Orchestrator {
 
       log.info('orchestrator', `>>> Conectando a: ${casino.name.toUpperCase()}`);
       log.info('orchestrator', `    URL: ${tableUrl}`);
-      log.info('orchestrator', `    (CDP Injection v4 — Playwright frames)`);
+      log.info('orchestrator', `    (OCR — Tesseract.js)`);
 
       const success = await casino.start(this.context);
       if (!success) {
@@ -169,9 +161,6 @@ class Orchestrator {
     }
   }
 
-  /**
-   * Monitoreo de salud
-   */
   async _healthCheck() {
     if (!this.currentCasino || !this.capturing || this._starting) return;
 
@@ -179,9 +168,7 @@ class Orchestrator {
     const secondsSinceCapture = stats.secondsSinceCapture;
 
     if (secondsSinceCapture === Infinity || secondsSinceCapture === null) {
-      log.debug('orchestrator',
-        `[${this.currentCasino.name}] Esperando primer captura...`
-      );
+      log.debug('orchestrator', `[${this.currentCasino.name}] Esperando primer captura...`);
       return;
     }
 
@@ -204,9 +191,6 @@ class Orchestrator {
     }
   }
 
-  /**
-   * Stats
-   */
   _printStats() {
     const uptime = Math.round((Date.now() - this.sessionStartTime) / 1000);
     const hours = Math.floor(uptime / 3600);
@@ -216,44 +200,35 @@ class Orchestrator {
     const apiStats = this.api.getStats();
     let totalSent = 0;
     let totalCaptured = 0;
-    let cdpStats = {};
+    let ocrStats = {};
 
     for (const casino of this.casinos) {
       const s = casino.getStats();
       totalSent += s.totalSent;
       totalCaptured += s.totalCaptured;
-      if (s.injectCount !== undefined) cdpStats = s;
+      if (s.totalScans !== undefined) ocrStats = s;
     }
-
-    // Bridge stats
-    const bridgeStats = global.__bridge ? global.__bridge.getStats() : {};
-    const bridgeRequests = bridgeStats.requestCount || 0;
 
     const captureStatus = this.capturing ? 'CAPTURANDO' : 'EN ESPERA (activa Auto Capture en RollerWin)';
 
     log.info('stats',
       `\n` +
       `  ╔══════════════════════════════════════════════════╗\n` +
-      `  ║   ROULETTE CAPTURE v3.1.1 - STATS              ║\n` +
+      `  ║   ROULETTE CAPTURE v5.0 - STATS                 ║\n` +
       `  ╠══════════════════════════════════════════════════╣\n` +
       `  ║  Uptime:       ${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}\n` +
-      `  ║  Modo:         CDP Injection v4 (Playwright frames)\n` +
+      `  ║  Modo:         OCR (Tesseract.js)\n` +
       `  ║  Estado:       ${captureStatus}\n` +
       `  ║  Casino:       ${this.currentCasino?.name.toUpperCase() || 'ninguno'}\n` +
       `  ║  Capturados:   ${totalCaptured}\n` +
       `  ║  Enviados:     ${totalSent}\n` +
-      `  ║  Bridge reqs:  ${bridgeRequests}\n` +
-      `  ║  CDP injects:  ${cdpStats.injectCount || 0}\n` +
-      `  ║  WS frames:    ${cdpStats.wsFrameCount || 0}\n` +
-      `  ║  WS conex.:    ${cdpStats.wsConnections || 0}\n` +
+      `  ║  OCR scans:    ${ocrStats.totalScans || 0}\n` +
+      `  ║  OCR recono.:  ${ocrStats.totalRecognized || 0}\n` +
       `  ║  API errors:   ${apiStats.totalErrors}\n` +
       `  ╚══════════════════════════════════════════════════╝`
     );
   }
 
-  /**
-   * Detener todo
-   */
   async stop() {
     this.running = false;
     this.capturing = false;

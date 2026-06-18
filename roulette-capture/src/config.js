@@ -1,5 +1,5 @@
 // ============================================================
-// config.js - Carga configuracion desde .env
+// config.js v5.0 - Carga configuracion desde .env
 // ============================================================
 const fs = require('fs');
 const path = require('path');
@@ -38,7 +38,12 @@ function loadConfig() {
     CHROME_PATH: process.env.CHROME_PATH || '',
     CDP_PORT: process.env.CDP_PORT || '9222',
     CHROME_PROFILE: process.env.CHROME_PROFILE || './chrome-profile',
-    BRIDGE_PORT: process.env.BRIDGE_PORT || '19555',
+    // OCR
+    OCR_INTERVAL: process.env.OCR_INTERVAL || '3000',
+    OCR_CROP_X: process.env.OCR_CROP_X || '0',
+    OCR_CROP_Y: process.env.OCR_CROP_Y || '50',
+    OCR_CROP_W: process.env.OCR_CROP_W || '1920',
+    OCR_CROP_H: process.env.OCR_CROP_H || '400',
   };
 
   let envVars = {};
@@ -79,7 +84,12 @@ function loadConfig() {
   config.rotationMin = parseNum('ROTATION_INTERVAL_MIN');
   config.rotationMax = parseNum('ROTATION_INTERVAL_MAX');
   config.noSpinTimeout = parseNum('NO_SPIN_TIMEOUT');
-  config.bridgePort = parseInt(config.BRIDGE_PORT, 10) || 19555;
+  // OCR
+  config.ocrInterval = parseInt(config.OCR_INTERVAL, 10) || 3000;
+  config.ocrCropX = parseInt(config.OCR_CROP_X, 10) || 0;
+  config.ocrCropY = parseInt(config.OCR_CROP_Y, 10) || 50;
+  config.ocrCropW = parseInt(config.OCR_CROP_W, 10) || 1920;
+  config.ocrCropH = parseInt(config.OCR_CROP_H, 10) || 400;
 
   // Casinos activos ordenados
   config.activeCasinos = [];

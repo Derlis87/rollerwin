@@ -1,17 +1,14 @@
 {
   "name": "roulette-capture",
-  "version": "1.0.0",
-  "description": "Capturador de ruleta multi-casino con comportamiento humano - 24/7",
+  "version": "5.0.0",
+  "description": "Capturador de ruleta por OCR — captura el numero visible de la pantalla",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "start:visible": "HEADED=1 node src/index.js",
-    "dev": "node --watch src/index.js",
-    "test": "node src/utils/test.js"
+    "dev": "node --watch src/index.js"
   },
   "dependencies": {
     "playwright": "^1.45.0",
-    "playwright-extra": "^4.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2"
+    "tesseract.js": "^5.1.1"
   }
 }
