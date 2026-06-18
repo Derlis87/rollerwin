@@ -1,19 +1,47 @@
 @echo off
 chcp 65001 >nul 2>nul
-echo ============================================
-echo   ROULETTE CAPTURE v5.0 — UPDATE
-echo   Modo: OCR (Tesseract.js)
-echo ============================================
-echo.
 
 set REPO=https://raw.githubusercontent.com/Derlis87/rollerwin/main/roulette-capture
 set TEMP_DIR=%TEMP%\roulette-capture-update
 
-echo [1/5] Creando carpeta temporal...
+REM ============================================================
+REM PASO 0: AUTO-UPDATE — descargar la ultima version de update.bat
+REM Esto resuelve el problema de tener un update.bat viejo
+REM ============================================================
+echo ============================================
+echo   ROULETTE CAPTURE — UPDATE
+echo ============================================
+echo.
+echo [0/6] Verificando si update.bat necesita actualizacion...
+
+set "NEW_BAT=%TEMP%\update-latest.bat"
+if exist "%TEMP%" rmdir /s /q "%TEMP%"
+mkdir "%TEMP%"
+
+powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; try { (New-Object System.Net.WebClient).DownloadFile('%REPO%/update.bat', '%NEW_BAT%') } catch {}" 2>nul
+
+if exist "%NEW_BAT%" (
+    fc /b "%~f0" "%NEW_BAT%" >nul 2>nul
+    if errorlevel 1 (
+        echo   update.bat desactualizado — descargando version nueva...
+        copy /y "%NEW_BAT%" "%~f0" >nul 2>nul
+        echo   Reiniciando update.bat...
+        rmdir /s /q "%TEMP%"
+        call "%~f0"
+        exit /b %errorlevel%
+    ) else (
+        echo   update.bat esta al dia
+    )
+) else (
+    echo   No se pudo verificar (sin internet o repo inaccesible)
+)
+
+echo.
+echo [1/6] Creando carpeta temporal...
 if exist "%TEMP_DIR%" rmdir /s /q "%TEMP_DIR%"
 mkdir "%TEMP_DIR%"
 
-echo [2/5] Descargando archivos actualizados desde GitHub...
+echo [2/6] Descargando archivos actualizados desde GitHub...
 echo.
 
 REM --- Archivos principales ---
@@ -50,12 +78,12 @@ REM --- .env.example ---
 call :DownloadFile "%REPO%/.env.example" "%TEMP_DIR%\.env.example"
 
 echo.
-echo [3/5] Copiando archivos actualizados...
+echo [3/6] Copiando archivos actualizados...
 xcopy /y /q "%TEMP_DIR%\src\*" "src\" >nul 2>nul
 copy /y "%TEMP_DIR%\package.json" "package.json" >nul 2>nul
 
-REM Limpiar archivos obsoletos de versiones anteriores
-echo [3.5/5] Limpiando archivos obsoletos...
+REM Limpiar archivos obsoletos
+echo [4/6] Limpiando archivos obsoletos...
 if exist "extension\" (
     rmdir /s /q "extension\" >nul 2>nul
     echo   Eliminado: extension\
@@ -81,7 +109,7 @@ if exist "package-lock.json" (
 )
 
 echo.
-echo [3.7/5] Verificando .env...
+echo [5/6] Verificando .env...
 if not exist ".env" (
     if exist "%TEMP_DIR%\.env.example" (
         copy /y "%TEMP_DIR%\.env.example" ".env" >nul 2>nul
@@ -93,29 +121,27 @@ if not exist ".env" (
     echo   .env existe — conservado intacto
 )
 
-echo [4/5] Limpiando carpeta temporal...
-rmdir /s /q "%TEMP_DIR%"
-
-echo [5/5] Instalando dependencias (tesseract.js)...
+echo [6/6] Instalando dependencias...
 call npm install
 if %errorlevel% neq 0 (
-    echo WARNING: npm install tuvo advertencias, pero puede continuar
+    echo WARNING: npm install tuvo advertencias
 )
 
 echo.
+echo [LIMPIEZA] Eliminando carpeta temporal...
+rmdir /s /q "%TEMP_DIR%"
+
+echo.
 echo ============================================
-echo   ACTUALIZACION v5.0 COMPLETADA
+echo   ACTUALIZACION COMPLETADA — v5.0 OCR
 echo ============================================
 echo.
-echo   Cambios:
-echo   - OCR reemplaza CDP Injection (mas simple y confiable)
-echo   - Tesseract.js lee el numero de la pantalla
-echo   - Ya no necesita bridge ni extension
-echo   - Archivos obsoletos eliminados
+echo   Modo: OCR (Tesseract.js)
+echo   Lee el numero visible de la pantalla
+echo   Sin CDP, sin extension, sin bridge
 echo.
 echo   Para iniciar: npm start
-echo   NOTA: Tu archivo .env se conservo intacto
-echo   TIP: Ajusta OCR_CROP_X/Y/W/H en .env si no detecta el numero
+echo   NOTA: Tu .env se conservo intacto
 echo.
 pause
 exit /b 0
