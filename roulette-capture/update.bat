@@ -4,10 +4,6 @@ chcp 65001 >nul 2>nul
 set REPO=https://raw.githubusercontent.com/Derlis87/rollerwin/main/roulette-capture
 set TEMP_DIR=%TEMP%\roulette-capture-update
 
-REM ============================================================
-REM PASO 0: AUTO-UPDATE — descargar la ultima version de update.bat
-REM Esto resuelve el problema de tener un update.bat viejo
-REM ============================================================
 echo ============================================
 echo   ROULETTE CAPTURE — UPDATE
 echo ============================================
@@ -21,6 +17,7 @@ mkdir "%TEMP%"
 powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; try { (New-Object System.Net.WebClient).DownloadFile('%REPO%/update.bat', '%NEW_BAT%') } catch {}" 2>nul
 
 if exist "%NEW_BAT%" (
+    powershell -Command "$c=[IO.File]::ReadAllText('%NEW_BAT%');$c=$c.Replace([char]10,[string][char]13+[char]10).Replace([string][char]13+[char]13+[char]10,[string][char]13+[char]10);[IO.File]::WriteAllText('%NEW_BAT%',$c)" >nul 2>nul
     fc /b "%~f0" "%NEW_BAT%" >nul 2>nul
     if errorlevel 1 (
         echo   update.bat desactualizado — descargando version nueva...
@@ -33,7 +30,7 @@ if exist "%NEW_BAT%" (
         echo   update.bat esta al dia
     )
 ) else (
-    echo   No se pudo verificar (sin internet o repo inaccesible)
+    echo   No se pudo verificar, continuando con version actual...
 )
 
 echo.
@@ -44,37 +41,28 @@ mkdir "%TEMP_DIR%"
 echo [2/6] Descargando archivos actualizados desde GitHub...
 echo.
 
-REM --- Archivos principales ---
 call :DownloadFile "%REPO%/src/index.js" "%TEMP_DIR%\src\index.js"
 call :DownloadFile "%REPO%/src/config.js" "%TEMP_DIR%\src\config.js"
 call :DownloadFile "%REPO%/src/orchestrator.js" "%TEMP_DIR%\src\orchestrator.js"
 
-REM --- Browser ---
 call :DownloadFile "%REPO%/src/browser/stealth.js" "%TEMP_DIR%\src\browser\stealth.js"
 call :DownloadFile "%REPO%/src/browser/human-behavior.js" "%TEMP_DIR%\src\browser\human-behavior.js"
 
-REM --- Capture (OCR) ---
 call :DownloadFile "%REPO%/src/capture/ocr-capture.js" "%TEMP_DIR%\src\capture\ocr-capture.js"
 call :DownloadFile "%REPO%/src/capture/number-processor.js" "%TEMP_DIR%\src\capture\number-processor.js"
 
-REM --- Casinos ---
 call :DownloadFile "%REPO%/src/casinos/base-casino.js" "%TEMP_DIR%\src\casinos\base-casino.js"
 call :DownloadFile "%REPO%/src/casinos/betfury.js" "%TEMP_DIR%\src\casinos\betfury.js"
 call :DownloadFile "%REPO%/src/casinos/pinnacle.js" "%TEMP_DIR%\src\casinos\pinnacle.js"
 call :DownloadFile "%REPO%/src/casinos/stake.js" "%TEMP_DIR%\src\casinos\stake.js"
 
-REM --- API ---
 call :DownloadFile "%REPO%/src/api/rollerwin-api.js" "%TEMP_DIR%\src\api\rollerwin-api.js"
 
-REM --- Utils ---
 call :DownloadFile "%REPO%/src/utils/logger.js" "%TEMP_DIR%\src\utils\logger.js"
 call :DownloadFile "%REPO%/src/utils/helpers.js" "%TEMP_DIR%\src\utils\helpers.js"
 call :DownloadFile "%REPO%/src/utils/export-cookies.js" "%TEMP_DIR%\src\utils\export-cookies.js"
 
-REM --- Package ---
 call :DownloadFile "%REPO%/package.json" "%TEMP_DIR%\package.json"
-
-REM --- .env.example ---
 call :DownloadFile "%REPO%/.env.example" "%TEMP_DIR%\.env.example"
 
 echo.
@@ -82,7 +70,6 @@ echo [3/6] Copiando archivos actualizados...
 xcopy /y /q "%TEMP_DIR%\src\*" "src\" >nul 2>nul
 copy /y "%TEMP_DIR%\package.json" "package.json" >nul 2>nul
 
-REM Limpiar archivos obsoletos
 echo [4/6] Limpiando archivos obsoletos...
 if exist "extension\" (
     rmdir /s /q "extension\" >nul 2>nul
@@ -128,7 +115,6 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo [LIMPIEZA] Eliminando carpeta temporal...
 rmdir /s /q "%TEMP_DIR%"
 
 echo.
@@ -136,17 +122,12 @@ echo ============================================
 echo   ACTUALIZACION COMPLETADA — v5.0 OCR
 echo ============================================
 echo.
-echo   Modo: OCR (Tesseract.js)
-echo   Lee el numero visible de la pantalla
-echo   Sin CDP, sin extension, sin bridge
-echo.
 echo   Para iniciar: npm start
 echo   NOTA: Tu .env se conservo intacto
 echo.
 pause
 exit /b 0
 
-REM --- Funcion para descargar un archivo ---
 :DownloadFile
 set "URL=%~1"
 set "DEST=%~2"
@@ -157,4 +138,4 @@ if exist "%DEST%" (
 ) else (
     echo   FALLO: %~nx2
 )
-exit /b 0
+exit /b 0
