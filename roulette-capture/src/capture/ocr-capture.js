@@ -3,6 +3,8 @@
 // Toma screenshots del area del resultado y extrae el numero
 // con Tesseract.js — sin CDP, sin extension, sin WebSocket
 // ============================================================
+const fs = require('fs');
+const path = require('path');
 const log = require('../utils/logger');
 
 class OCRCapture {
@@ -25,6 +27,9 @@ class OCRCapture {
     this.cropW = parseInt(config.OCR_CROP_W, 10) || 1920;
     this.cropH = parseInt(config.OCR_CROP_H, 10) || 400;
     this.scanInterval = parseInt(config.OCR_INTERVAL, 10) || 3000;
+    this.debugSave = (config.OCR_DEBUG || 'false') === 'true';
+    this.debugCount = 0;
+    this.fullDebugCount = 0;
 
     // Stats
     this.totalScans = 0;
@@ -68,6 +73,9 @@ class OCRCapture {
     log.info('ocr', `Escaneo OCR iniciado cada ${this.scanInterval}ms`);
     log.info('ocr', `Region: x=${this.cropX} y=${this.cropY} w=${this.cropW} h=${this.cropH}`);
 
+    // Guardar screenshot COMPLETO de la pagina para debug (una sola vez)
+    this._saveFullScreenshot();
+
     // Primer scan inmediato
     this._poll();
   }
@@ -82,6 +90,25 @@ class OCRCapture {
       this.pollTimeout = null;
     }
     this.page = null;
+  }
+
+  /**
+   * Guarda screenshot completo de la pagina para debug (una sola vez)
+   */
+  async _saveFullScreenshot() {
+    if (this.fullDebugCount > 0 || !this.page) return;
+    try {
+      this.fullDebugCount++;
+      const debugDir = path.join(process.cwd(), 'debug');
+      if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true });
+      const fullBuf = await this.page.screenshot({ type: 'png', fullPage: false });
+      const fullPath = path.join(debugDir, 'page-full.png');
+      fs.writeFileSync(fullPath, fullBuf);
+      log.info('ocr', `DEBUG: screenshot completo guardado en ${fullPath}`);
+      log.info('ocr', `DEBUG: Usa esta imagen para ver la pantalla completa y ajustar OCR_CROP_*`);
+    } catch (e) {
+      log.debug('ocr', `No se pudo guardar screenshot debug: ${e.message}`);
+    }
   }
 
   /**
@@ -131,11 +158,31 @@ class OCRCapture {
         type: 'png',
       });
 
+      // Debug: guardar los primeros 5 screenshots recortados (siempre)
+      if (this.debugCount < 5) {
+        this.debugCount++;
+        const debugDir = path.join(process.cwd(), 'debug');
+        if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true });
+        const debugPath = path.join(debugDir, `scan-crop-${this.debugCount}.png`);
+        fs.writeFileSync(debugPath, buffer);
+        log.info('ocr', `DEBUG: screenshot guardado en ${debugPath}`);
+      }
+
       // Ejecutar OCR (solo digitos)
       const { data: { text } } = await this.worker.recognize(buffer, {
         tessedit_char_whitelist: '0123456789',
         tessedit_pageseg_mode: '7', // Linea de texto unica
       });
+
+      // Debug: mostrar texto crudo del OCR cada 10 scans
+      if (this.totalScans <= 5 || this.totalScans % 10 === 0) {
+        const rawText = text.replace(/\s+/g, ' ').trim();
+        if (rawText) {
+          log.info('ocr', `DEBUG OCR texto crudo: "${rawText}"`);
+        } else {
+          log.info('ocr', `DEBUG OCR: sin texto detectado en region`);
+        }
+      }
 
       // Buscar numeros validos de ruleta (0-36)
       const numbers = text.match(/\d+/g);
