@@ -21,9 +21,9 @@ const log = require('./utils/logger');
 function printBanner() {
   console.log('');
   console.log('  ╔══════════════════════════════════════════════════╗');
-  console.log('  ║   ROULETTE CAPTURE SYSTEM v5.0                  ║');
-  console.log('  ║   Modo: OCR (Tesseract.js) — SIMPLE             ║');
-  console.log('  ║   Captura el numero visible de la pantalla      ║');
+  console.log('  ║   ROULETTE CAPTURE SYSTEM v6.0                  ║');
+  console.log('  ║   Modo: CDP (WebSocket interception)             ║');
+  console.log('  ║   Intercepta numeros de red — INDetectable      ║');
   console.log('  ╚══════════════════════════════════════════════════╝');
   console.log('');
 }
@@ -37,8 +37,7 @@ async function main() {
   log.info('system', 'Configuracion cargada');
   log.info('system', `Casinos activos: ${config.activeCasinos.join(', ')}`);
   log.info('system', `RollerWin API: ${config.ROLLERWIN_API_URL}`);
-  log.info('system', `OCR interval: ${config.OCR_INTERVAL || 3000}ms`);
-  log.info('system', `OCR region: x=${config.OCR_CROP_X || 0} y=${config.OCR_CROP_Y || 50} w=${config.OCR_CROP_W || 1920} h=${config.OCR_CROP_H || 400}`);
+  log.info('system', `Captura modo: ${config.captureMode.toUpperCase()} ${config.captureMode === 'cdp' ? '(interceptacion de red, indetectable)' : '(OCR, modo fallback)'}`);
 
   // Crear API client
   const apiClient = new RollerWinAPI(config.ROLLERWIN_API_URL);
@@ -126,7 +125,7 @@ async function main() {
     log.info('system', '');
     log.info('system', '  ═══════════════════════════════════════════');
     log.info('system', '  Sistema activo — Ctrl+C para detener');
-    log.info('system', '  Captura via OCR (lee el numero de la pantalla)');
+    log.info('system', `  Captura via ${config.captureMode.toUpperCase()} — indetectable para el casino`);
     log.info('system', '  ═══════════════════════════════════════════');
     log.info('system', '');
 

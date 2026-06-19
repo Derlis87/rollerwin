@@ -38,6 +38,8 @@ function loadConfig() {
     CHROME_PATH: process.env.CHROME_PATH || '',
     CDP_PORT: process.env.CDP_PORT || '9222',
     CHROME_PROFILE: process.env.CHROME_PROFILE || './chrome-profile',
+    // Capture mode: 'cdp' (indetectable, default) or 'ocr' (screenshots)
+    CAPTURE_MODE: process.env.CAPTURE_MODE || 'cdp',
     // OCR
     OCR_INTERVAL: process.env.OCR_INTERVAL || '3000',
     OCR_CROP_X: process.env.OCR_CROP_X || '0',
@@ -84,6 +86,8 @@ function loadConfig() {
   config.rotationMin = parseNum('ROTATION_INTERVAL_MIN');
   config.rotationMax = parseNum('ROTATION_INTERVAL_MAX');
   config.noSpinTimeout = parseNum('NO_SPIN_TIMEOUT');
+  // Capture mode
+  config.captureMode = (config.CAPTURE_MODE || 'cdp').toLowerCase();
   // OCR
   config.ocrInterval = parseInt(config.OCR_INTERVAL, 10) || 3000;
   config.ocrCropX = parseInt(config.OCR_CROP_X, 10) || 0;
