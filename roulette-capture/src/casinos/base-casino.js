@@ -1,11 +1,8 @@
 // ============================================================
-// base-casino.js v6.0 - Clase base — captura por CDP o OCR
-// Modo CDP (default): Intercepta WS frames a nivel de red
-// Modo OCR (fallback): Tesseract.js screenshots
-// Ambos 100% indetectables para el casino
+// base-casino.js v5.0 - Clase base — captura por OCR unicamente
+// Tesseract.js screenshots — 100% indetectable para el casino
 // ============================================================
 const { NumberProcessor } = require('../capture/number-processor');
-const { CDPCapture } = require('../capture/cdp-capture');
 const { OCRCapture } = require('../capture/ocr-capture');
 const { randomDelay } = require('../utils/helpers');
 const log = require('../utils/logger');
@@ -19,14 +16,8 @@ class BaseCasino {
     this.context = null;
     this.processor = new NumberProcessor(name);
 
-    // Modo de captura: 'cdp' (default) o 'ocr'
-    this.captureMode = (config.CAPTURE_MODE || 'cdp').toLowerCase();
-
-    // CDP capture (default)
-    this.cdp = new CDPCapture(config, (num) => this._onCaptureNumber(num));
-
-    // OCR capture (fallback)
-    this.ocr = new OCRCapture(config, (num) => this._onCaptureNumber(num));
+    // OCR capture
+    this.ocr = new OCRCapture(config, (num) => this._onOCRNumber(num));
 
     this.running = false;
     this.recoveryCount = 0;
@@ -63,7 +54,7 @@ class BaseCasino {
   }
 
   /**
-   * Inicia la captura: navega al casino y empieza deteccion
+   * Inicia la captura: navega al casino y empieza OCR
    */
   async start(context) {
     this.context = context;
@@ -72,7 +63,7 @@ class BaseCasino {
 
     log.info(this.name, 'Iniciando conexion...');
     log.info(this.name, `URL: ${this.getRouletteURL()}`);
-    log.info(this.name, `Modo: ${this.captureMode.toUpperCase()} — ${this.captureMode === 'cdp' ? 'interceptacion de red (indetectable)' : 'OCR (Tesseract.js)'}`);
+    log.info(this.name, 'Modo: OCR (Tesseract.js) — indetectable');
 
     try {
       // 1. Crear nueva pagina
@@ -92,15 +83,9 @@ class BaseCasino {
       await randomDelay(8000, 12000);
       if (this._wasStopped()) { log.warn(this.name, 'Cancelado esperando carga'); return false; }
 
-      // 5. Iniciar captura segun modo
-      if (this.captureMode === 'cdp') {
-        log.info(this.name, 'Iniciando captura CDP (interceptacion de WebSocket)...');
-        await this.cdp.init();
-        this.cdp.start(this.page);
-      } else {
-        log.info(this.name, 'Iniciando escaneo OCR de la pantalla...');
-        this.ocr.start(this.page);
-      }
+      // 5. Iniciar escaneo OCR
+      log.info(this.name, 'Iniciando escaneo OCR de la pantalla...');
+      this.ocr.start(this.page);
 
       // 6. Grace period (ignorar numeros de la carga inicial)
       this._activateGrace(15000);
@@ -109,8 +94,7 @@ class BaseCasino {
       this.recoveryCount = 0;
       this.consecutiveRecoveryFails = 0;
 
-      const modeLabel = this.captureMode === 'cdp' ? 'CDP (indetectable)' : 'OCR';
-      log.info(this.name, `>>> CAPTURA ${modeLabel.toUpperCase()} ACTIVA — esperando numeros... <<<`);
+      log.info(this.name, '>>> CAPTURA OCR ACTIVA — esperando numeros... <<<');
 
       return true;
     } catch (err) {
@@ -133,7 +117,6 @@ class BaseCasino {
       this.graceTimeout = null;
     }
 
-    await this.cdp.cleanup();
     await this.ocr.cleanup();
 
     try {
@@ -157,7 +140,6 @@ class BaseCasino {
     log.warn(this.name, `Recovery #${this.recoveryCount} — intentando restaurar...`);
 
     try {
-      await this.cdp.cleanup();
       await this.ocr.cleanup();
 
       if (this.page && !this.page.isClosed()) {
@@ -180,12 +162,7 @@ class BaseCasino {
       log.info(this.name, 'Esperando 8s a que el juego interne cargue...');
       await randomDelay(6000, 10000);
 
-      if (this.captureMode === 'cdp') {
-        await this.cdp.init();
-        this.cdp.start(this.page);
-      } else {
-        this.ocr.start(this.page);
-      }
+      this.ocr.start(this.page);
       this._activateGrace(15000);
 
       this.status = 'capturing';
@@ -209,9 +186,9 @@ class BaseCasino {
   }
 
   /**
-   * Callback cuando se detecta un numero (CDP u OCR)
+   * Callback cuando OCR detecta un numero
    */
-  async _onCaptureNumber(number) {
+  async _onOCRNumber(number) {
     if (!this.running) return;
 
     if (this.graceActive) {
@@ -219,8 +196,7 @@ class BaseCasino {
       return;
     }
 
-    const source = this.captureMode === 'cdp' ? 'cdp' : 'ocr';
-    await this.processor.process(number, source, (num, color) => this.api.sendNumber(num, color));
+    await this.processor.process(number, 'ocr', (num, color) => this.api.sendNumber(num, color));
   }
 
   _activateGrace(ms) {
@@ -234,14 +210,13 @@ class BaseCasino {
   }
 
   getStats() {
-    const captureStats = this.captureMode === 'cdp' ? this.cdp.getStats() : this.ocr.getStats();
     return {
       ...this.processor.getStats(),
-      ...captureStats,
+      ...this.ocr.getStats(),
       status: this.status,
       recoveryCount: this.recoveryCount,
       url: this.dynamicUrl || this.getRouletteURL(),
-      captureMode: this.captureMode,
+      captureMode: 'ocr',
     };
   }
 }
