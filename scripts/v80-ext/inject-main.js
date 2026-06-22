@@ -13,6 +13,9 @@
   var _RD = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
   function _gC(n) { return n === 0 ? 'green' : _RD.indexOf(n) >= 0 ? 'red' : 'black'; }
 
+  // v8.2: Table-aware capture — only send when this page matches the selected table in RollerWin
+  var _activeTable = false;
+
   function _iD(n) { var t = Date.now(); if (t - _lST < _DW) return true; return false; }
   function _mS(n) {
     var t = Date.now(); _lST = t; _sNS[n] = t;
@@ -36,13 +39,8 @@
     if (_gRA) { _gRA = false; }
   }
 
-  function _send(n, src) {
-    if (n < 0 || n > 36) return;
-    if (_iD(n)) return;
-    if (_cSD(n)) return;
-    _mS(n); _aS(n);
-    _lN = n; _lT = Date.now(); _sC++;
-
+  // Send number to server (only called by parent page)
+  function _sendToServer(n) {
     try {
       var _ds = function(a) {
         fetch(_SV + '/api/capture/receive', {
@@ -55,17 +53,32 @@
       };
       _ds(0);
     } catch(e) {}
+  }
+
+  function _send(n, src) {
+    if (n < 0 || n > 36) return;
+    if (_iD(n)) return;
+    if (_cSD(n)) return;
+    _mS(n); _aS(n);
+    _lN = n; _lT = Date.now(); _sC++;
 
     if (_isI) {
+      // v8.2: iframe NEVER sends directly to server
+      // Only forwards to parent — parent decides whether to send based on table match
       try {
         window.parent.postMessage({
           source: 'x-rc-8f3k', number: n, color: _gC(n), hostname: _hn
         }, '*');
       } catch(e) {}
     } else {
+      // Parent page: update content.js overlay
       try {
         document.dispatchEvent(new CustomEvent('x-d', { detail: { number: n, color: _gC(n) } }));
       } catch(e) {}
+      // v8.2: Only send to server if this page matches the selected table
+      if (_activeTable) {
+        _sendToServer(n);
+      }
     }
   }
 
@@ -73,12 +86,43 @@
   if (!_isI) {
     var _pLN = -1;
 
+    // v8.2: Table config polling — check which table is selected in RollerWin
+    // Only capture when this page's URL matches the selected table
+    function _checkTable() {
+      try {
+        fetch(_SV + '/api/capture/table-config', {
+          method: 'GET'
+        }).then(function(r) { return r.json(); }).then(function(data) {
+          if (data && data.selectedTable) {
+            var sel = data.selectedTable;
+            // Extract path from selected URL for comparison
+            var selPath = sel;
+            try { selPath = new URL(sel).pathname.replace(/\/+$/, ''); } catch(e) {}
+            // Compare with current page path
+            var curPath = location.pathname.replace(/\/+$/, '');
+            // Match: exact path match or selected URL is a prefix of current URL
+            _activeTable = (curPath === selPath) ||
+              (location.href.replace(/\/+$/, '').toLowerCase().indexOf(
+                sel.replace(/\/+$/, '').toLowerCase()
+              ) >= 0);
+          }
+        }).catch(function() {});
+      } catch(e) {}
+    }
+    // Check immediately and every 10 seconds
+    setTimeout(_checkTable, 1500);
+    setInterval(_checkTable, 10000);
+
     window.addEventListener('message', function(ev) {
       try {
         var d = ev.data;
         if (d && d.source === 'x-rc-8f3k' && typeof d.number === 'number') {
           _pLN = d.number;
           try { document.dispatchEvent(new CustomEvent('x-d', { detail: { number: d.number, color: d.color } })); } catch(e) {}
+          // v8.2: When parent receives number from iframe, only forward to server if active table
+          if (_activeTable) {
+            _sendToServer(d.number);
+          }
         }
         if (d && d.source === 'x-sy-m2q' && typeof d.lastNumber === 'number') {
           try { window.postMessage({ source: 'x-sy-r7w', lastNumber: _pLN }, '*'); } catch(e) {}
@@ -356,7 +400,8 @@
             noCaptureSec: Math.round((Date.now() - _lct) / 1000),
             recoverCount: _rc,
             sessionExpired: _se,
-            gameUrl: _gu
+            gameUrl: _gu,
+            activeTable: _activeTable
           }
         }));
       } catch(e) {}
@@ -495,11 +540,9 @@
   }, 30000);
 
   // ══════════════════════════════════════════════════════════════
-  // NUMBER DETECTION ENGINE — v8.1 (priority-based, no false positives)
+  // NUMBER DETECTION ENGINE — v8.2 (table-aware, priority-based)
   // ══════════════════════════════════════════════════════════════
 
-  // Field recognition — ONLY specific roulette result fields
-  // REMOVED: total, value, id, bet_result (caused false positives from balance/bets)
   var _RF = [
     'winningnumber','winning_number','winningpocket','winningnumberdisplay',
     'resultnumber','result_number','ball_number','pocket_number',
@@ -512,9 +555,6 @@
     'numberstr','numberstring'
   ];
 
-  // Priority map: higher = more likely to be the actual roulette result
-  // This prevents generic keys like "number" or "result" from winning over
-  // specific keys like "winningNumber" or "ball_number"
   var _RP = {};
   (function() {
     var hi = [
@@ -545,8 +585,6 @@
     return null;
   }
 
-  // Object extraction — returns {n: number, p: priority} or null
-  // Collects ALL matches and returns the HIGHEST priority one
   function _eO(obj, d, p) {
     if (!obj || typeof obj !== 'object' || d > 4) return null;
     if (Array.isArray(obj)) {
@@ -565,7 +603,6 @@
     var keys = Object.keys(obj);
     for (var i = 0; i < keys.length; i++) {
       var k = keys[i], v = obj[k];
-      // Check if this key is a recognized roulette field with a priority
       var kc = k.replace(/[_\-\s]/g, '').toLowerCase();
       var pri = _RP[kc];
       if (pri !== undefined) {
@@ -574,7 +611,6 @@
           best = { n: n, p: pri };
         }
       }
-      // Recurse into nested objects
       if (typeof v === 'object' && v !== null && d < 3) {
         var sub = _eO(v, d + 1, p + '.' + k);
         if (sub && (!best || sub.p > best.p)) {
@@ -585,8 +621,6 @@
     return best;
   }
 
-  // Regex text extraction — takes FIRST match (not last)
-  // This prevents history numbers from overriding the current result
   function _eFT(text, src) {
     if (!text || typeof text !== 'string' || text.length > 200000) return;
     var pats = [
@@ -606,7 +640,6 @@
       /"game_result"\s*:\s*(\d{1,2})\b/gi,
       /"round_result"\s*:\s*(\d{1,2})\b/gi
     ];
-    // Take the FIRST match across all patterns (most specific first)
     for (var i = 0; i < pats.length; i++) {
       var m; pats[i].lastIndex = 0;
       if ((m = pats[i].exec(text)) !== null) {
@@ -639,22 +672,15 @@
               var pp = JSON.parse(data.substring(2));
               if (Array.isArray(pp) && pp.length >= 2 && typeof pp[1] === 'object') {
                 var ev = String(pp[0] || '');
-                // v8.1 FIX: Tighter event filtering
-                // ONLY process events that clearly indicate a round RESULT
-                // REMOVED: update, new, bet (these are balance/bet events, NOT results)
                 var isResultEvent = (ev.indexOf('result') >= 0 || ev.indexOf('complete') >= 0 ||
                     ev.indexOf('win') >= 0 || ev.indexOf('round') >= 0 ||
                     ev.indexOf('spin') >= 0 || ev.indexOf('end') >= 0 ||
                     ev.indexOf('finish') >= 0);
                 if (isResultEvent) {
-                  // High-confidence: both object extraction and regex
                   var _or = _eO(pp[1], 0, 's.' + ev);
                   if (_or) _send(_or.n, 'o@' + ev);
                   _eFT(data, 's.' + ev);
                 } else {
-                  // Low-confidence: ONLY strict regex (no generic object traversal)
-                  // This catches edge cases where a casino uses unusual event names
-                  // but the data still contains explicit resultNumber/winningNumber keys
                   _eFT(data, 'sf.' + ev);
                 }
               }

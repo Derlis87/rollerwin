@@ -12,7 +12,7 @@
   var _ci = null;
   var _dt = null;
   var _en = true;
-  var _ka = { a: true, c: 0, r: 'pending', n: 0, v: false, x: 0 };
+  var _ka = { a: true, c: 0, r: 'pending', n: 0, v: false, x: 0, t: false };
 
   var _R = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
   function _gc(n) { return n === 0 ? 'green' : _R.indexOf(n) >= 0 ? 'red' : 'black'; }
@@ -36,7 +36,8 @@
   function _rs() {
     if (!_st) return;
     var l = [];
-    l.push('v8.0 | ' + _cn);
+    l.push('v8.2 | ' + _cn);
+    if (!_ka.t) { l.push('MESA NO SELECCIONADA'); }
     l.push('Keep-alive: #' + _ka.c + ' | HTTP: ' + _ka.r);
     if (_ka.v) {
       l.push('RECUPERANDO... (#' + _ka.x + ')');
@@ -46,7 +47,7 @@
     }
     _st.textContent = l.join('\n');
     if (_dt) {
-      var col = _ka.v ? '#f59e0b' : (!_ka.a || _ka.r === 401 || _ka.r === 403) ? '#ef4444' : '#22c55e';
+      var col = !_ka.t ? '#f59e0b' : _ka.v ? '#f59e0b' : (!_ka.a || _ka.r === 401 || _ka.r === 403) ? '#ef4444' : '#22c55e';
       _dt.style.background = col;
       _dt.style.boxShadow = '0 0 6px ' + col;
     }
@@ -59,7 +60,7 @@
     if (e.detail && typeof e.detail.number === 'number') _ui(e.detail.number);
   });
   document.addEventListener('x-s', function(e) {
-    if (e.detail) _ka = { a: e.detail.status === 'alive', c: e.detail.keepAliveCount || 0, r: e.detail.lastResponse || '?', n: e.detail.noCaptureSec || 0, v: e.detail.status === 'recovering', x: e.detail.recoverCount || 0 };
+    if (e.detail) _ka = { a: e.detail.status === 'alive', c: e.detail.keepAliveCount || 0, r: e.detail.lastResponse || '?', n: e.detail.noCaptureSec || 0, v: e.detail.status === 'recovering', x: e.detail.recoverCount || 0, t: !!e.detail.activeTable };
     _rs();
   });
 
@@ -70,10 +71,10 @@
     c.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:999999;font-family:-apple-system,sans-serif;font-size:12px;display:flex;flex-direction:column;align-items:flex-end;gap:6px;pointer-events:none;';
     var p = document.createElement('div');
     p.style.cssText = 'pointer-events:auto;background:rgba(0,0,0,0.92);border:1px solid #22c55e;border-radius:10px;padding:10px 14px;color:white;max-width:300px;min-width:220px;';
-    p.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;"><div id="x-d2" style="width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 6px #22c55e;"></div><span style="font-size:11px;font-weight:600;color:#e4e4e7;">RollerWin v8.0</span><span style="font-size:9px;color:#71717a;margin-left:auto;">' + _cn + '</span></div>';
+    p.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;"><div id="x-d2" style="width:8px;height:8px;border-radius:50%;background:#f59e0b;box-shadow:0 0 6px #f59e0b;"></div><span style="font-size:11px;font-weight:600;color:#e4e4e7;">RollerWin v8.2</span><span style="font-size:9px;color:#71717a;margin-left:auto;">' + _cn + '</span></div>';
     _st = document.createElement('div');
     _st.style.cssText = 'font-size:10px;color:#a1a1aa;white-space:pre-line;line-height:1.5;';
-    _st.textContent = 'v8.0 | ' + _cn + '\nEsperando resultados...';
+    _st.textContent = 'v8.2 | ' + _cn + '\nVerificando mesa...';
     var lr = document.createElement('div');
     lr.style.cssText = 'margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.1);display:flex;align-items:center;gap:8px;';
     lr.innerHTML = '<span style="font-size:10px;color:#71717a;">Ultimo:</span><span id="x-n" style="width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:white;background:#52525b;">-</span>';
