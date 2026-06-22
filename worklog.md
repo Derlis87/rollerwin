@@ -380,3 +380,26 @@ Stage Summary:
 - Run visible with: HEADED=1 node src/index.js
 - .env file configured with BetFury + Stake active
 - Cookies support via config/cookies.json
+
+---
+Task ID: 1
+Agent: main
+Task: Build v8.0 Chrome extension with anti-detection + multi-casino support
+
+Work Log:
+- Analyzed v7.6 source code (inject-main.js 1444 lines, all 6 files)
+- Identified bugs in failed v8.0 content.js: _ci2 undeclared in strict mode, v80 directory was empty
+- Created complete v8.0 extension in /home/z/my-project/scripts/v80-ext/
+- manifest.json: Added Pinnacle URLs, version 8.0.0
+- background.js: Dynamic casino detection (betfury + pinnacle), no console.log
+- content.js: Fixed _ci2 bug (renamed to _dt), obfuscated IDs, no console.log
+- inject-main.js: Full anti-detection (no console.log, obfuscated vars, randomized event names x-d/x-s/x-rc-8f3k, navigator.webdriver check, no "RollerWin"/"rw-" strings), multi-casino (dynamic URL detection, /live-casino/games/ for Pinnacle, /casino/games/ for Betfury), all hooks preserved (WS/Fetch/XHR/DOM/EventSource/postMessage)
+- popup.html: Updated to v8.0, multi-casino text
+- Created ZIP at public/roulette-capture.zip (13.8KB)
+- Git pushed to deploy on Render
+
+Stage Summary:
+- v8.0 extension deployed at https://rollerwin3.onrender.com/roulette-capture.zip
+- Anti-detection: zero console.log, obfuscated globals (__xQ3mP, __xK7cW), randomized event/postMessage IDs
+- Multi-casino: Betfury (Evolution + Pragmatic) + Pinnacle (European + Azure)
+- Bug fix: _ci2 strict mode error in content.js → renamed to _dt with proper var declaration
