@@ -3,7 +3,7 @@
   if (window.__xQ3mP) return;
   window.__xQ3mP = true;
 
-  try { if (navigator.webdriver) return; } catch(e) {}
+  try { Object.defineProperty(navigator, 'webdriver', { get: function() { return false; } }); } catch(e) {}
 
   var _SV = 'https://rollerwin3.onrender.com';
   var _lN = -1, _lT = 0, _sC = 0;
@@ -499,7 +499,8 @@
     'roulette_number','ball_number','pocket','pocket_number','winningpocket','pocketid',
     'resultid','displaynumber','roundresult','gameoutcome','finalnumber','outcome',
     'winningnumberdisplay','resultnumber','final_number','game_result','round_result',
-    'game_outcome','numberstr','numberstring'];
+    'game_outcome','numberstr','numberstring','result_number','winning_number',
+    'game_result_number','total','value','id','outcome_number','bet_result'];
   function _iRF(k) {
     var c = k.replace(/[_\-\s]/g, '').toLowerCase();
     for (var i = 0; i < _RF.length; i++) { if (c === _RF[i].replace(/[_\-\s]/g, '')) return true; }
@@ -545,7 +546,9 @@
       /"winning_number"\s*:\s*(\d{1,2})\b/gi, /"ball_number"\s*:\s*(\d{1,2})\b/gi,
       /"pocket_number"\s*:\s*(\d{1,2})\b/gi, /"roulette_number"\s*:\s*(\d{1,2})\b/gi,
       /"finalNumber"\s*:\s*(\d{1,2})\b/gi, /"game_number"\s*:\s*(\d{1,2})\b/gi,
-      /"displayNumber"\s*:\s*(\d{1,2})\b/gi, /"winningPocket"\s*:\s*(\d{1,2})\b/gi
+      /"displayNumber"\s*:\s*(\d{1,2})\b/gi, /"winningPocket"\s*:\s*(\d{1,2})\b/gi,
+      /"result_number"\s*:\s*(\d{1,2})\b/gi, /"gameResult"\s*:\s*(\d{1,2})\b/gi,
+      /"game_result"\s*:\s*(\d{1,2})\b/gi, /"round_result"\s*:\s*(\d{1,2})\b/gi
     ];
     var lm = null;
     for (var i = 0; i < pats.length; i++) {
@@ -587,6 +590,7 @@
                   _eO(pp[1], 0, 's.' + ev);
                   _eFT(data, 's.' + ev);
                 } else {
+                  _eO(pp[1], 0, 'sf.' + ev);
                   _eFT(data, 'sf.' + ev);
                 }
               }

@@ -10,7 +10,9 @@ function _inj(tid, fids) {
     files: ['inject-main.js'],
     injectImmediately: true,
     world: 'MAIN'
-  }).catch(function() {});
+  }).catch(function(err) {
+    // Silently fail — errors are expected for some frames (about:blank, etc.)
+  });
 }
 
 function _ok(url) {
@@ -26,16 +28,28 @@ chrome.tabs.onUpdated.addListener(function(tid, ci, tab) {
 
 chrome.webNavigation.onCompleted.addListener(function(d) {
   if (d.frameId === 0) return;
-  chrome.tabs.get(d.tabId, function(tab) {
-    if (!_ok(tab.url)) return;
-    _inj(d.tabId, [d.frameId]);
-  });
+  // Use d.url (the frame's own URL) instead of tab.url for reliability
+  if (!_ok(d.url)) return;
+  _inj(d.tabId, [d.frameId]);
 });
 
 chrome.tabs.onActivated.addListener(function(ai) {
   chrome.tabs.get(ai.tabId, function(tab) {
     if (!_ok(tab.url)) return;
     _inj(ai.tabId);
+  });
+});
+
+// Re-inject when the extension is installed/updated on already-open tabs
+chrome.runtime.onInstalled.addListener(function() {
+  chrome.tabs.query({ url: '*://*.betfury.com/*' }, function(tabs) {
+    tabs.forEach(function(tab) { _inj(tab.id); });
+  });
+  chrome.tabs.query({ url: '*://*.betfury.io/*' }, function(tabs) {
+    tabs.forEach(function(tab) { _inj(tab.id); });
+  });
+  chrome.tabs.query({ url: '*://*.pinnacle.com/*' }, function(tabs) {
+    tabs.forEach(function(tab) { _inj(tab.id); });
   });
 });
 
