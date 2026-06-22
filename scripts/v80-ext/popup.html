@@ -19,6 +19,7 @@
     .total strong { color: #22c55e; font-size: 18px; }
     .btn-inject { width: 100%; padding: 8px; background: #166534; color: white; border: 1px solid #22c55e; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; margin-bottom: 6px; }
     .btn-inject:hover { background: #15803d; }
+    .btn-inject:active { background: #14532d; }
     .server { font-size: 9px; color: #52525b; text-align: center; margin-top: 8px; }
     .info { font-size: 9px; color: #3f3f46; text-align: center; margin-top: 4px; line-height: 1.4; }
   </style>
@@ -27,7 +28,7 @@
   <div class="header">
     <div class="dot" id="dot"></div>
     <div class="title">RollerWin Capture</div>
-    <div class="version">v8.0</div>
+    <div class="version">v7.5</div>
   </div>
   <div class="status" id="status">Cargando...</div>
   <div class="number-display">
@@ -42,40 +43,71 @@
   </div>
   <button class="btn-inject" id="btnInject">Forzar Inyeccion en Frames</button>
   <div class="server">Servidor: rollerwin3.onrender.com</div>
-  <div class="info">v8.0 Anti-Detect | Multi-Casino<br>Betfury + Pinnacle</div>
+  <div class="info">MAIN world injection: captura numeros<br>de iframes cross-origin de Evolution</div>
+
   <script>
     var dot = document.getElementById('dot');
     var status = document.getElementById('status');
     var circle = document.getElementById('numCircle');
     var total = document.getElementById('totalCount');
+
     function updateUI(data) {
       if (data.isConnected && data.totalCaptured > 0) {
         dot.classList.remove('off');
-        status.textContent = 'Activo - Capturando';
-        if (data.lastNumber) { circle.textContent = data.lastNumber.number; circle.className = 'number-circle ' + data.lastNumber.color; }
+        status.textContent = 'Activo - MAIN world inyectado';
+        if (data.lastNumber) {
+          circle.textContent = data.lastNumber.number;
+          circle.className = 'number-circle ' + data.lastNumber.color;
+        }
         total.textContent = data.totalCaptured;
       } else if (data.isConnected) {
         dot.classList.remove('off');
         status.textContent = 'Activo - Esperando numeros...';
-        circle.textContent = '-'; circle.className = 'number-circle'; total.textContent = '0';
+        circle.textContent = '-';
+        circle.className = 'number-circle';
+        total.textContent = '0';
       } else {
         dot.classList.add('off');
-        status.textContent = 'Abri Betfury o Pinnacle para activar';
+        status.textContent = 'Abri betfury.com para activar';
         total.textContent = '0';
       }
     }
+
     chrome.runtime.sendMessage({ type: 'getStatus' }, function(resp) {
-      if (!resp) { status.textContent = 'Abri Betfury o Pinnacle para activar'; dot.classList.add('off'); return; }
+      if (!resp) {
+        status.textContent = 'Abri betfury.com para activar';
+        dot.classList.add('off');
+        return;
+      }
       updateUI(resp);
     });
+
     chrome.runtime.onMessage.addListener(function(msg) {
-      if (msg.type === 'number') { updateUI({ isConnected: true, lastNumber: { number: msg.number, color: msg.color }, totalCaptured: msg.total }); }
+      if (msg.type === 'number') {
+        updateUI({
+          isConnected: true,
+          lastNumber: { number: msg.number, color: msg.color },
+          totalCaptured: msg.total
+        });
+      }
     });
+
+    // Boton de forzar inyeccion
     document.getElementById('btnInject').addEventListener('click', function() {
-      this.textContent = 'Inyectando...'; this.style.opacity = '0.6'; var self = this;
+      this.textContent = 'Inyectando...';
+      this.style.opacity = '0.6';
+      var self = this;
       chrome.runtime.sendMessage({ type: 'forceInject' }, function(resp) {
-        self.textContent = 'Forzar Inyeccion en Frames'; self.style.opacity = '1';
-        if (resp && resp.ok) { self.textContent = 'Inyeccion completada!'; self.style.background = '#14532d'; setTimeout(function() { self.textContent = 'Forzar Inyeccion en Frames'; self.style.background = '#166534'; }, 2000); }
+        self.textContent = 'Forzar Inyeccion en Frames';
+        self.style.opacity = '1';
+        if (resp && resp.ok) {
+          self.textContent = 'Inyeccion completada!';
+          self.style.background = '#14532d';
+          setTimeout(function() {
+            self.textContent = 'Forzar Inyeccion en Frames';
+            self.style.background = '#166534';
+          }, 2000);
+        }
       });
     });
   </script>

@@ -1,178 +1,1049 @@
+// RollerWin Capture v7.6 - MAIN WORLD DETECTION ENGINE
+// SOLO detecta numeros desde iframes (donde corre Evolution)
+// El parent page SOLO retransmite lo que llega via postMessage desde iframes
+// FIX v5.0: DOM Scanner capturaba numeros del historial (circulos viejos)
+// FIX v5.1: extractObj toma ULTIMO elemento, regex ultimo match, excluye URLs historial
+// FIX v5.2: Buffer GLOBAL eliminado — bloqueaba repeticiones legitimas de ruleta
+// FIX v6.0: AUTO-RECOVERY COMPLETO reescrito:
+//   - Persistencia en localStorage (sobrevive recargas de pagina)
+//   - Busqueda de botones ampliada (div/span/a/button, no solo button)
+//   - Deteccion de sesion expirada via keep-alive 401/403
+//   - checkPlayButton SIEMPRE activo (no depende de _recovering)
+//   - Click OK primero, esperar cierre, luego navegar
+//   - Deteccion de pagina "Jugar" sin depender de estado
+// FIX v6.4: DEDUP DEFINITIVO — 100% fiel a la secuencia real:
+//   - ELIMINADO _lastSentNumber: bloqueaba repetidos legitimas (ej: 15, 15)
+//   - DEDUP por tiempo 9s: bloquea multiples hooks del MISMO giro unicamente
+//   - DOM Scanner con change-detect + 15s: mismo numero visible >15s = nuevo giro
+//   - Sync parent↔iframe: popula _sentNumbers (no _lastSentNumber)
+// FIX v6.5: 3 BUGS DEFINITIVOS:
+//   - BUG 1 (Duplicados/Skips): Servidor ELIMINO sequence dedup. Solo dedup por tiempo.
+//   - BUG 2 (Skips): WS hook ampliado + fallback extractFromText.
+//   - BUG 3 (Session Recovery): _recoveryInProgress PERSISTIDO en localStorage.
+// FIX v6.6: IFRAME SESSION RECOVERY — el bug que causaba "Recovers: 0":
+//   - El modal "SESIÓN FINALIZADA" aparece DENTRO del iframe (Evolution),
+//     NO en el parent. El parent NO puede ver el DOM del iframe.
+//   - Antes: parent buscaba modal en su propio DOM → nunca lo encontraba.
+//   - Ahora: iframe detecta modal → postMessage al parent → recovery.
+//   - Reload si sin capturas >120s sin importar keep-alive (iframe muerto).
+//   - iframe tambien detecta fetch 401/403 y notifica al parent.
+//   - iframe detecta falta de actividad >90s y notifica al parent.
+// FIX v6.7: 3 BUGS CRITICOS:
+//   - BUG 1 (Números saltados): DEDUP por VALOR bloqueaba repeticiones legítimas
+//     (ej: 15,15). Ahora dedup por TIEMPO GLOBAL: solo bloquea si se envió
+//     CUALQUIER número en los últimos 9s, sin importar el valor.
+//   - BUG 2 (Nueva pestaña): checkPlayButton clickeaba <a target="_blank">
+//     al recuperar sesión. Ahora IGNORA elementos con target="_blank".
+//     location.href → location.replace() para forzar misma pestaña.
+//   - BUG 3 (Duplicados): syncLastNumber mejorado + dedup global previene
+//     re-envío del último número cuando el iframe se recarga.
+// FIX v7.6: 4 BUGS CRITICOS DE RECOVERY:
+//   - BUG 1 (Número saltado al reiniciar mesa): syncLastNumber seteaba
+//     _lastSentTimestamp, bloqueando DEDUP-TIME por 9s. El DOM Scanner
+//     no podía capturar el número del gap. Ahora sync NO toca _lastSentTimestamp.
+//   - BUG 2 (MutationObserver 2s muy lento): Si un número aparece y cambia
+//     en <2s durante restart, se pierde. Reducido a 500ms.
+//   - BUG 3 (Sin Gap Recovery): Agregado scanner agresivo cuando hay gap >22s.
+//     Escanea DOM cada 3s hasta capturar un número. También se activa
+//     al reconectar WS.
+//   - BUG 4 (iframe dead 90s muy lento): Reducido a 45s + detección de
+//     WS reconnect para escaneo inmediato del DOM.
 (function() {
   'use strict';
-  if (window.__xQ3mP) return;
-  window.__xQ3mP = true;
 
-  try { Object.defineProperty(navigator, 'webdriver', { get: function() { return false; } }); } catch(e) {}
+  if (window.__rwMainV73) return;
+  window.__rwMainV73 = true;
 
-  var _SV = 'https://rollerwin3.onrender.com';
-  var _lN = -1, _lT = 0, _sC = 0;
-  var _lST = 0, _DW = 6000, _sNS = {};
-  var _isI = (window.self !== window.top);
-  var _hn = location.hostname || '';
-  var _RD = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
-  function _gC(n) { return n === 0 ? 'green' : _RD.indexOf(n) >= 0 ? 'red' : 'black'; }
+  var SERVER = 'https://rollerwin3.onrender.com';
+  var lastNum = -1;
+  var lastTime = 0;
+  var sentCount = 0;
 
-  // ══════════════════════════════════════════════════════════════════
-  // v8.3: COMPLETE REWRITE — Fix wrong number detection
+  // ═══ DEDUP v6.4: Dedup por TIEMPO — 100% fiel a la secuencia real ═══
+  // REGLA: Un numero se envía UNA VEZ por giro, sin importar su valor.
+  // Si el mismo numero cae en giros consecutivos (ej: 15, 15), AMBOS se capturan.
+  // Solo se bloquea si multiples hooks (WS, Fetch, XHR, DOM) detectan el
+  // MISMO giro — dedup por tiempo de 9s cubre esto.
   //
-  // ROOT CAUSE of v8.2 failure:
-  //   1. Parent page ran detection hooks too — caught numbers from
-  //      lobby/balance/non-game data
-  //   2. _activeTable URL matching was fragile (iframe URLs don't match)
-  //   3. No iframe identity — couldn't distinguish game iframe from ads
+  // Por que 9s? Los giros duran ~18s. El hook mas rapido (WS) detecta al
+  // inicio (T=0). El DOM Scanner corre cada 8s, max deteccion del mismo
+  // giro es T=8s (8-0=8s < 9s → bloqueado). El proximo giro a T=18s:
+  // 18-0=18s > 9s → permitido, incluso si es el mismo numero.
   //
-  // NEW APPROACH:
-  //   - ONLY iframes with actual WSS connections run number detection
-  //   - Parent page acts ONLY as relay — no detection hooks on parent
-  //   - iframe self-identifies as "game" only after confirming WSS to
-  //     known game servers (evolution, pragmatic, etc.)
-  //   - Much tighter regex: only high-specificity patterns
-  //   - Debug info sent to content.js overlay for troubleshooting
-  // ══════════════════════════════════════════════════════════════════
+  // DOM Scanner: usa change-detect con limite de 15s. Si el mismo numero
+  // lleva >15s visible en pantalla, es un NUEVO giro → permite re-enviar.
+  // v6.7 FIX: DEDUP por secuencia, NO por valor.
+  // Antes: _sentNumbers = { number: timestamp } — si cae 15,15 legítimos,
+  // el segundo 15 se bloqueaba porque el primero estaba en el mapa.
+  // Ahora: _lastSentTimestamp global — solo bloquea si CUALQUIER numero fue
+  // enviado en los ultimos 9s (independiente del valor). Los giros duran ~18s.
+  var _lastSentTimestamp = 0;
+  var _DEDUP_WINDOW = 9000;  // 9s
+  var _sentNumbersSet = {}; // Set de numeros enviados (para sync, no para dedup)
 
-  var _isGame = false;     // Only true in iframes with game WSS
-  var _wssHosts = [];      // Hostnames of connected WSS servers
-  var _activeCasino = '';  // 'betfury' or 'pinnacle' — from parent
-  var _dbg = [];           // Debug log for overlay
-
-  function _dbgAdd(msg) {
-    var t = new Date().toLocaleTimeString();
-    _dbg.push(t + ': ' + msg);
-    if (_dbg.length > 8) _dbg.shift();
-    try {
-      document.dispatchEvent(new CustomEvent('x-dbg', { detail: { log: _dbg.slice() } }));
-    } catch(e) {}
-    // If iframe, also send debug to parent
-    if (_isI) {
-      try {
-        window.parent.postMessage({ source: 'x-dbg-8f3k', log: _dbg.slice(), hostname: _hn }, '*');
-      } catch(e) {}
-    }
-  }
-
-  function _iD(n) {
-    var t = Date.now();
-    if (t - _lST < _DW) return true;
-    return false;
-  }
-  function _mS(n) {
-    var t = Date.now(); _lST = t; _sNS[n] = t;
-    for (var k in _sNS) { if (t - _sNS[k] > _DW + 5000) delete _sNS[k]; }
-  }
-  function _sLN(n) {
-    if (n >= 0 && n <= 36) { _sNS[n] = Date.now(); }
-  }
-
-  var _sQ = [], _SQM = 5, _SQW = 8000;
-  function _cSD(n) {
-    for (var i = 0; i < _sQ.length; i++) {
-      if (_sQ[i].n === n && Date.now() - _sQ[i].t < _SQW) return true;
+  function _isDuplicate(n) {
+    var now = Date.now();
+    // v6.7: Solo dedup por TIEMPO GLOBAL — si se envio CUALQUIER numero
+    // en los ultimos 9s, este hook detecta el mismo giro → bloquear.
+    // Esto permite repetidos legítimos (15,15) si estan separados >9s.
+    if (now - _lastSentTimestamp < _DEDUP_WINDOW) {
+      console.log('[RollerWin] DUP: ' + n + ' bloqueado (ultimo envio hace ' + Math.round(now - _lastSentTimestamp) + 's)');
+      return true;
     }
     return false;
   }
-  function _aS(n) {
-    _sQ.push({ n: n, t: Date.now() });
-    if (_sQ.length > _SQM) _sQ.shift();
-    _ilCT = Date.now();
-    if (_gRA) { _gRA = false; }
+
+  function _markSent(n) {
+    var now = Date.now();
+    _lastSentTimestamp = now;
+    _sentNumbersSet[n] = now;
+    // Limpiar entradas viejas (+5s de buffer)
+    for (var num in _sentNumbersSet) {
+      if (now - _sentNumbersSet[num] > _DEDUP_WINDOW + 5000) {
+        delete _sentNumbersSet[num];
+      }
+    }
   }
 
-  // Send number to server (only called by parent page)
-  function _sendToServer(n) {
+  // Sincronizar desde el parent (sobrevive recargas de iframe)
+  // Popula _sentNumbers para que el iframe recargado no re-envie el ultimo numero
+  // v7.6 FIX: NO setear _lastSentTimestamp! Solo poblar _sentNumbersSet y secuencia.
+  // Si seteamos _lastSentTimestamp, el DEDUP-TIME bloquea TODAS las capturas por 9s,
+  // impidiendo que el DOM Scanner capture el número que apareció durante el gap.
+  function syncLastNumber(n) {
+    if (n >= 0 && n <= 36) {
+      var now = Date.now();
+      _sentNumbersSet[n] = now;
+      // v7.6: NO tocar _lastSentTimestamp — dejarlo en 0 para que el primer
+      // escaneo DOM pueda capturar inmediatamente. DEDUP-SEQ previene re-envío
+      // del número sincronizado (misma valor dentro de 10s → bloqueado).
+      console.log('[RollerWin] SYNC: numero ' + n + ' marcado como enviado (desde parent, v7.6 sin timestamp)');
+    }
+  }
+
+  var isInIframe = (window.self !== window.top);
+  var hostname = location.hostname || '';
+
+  var RED = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
+
+  function getColor(n) {
+    if (n === 0) return 'green';
+    return RED.indexOf(n) >= 0 ? 'red' : 'black';
+  }
+
+  // ══════════════════════════════════════
+  // ENVIAR numero al servidor RollerWin
+  // ══════════════════════════════════════
+  function sendToServer(n, source) {
+    if (n < 0 || n > 36) return;
+
+    var now = Date.now();
+
+    // DEDUP v6.1: Map de TODOS los numeros recientes (no solo lastNum).
+    // Si el numero fue enviado en los ultimos 12s, es el mismo giro → bloquear.
+    // Los giros duran ~18s, asi que 12s jamas bloquea repetidos legitimas.
+    if (_isDuplicate(n)) {
+      console.log('[RollerWin] DEDUP: ' + n + ' bloqueado (ultimo envio hace ' + Math.round(now - _lastSentTimestamp) + 's) — ' + source);
+      return;
+    }
+
+    // v7.4: DEDUP por SECUENCIA — previene re-envío post-recovery/recarga
+    // El iframe se recarga sin estado, _lastSentTimestamp = 0, el DOM Scanner
+    // re-lee el número viejo visible. La secuencia sobrevive porque se pobló
+    // via sync o ya estaba en memoria antes de la recarga del hook.
+    if (typeof _checkSequenceDup === 'function' && _checkSequenceDup(n)) {
+      console.log('[RollerWin] DEDUP-SEQ: ' + n + ' bloqueado (en secuencia reciente) — ' + source);
+      return;
+    }
+
+    _markSent(n);
+    // v7.4: Agregar a la secuencia para dedup post-recovery
+    if (typeof _addSequence === 'function') _addSequence(n);
+    lastNum = n;
+    lastTime = now;
+    sentCount++;
+
+    console.log('[RollerWin] RESULTADO #' + sentCount + ': ' + n + ' (' + getColor(n) + ') — ' + source +
+      ' ' + (isInIframe ? '[IFRAME ' + hostname + ']' : '[PARENT]'));
+
+    // Enviar al servidor RollerWin (con reintento)
     try {
-      var _ds = function(a) {
-        fetch(_SV + '/api/capture/receive', {
+      var doSend = function(attempt) {
+        fetch(SERVER + '/api/capture/receive', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ number: n })
         }).then(function(r) {
-          if (r.ok) {} else if (a < 2) { setTimeout(function() { _ds(a + 1); }, 2000); }
-        }).catch(function() { if (a < 2) { setTimeout(function() { _ds(a + 1); }, 2000); } });
+          if (r.ok) {
+            console.log('[RollerWin] Servidor OK:', n, '(intentos:', attempt + ')');
+          } else if (attempt < 2) {
+            console.log('[RollerWin] Reintentando (' + (attempt+1) + ') HTTP', r.status);
+            setTimeout(function() { doSend(attempt + 1); }, 2000);
+          } else {
+            console.log('[RollerWin] Error HTTP tras reintentos:', r.status);
+          }
+        }).catch(function(e) {
+          if (attempt < 2) {
+            console.log('[RollerWin] Reintentando (' + (attempt+1) + ') error:', e.message);
+            setTimeout(function() { doSend(attempt + 1); }, 2000);
+          } else {
+            console.log('[RollerWin] Error red tras reintentos:', e.message);
+          }
+        });
       };
-      _ds(0);
-    } catch(e) {}
-  }
+      doSend(0);
+    } catch(e) { console.log('[RollerWin] Error fetch:', e.message); }
 
-  // Core send function
-  function _send(n, src) {
-    if (n < 0 || n > 36) return;
-    if (_iD(n)) return;
-    if (_cSD(n)) return;
-    _mS(n); _aS(n);
-    _lN = n; _lT = Date.now(); _sC++;
-
-    _dbgAdd('DETECTED #' + n + ' [' + src + '] game=' + _isGame);
-
-    if (_isI) {
-      // iframe: ALWAYS forward to parent with identity info
+    // Notificar al parent (si estamos en iframe)
+    if (isInIframe) {
       try {
         window.parent.postMessage({
-          source: 'x-rc-8f3k',
+          source: 'rollerwin-capture',
           number: n,
-          color: _gC(n),
-          hostname: _hn,
-          isGame: _isGame,
-          wssHosts: _wssHosts.slice(),
-          url: location.href.substring(0, 120)
+          color: getColor(n),
+          hostname: hostname
         }, '*');
       } catch(e) {}
     } else {
-      // Parent: update overlay
+      // CustomEvent para content.js (ISOLATED world)
       try {
-        document.dispatchEvent(new CustomEvent('x-d', { detail: { number: n, color: _gC(n) } }));
+        document.dispatchEvent(new CustomEvent('rw-number', {
+          detail: { number: n, color: getColor(n) }
+        }));
       } catch(e) {}
-      // Parent ALWAYS sends to server (it only receives from game iframes)
-      _sendToServer(n);
     }
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // GAME WSS HOSTS — Known game server domains
-  // ══════════════════════════════════════════════════════════════
-  var _KNOWN_GAME_HOSTS = [
-    'evolution', 'evolutiongaming', 'evo.com',
-    'pragmatic', 'pragmaticplay',
-    'ezugi', 'livecasino',
-    'netent', 'authentic',
-    'playtech', 'microgaming'
-  ];
+  // ══════════════════════════════════════
+  // ============ PARENT PAGE =============
+  // NO detecta numeros directamente.
+  // Solo retransmite lo que llega de los iframes via postMessage.
+  // ══════════════════════════════════════
+  if (!isInIframe) {
+    console.log('[RollerWin] PARENT page — esperando numeros de iframes via postMessage');
 
-  function _isGameHost(hostname) {
-    var h = hostname.toLowerCase();
-    for (var i = 0; i < _KNOWN_GAME_HOSTS.length; i++) {
-      if (h.indexOf(_KNOWN_GAME_HOSTS[i]) >= 0) return true;
+    // v6.4: Guardar el último número recibido para sincronizar con iframes recargados
+    var _parentLastNumber = -1;
+
+    window.addEventListener('message', function(event) {
+      try {
+        var data = event.data;
+        if (data && data.source === 'rollerwin-capture' && typeof data.number === 'number') {
+          console.log('[RollerWin] Recibido de iframe:', data.number, '(' + data.hostname + ')');
+          _parentLastNumber = data.number; // Guardar para sincronizar iframes recargados
+          // El iframe ya envio al servidor, no reenviar
+          // Solo actualizar la UI del widget
+          try {
+            document.dispatchEvent(new CustomEvent('rw-number', {
+              detail: { number: data.number, color: data.color }
+            }));
+          } catch(e) {}
+        }
+        // v6.4: Sincronizar con iframe que se recarga (popula _sentNumbers)
+        if (data && data.source === 'rollerwin-sync' && typeof data.lastNumber === 'number') {
+          // El iframe pide sincronización — enviarle el último número
+          try {
+            window.postMessage({
+              source: 'rollerwin-sync-reply',
+              lastNumber: _parentLastNumber
+            }, '*');
+          } catch(e) {}
+        }
+      } catch(e) {}
+    });
+
+    // ╔══════════════════════════════════════════════════════════════════╗
+    // ║  v6.2: AUTO-RECOVERY ULTRA-RAPIDO                              ║
+    // ║  OBJETIVO: Recovery completo en <8 segundos                     ║
+    // ║  (los giros duran ~18s, necesitamos volver antes del próximo)   ║
+    // ║                                                                ║
+    // ║  Cambios vs v6.1:                                               ║
+    // ║  - Modal detect cada 400ms (era 1s) + MutationObserver          ║
+    // ║  - Boton Jugar cada 400ms (era 1s)                             ║
+    // ║  - Keep-alive 401/403 → navigate en 150ms (era 500ms)          ║
+    // ║  - Post-load check a los 100ms (era 500ms)                     ║
+    // ║  - Keep-alive cada 45s (era 60s)                               ║
+    // ║  - Reload solo si sesion expirada + >90s sin capturas          ║
+    // ║  - ELIMINADO: iframe reconnect (reiniciaba mesa con sesion OK)  ║
+    // ╚══════════════════════════════════════════════════════════════════╝
+
+    var _keepAliveCount = 0;
+    var _lastCaptureTime = Date.now();
+    var _lastKeepAliveResponse = 'pending';
+
+    // v7.6.1: URL dinámica — se lee del servidor (table-config) o localStorage
+    var ROULETTE_URL = 'https://betfury.com/es/casino/games/roulette-live-by-evolution';
+
+    // Detectar casino actual por hostname
+    var _isPinnacle = (location.hostname || '').indexOf('pinnacle') >= 0;
+    if (_isPinnacle) {
+      ROULETTE_URL = 'https://casino.pinnacle.com/es/live-casino/games/european-roulette/';
+    }
+
+    // Poll table-config del servidor para obtener la mesa seleccionada en RollerWin
+    function _loadTableConfig() {
+      try {
+        fetch(SERVER + '/api/capture/table-config', { method: 'GET' }).then(function(r) {
+          return r.json();
+        }).then(function(data) {
+          if (data && data.selectedTable) {
+            ROULETTE_URL = data.selectedTable;
+            console.log('[RollerWin] v7.6.1: Mesa seleccionada: ' + ROULETTE_URL);
+          }
+        }).catch(function() {});
+      } catch(e) {}
+    }
+    setTimeout(_loadTableConfig, 2000);
+    setInterval(_loadTableConfig, 15000);
+
+    // v7.6.1: Detectar página de juego para Pinnacle (/live-casino/games/)
+    function isGamePage(url) {
+      if (!url) url = location.href;
+      return url.indexOf('/casino/games/') !== -1 || url.indexOf('/live-casino/games/') !== -1;
+    }
+
+    // ═══ PERSISTENCIA en localStorage ═══
+    // El estado de recovery sobrevive recargas de pagina
+    var RW_LS_KEY = 'rollerwin_recovery_v6';
+    var _rwState = JSON.parse(localStorage.getItem(RW_LS_KEY) || '{}');
+    var _recoverCount = _rwState.recoverCount || 0;
+    var _isRecovering = !!_rwState.isRecovering;
+    var _sessionExpired = !!_rwState.sessionExpired;
+    var _lastCapturePersisted = _rwState.lastCaptureTime || Date.now();
+
+    function _saveState() {
+      try {
+        localStorage.setItem(RW_LS_KEY, JSON.stringify({
+          recoverCount: _recoverCount,
+          isRecovering: _isRecovering,
+          sessionExpired: _sessionExpired,
+          lastCaptureTime: _lastCapturePersisted,
+          gameUrl: _gameUrl,
+          recoveryTimestamp: _recoveryTimestamp,
+          recoveryInProgress: _recoveryInProgress,
+          timestamp: Date.now()
+        }));
+      } catch(e) {}
+    }
+    _saveState();
+
+    // Guardar la URL de la mesa actual
+    var _gameUrl = _rwState.gameUrl || location.href;
+    var _pushStateOrig = history.pushState;
+    var _replaceStateOrig = history.replaceState;
+    if (history.pushState) {
+      history.pushState = function() {
+        var result = _pushStateOrig.apply(this, arguments);
+        if (isGamePage()) { _gameUrl = location.href; _saveState(); }
+        return result;
+      };
+    }
+    if (history.replaceState) {
+      history.replaceState = function() {
+        var result = _replaceStateOrig.apply(this, arguments);
+        if (isGamePage()) { _gameUrl = location.href; _saveState(); }
+        return result;
+      };
+    }
+    setInterval(function() {
+      if (isGamePage() && _gameUrl !== location.href) {
+        _gameUrl = location.href;
+        _saveState();
+      }
+    }, 10000);
+
+    // Recibir timestamp de última captura
+    // v6.3 FIX: NO resetear estado de recovery durante una recuperación activa
+    // Si el iframe envía un número mientras estamos recuperando, no debemos
+    // cancelar la recuperación porque el número puede ser viejo (del iframe anterior)
+    document.addEventListener('rw-number', function() {
+      _lastCaptureTime = Date.now();
+      _lastCapturePersisted = _lastCaptureTime;
+      // Solo resetear recovery si NO estamos en recovery activo
+      if (!_recoveryInProgress) {
+        _isRecovering = false;
+        _sessionExpired = false;
+      }
+      _saveState();
+    });
+
+    // v6.6 FIX: Escuchar postMessage del iframe para sesion expirada
+    // El iframe NO puede ver el DOM del parent y viceversa.
+    // Si el iframe detecta "SESIÓN FINALIZADA" o pierde conexion,
+    // envia postMessage al parent para activar recovery.
+    window.addEventListener('message', function(e) {
+      try {
+        if (e.data && e.data.source === 'rollerwin-session-expired') {
+          console.log('[RollerWin] IFRAME notifico sesion expirada: ' + e.data.reason);
+          _sessionExpired = true;
+          _saveState();
+          handleSessionExpired(e.data.reason);
+        }
+      } catch(err) {}
+    });
+
+    // ════════════════════════════════════════════════════════
+    // 1. KEEP-ALIVE + DETECCION DE SESION
+    //    v6.3 FIX: Detectar redirect a login (response.redirected + URL check)
+    //    Betfury NO devuelve 401/403 — redirige a /login con status 200.
+    //    La API fetch sigue redirects por defecto, así que response.redirected=true
+    //    y response.url cambia a la URL de login.
+    // ════════════════════════════════════════════════════════
+    
+    // Interceptar TODOS los fetch de la pagina principal para detectar sesion expirada
+    var _origFetch = window.fetch;
+    if (_origFetch && !_origFetch._rwKeepAlive) {
+      _origFetch._rwKeepAlive = true;
+      window.fetch = function(input, init) {
+        var url = '';
+        try { url = typeof input === 'string' ? input : (input && input.url ? input.url : ''); } catch(e) {}
+        var promise = _origFetch.apply(this, arguments);
+        if (promise && url) {
+          promise.then(function(r) {
+            // v6.3 FIX: Detectar redirect a login (Betfury redirige, no 401/403)
+            if (r.redirected) {
+              var respUrl = (r.url || '').toLowerCase();
+              if (respUrl.indexOf('login') !== -1 || respUrl.indexOf('signin') !== -1 || respUrl.indexOf('auth') !== -1) {
+                console.log('[RollerWin] Fetch REDIRIGIDO a login — SESION EXPIRADA!');
+                _sessionExpired = true;
+                _saveState();
+                handleSessionExpired('fetch-redirect-' + respUrl);
+                return;
+              }
+            }
+            if (r.status === 401 || r.status === 403) {
+              console.log('[RollerWin] Fetch interceptado ' + r.status + ' — SESION EXPIRADA!');
+              _sessionExpired = true;
+              _saveState();
+              handleSessionExpired('fetch-intercept-' + r.status);
+            }
+          }).catch(function() {});
+        }
+        return promise;
+      };
+    }
+    
+    // Interceptar XHR tambien
+    var _origXHROpen = XMLHttpRequest.prototype.open;
+    var _origXHRSend = XMLHttpRequest.prototype.send;
+    if (!_origXHRSend._rwKeepAlive) {
+      _origXHRSend._rwKeepAlive = true;
+      XMLHttpRequest.prototype.open = function(m, u) {
+        this._rwUrl = String(u || '');
+        return _origXHROpen.apply(this, arguments);
+      };
+      XMLHttpRequest.prototype.send = function() {
+        var self = this;
+        this.addEventListener('load', function() {
+          // v6.3 FIX: Detectar redirect via responseURL
+          var respUrl = (self.responseURL || '').toLowerCase();
+          if (respUrl.indexOf('login') !== -1 || respUrl.indexOf('signin') !== -1) {
+            console.log('[RollerWin] XHR REDIRIGIDO a login — SESION EXPIRADA!');
+            _sessionExpired = true;
+            _saveState();
+            handleSessionExpired('xhr-redirect-login');
+            return;
+          }
+          if (self.status === 401 || self.status === 403) {
+            console.log('[RollerWin] XHR interceptado ' + self.status + ' — SESION EXPIRADA!');
+            _sessionExpired = true;
+            _saveState();
+            handleSessionExpired('xhr-intercept-' + self.status);
+          }
+        });
+        return _origXHRSend.apply(this, arguments);
+      };
+    }
+
+    // Keep-alive: fetch a la pagina actual para mantener la cookie activa
+    // v6.3 FIX: Usar GET (no HEAD) para poder detectar redirect + contenido HTML de login
+    function betfuryKeepAlive() {
+      _keepAliveCount++;
+      fetch(location.pathname || '/', {
+        method: 'GET',
+        credentials: 'include',
+        redirect: 'follow'
+      }).then(function(r) {
+        _lastKeepAliveResponse = r.status;
+        if (_keepAliveCount % 3 === 0) {
+          console.log('[RollerWin] Keep-alive #' + _keepAliveCount + ' HTTP ' + r.status + (r.redirected ? ' (REDIRIGIDO a ' + r.url + ')' : ''));
+        }
+        // v6.3 FIX: Detectar redirect a login
+        if (r.redirected) {
+          var respUrl = (r.url || '').toLowerCase();
+          if (respUrl.indexOf('login') !== -1 || respUrl.indexOf('signin') !== -1) {
+            console.log('[RollerWin] Keep-alive REDIRIGIDO a login — SESION EXPIRADA!');
+            _sessionExpired = true;
+            _saveState();
+            handleSessionExpired('keepalive-redirect');
+            return;
+          }
+        }
+        // v6.3 FIX: Detectar si la respuesta es HTML de login (sin redirect)
+        // Algunas APIs retornan 200 con HTML de login embebido
+        r.clone().text().then(function(text) {
+          if (text && text.length < 5000 && text.indexOf('<') !== -1) {
+            var textLow = text.toLowerCase();
+            if ((textLow.indexOf('login') !== -1 || textLow.indexOf('sign in') !== -1) &&
+                textLow.indexOf('password') !== -1) {
+              console.log('[RollerWin] Keep-alive devolvió HTML de login — SESION EXPIRADA!');
+              _sessionExpired = true;
+              _saveState();
+              handleSessionExpired('keepalive-html-login');
+              return;
+            }
+          }
+        }).catch(function() {});
+        if (r.status === 401 || r.status === 403) {
+          console.log('[RollerWin] Keep-alive ' + r.status + ' — SESION EXPIRADA!');
+          _sessionExpired = true;
+          _saveState();
+          handleSessionExpired('keepalive-' + r.status);
+        }
+      }).catch(function(e) {
+        console.log('[RollerWin] Keep-alive error:', e.message);
+      });
+    }
+    setTimeout(betfuryKeepAlive, 1500);
+    setInterval(betfuryKeepAlive, 30000); // cada 30s
+
+    // ════════════════════════════════════════════════════════
+    // 2. BUSQUEDA AMPLIA de botones (button/div/span/a)
+    // ════════════════════════════════════════════════════════
+    function clickAnyButtonByText(texts) {
+      // Buscar en TODOS los elementos clicables, no solo <button>
+      var selectors = 'button, a, [role="button"], div[onclick], span[onclick], [class*="btn"], [class*="button"]';
+      var allBtns = document.querySelectorAll(selectors);
+      for (var i = 0; i < allBtns.length; i++) {
+        var el = allBtns[i];
+        var bt = (el.textContent || '').trim();
+        for (var j = 0; j < texts.length; j++) {
+          if (bt === texts[j]) {
+            console.log('[RollerWin] Click boton [' + el.tagName.toLowerCase() + ']: "' + bt + '"');
+            el.click();
+            return true;
+          }
+        }
+      }
+      // Fallback: buscar elementos con texto exacto que tengan cursor pointer
+      var allEls = document.querySelectorAll('div, span, a');
+      for (var i = 0; i < allEls.length; i++) {
+        var el = allEls[i];
+        var bt = (el.textContent || '').trim();
+        if (bt.length > 0 && bt.length <= 20) {
+          var style = window.getComputedStyle(el);
+          if (style.cursor === 'pointer' || el.getAttribute('role') === 'button') {
+            for (var j = 0; j < texts.length; j++) {
+              if (bt === texts[j]) {
+                console.log('[RollerWin] Click fallback [' + el.tagName.toLowerCase() + ']: "' + bt + '"');
+                el.click();
+                return true;
+              }
+            }
+          }
+        }
+      }
+      return false;
+    }
+
+    // ════════════════════════════════════════════════════════
+    // 3. HANDLE SESSION EXPIRED — Flujo centralizado
+    //    1) Click OK en el modal
+    //    2) Esperar 500ms
+    //    3) Navegar a la mesa de ruleta
+    // ════════════════════════════════════════════════════════
+    // v6.5 FIX: _recoveryInProgress PERSISTIDO en localStorage.
+    // Antes era solo `var _recoveryInProgress = false` que se reseteaba al recargar.
+    // Esto causaba que al volver de una navegacion, el cooldown no funcionara
+    // y se iniciara un loop infinito de recoveries.
+    var _recoveryInProgress = !!_rwState.recoveryInProgress;
+    // v6.3 FIX: Persistir recoveryTimestamp en localStorage para evitar loop infinito
+    var _recoveryTimestamp = _rwState.recoveryTimestamp || 0;
+    // v6.5: Safety reset — si recovery lleva >60s activo, forzar reset
+    // Esto previene que un recovery fallido quede bloqueado permanentemente
+    if (_recoveryInProgress && Date.now() - _recoveryTimestamp > 60000) {
+      console.log('[RollerWin] Reset recovery bloqueado >60s');
+      _recoveryInProgress = false;
+    }
+
+    function handleSessionExpired(reason) {
+      if (_recoveryInProgress) return;
+      var now = Date.now();
+      // v6.5 FIX: Cooldown 12s (era 15s) — respuesta mas rapida
+      if (now - _recoveryTimestamp < 12000) return; // 12s cooldown (persistido en localStorage)
+      
+      _recoveryInProgress = true;
+      _recoveryTimestamp = now;
+      _isRecovering = true;
+      _sessionExpired = true;
+      _recoverCount++;
+      _saveState();
+
+      console.log('[RollerWin] RECOVERY #' + _recoverCount + ' iniciado (' + reason + ')');
+
+      // PASO 1: Click OK en el modal si existe
+      var clicked = clickAnyButtonByText(['OK', 'Ok', 'ok', 'ACEPTAR', 'Aceptar', 'aceptar', 'VOLVER', 'Volver', 'volver', 'VUELVA', 'Vuelva', 'volvera', 'INICIAR', 'Iniciar', 'iniciar', 'CONTINUAR', 'Continuar', 'continuar']);
+      if (clicked) {
+        console.log('[RollerWin] Click OK en modal — esperando 500ms...');
+      }
+
+      // PASO 2: Esperar 500ms y navegar
+      // v6.7 FIX: Usar location.replace() en vez de location.href para
+      // forzar navegacion en la MISMA pestaña (no abre nueva pestaña)
+      setTimeout(function() {
+        var targetUrl = ROULETTE_URL;
+        if (_gameUrl && _gameUrl.indexOf('/casino/games/') !== -1 && _gameUrl.indexOf('roulette') !== -1) {
+          targetUrl = _gameUrl;
+        }
+        console.log('[RollerWin] Navegando a mesa (same tab): ' + targetUrl);
+        location.replace(targetUrl);
+      }, clicked ? 500 : 100);
+
+      // PASO 3: Safety timeout — resetear despues de 20s
+      // v6.5: Reducido a 20s. El estado se persiste para sobreviver recargas.
+      setTimeout(function() {
+        console.log('[RollerWin] Reset recovery (safety timeout 20s)');
+        _recoveryInProgress = false;
+        _saveState();
+      }, 20000);
+    }
+
+    // ════════════════════════════════════════════════════════
+    // 4. DETECT AND CLOSE ANY MODAL (sesion + saldo bajo)
+    // ════════════════════════════════════════════════════════
+    function detectAndCloseAnyModal() {
+      // v6.3 FIX: NO bloquear si _recoveryInProgress —
+      // necesitamos poder cerrar modales en CUALQUIER momento
+      // v6.3 FIX: Selectores ampliados (dialog, section, article, etc.)
+      var allEls = document.querySelectorAll('div, p, span, h1, h2, h3, dialog, section, article, main, li, label, td, th');
+
+      for (var i = 0; i < allEls.length; i++) {
+        var txt = (allEls[i].textContent || '');
+        var txtLow = txt.toLowerCase();
+
+        // v6.3 FIX: SESIÓN FINALIZADA — case-insensitive para español también
+        // Antes: txt.indexOf('SESI') fallaba si Betfury usaba "Sesión finalizada"
+        var isExpired = (txtLow.indexOf('sesi') !== -1 && txtLow.indexOf('finalizada') !== -1) ||
+                        (txtLow.indexOf('session') !== -1 && (txtLow.indexOf('expired') !== -1 || txtLow.indexOf('ended') !== -1)) ||
+                        (txtLow.indexOf('sesión') !== -1 && txtLow.indexOf('finalizada') !== -1);
+        if (isExpired) {
+          console.log('[RollerWin] SESION FINALIZADA detectada → handleSessionExpired');
+          handleSessionExpired('modal-sesion');
+          return true;
+        }
+
+        // SALDO BAJO → solo cerrar modal, no navegar
+        var isLowBalance = (txtLow.indexOf('saldo') !== -1 && txtLow.indexOf('bajo') !== -1) ||
+                           (txtLow.indexOf('balance') !== -1 && txtLow.indexOf('low') !== -1) ||
+                           (txtLow.indexOf('insufficient') !== -1 && txtLow.indexOf('balance') !== -1);
+        if (isLowBalance) {
+          if (clickAnyButtonByText(['CERRAR', 'Cerrar', 'cerrar', 'CLOSE', 'Close', 'OK', 'Ok', 'ok'])) {
+            console.log('[RollerWin] Modal SALDO BAJO → CERRAR');
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    setInterval(detectAndCloseAnyModal, 400); // v6.2: cada 400ms (era 1s)
+    try {
+      new MutationObserver(function() { detectAndCloseAnyModal(); }).observe(document.body, { childList: true, subtree: true });
+    } catch(e) {}
+
+    // ════════════════════════════════════════════════════════
+    // 5. CLICK AUTOMÁTICO en botón "Jugar" — SIEMPRE ACTIVO
+    // Ya NO depende de _isRecovering. Siempre busca el boton
+    // "Jugar" cuando estamos en la pagina del juego (preview)
+    // ════════════════════════════════════════════════════════
+    var _playButtonCooldown = 0;
+
+    // v6.7 FIX: checkPlayButton NUNCA clickea elementos con target="_blank"
+    // Eso causaba que se abriera una nueva pestaña al recuperar la sesion.
+    function checkPlayButton() {
+      if (_playButtonCooldown > Date.now()) return false;
+      var onGamePage = isGamePage();
+      if (!onGamePage) return false;
+
+      // Buscar boton Jugar/Play en TODOS los elementos clicables
+      var btns = document.querySelectorAll('button, a, [role="button"], div[onclick], [class*="btn"], [class*="button"]');
+      for (var i = 0; i < btns.length; i++) {
+        var bt = (btns[i].textContent || '').trim().toLowerCase();
+        if (bt === 'jugar' || bt === 'play' || bt === 'play now' || bt === 'spin' || bt === 'start') {
+          // v6.7: NUNCA clickear si tiene target="_blank" (abriria nueva pestaña)
+          if (btns[i].getAttribute('target') === '_blank') {
+            console.log('[RollerWin] Boton JUGAR IGNORADO (target=_blank) [' + btns[i].tagName.toLowerCase() + ']');
+            continue;
+          }
+          // v6.7: Si es un <a href> con target diferente, ignorar
+          if (btns[i].tagName.toLowerCase() === 'a' && btns[i].getAttribute('target')) {
+            console.log('[RollerWin] Boton JUGAR IGNORADO (es link con target) [' + btns[i].tagName.toLowerCase() + ']');
+            continue;
+          }
+          console.log('[RollerWin] Boton JUGAR encontrado [' + btns[i].tagName.toLowerCase() + '] — click!');
+          btns[i].click();
+          _playButtonCooldown = Date.now() + 5000; // Cooldown 5s (era 10s)
+          _isRecovering = true;
+          _saveState();
+          return true;
+        }
+      }
+      return false;
+    }
+
+    setInterval(checkPlayButton, 400); // v6.2: cada 400ms (era 1s)
+
+    // ════════════════════════════════════════════════════════
+    // 6. IFRAME MUERTO: sin capturas >60s → reload COMPLETO
+    //    v6.2 FIX: 90s (era 35s que reiniciaba con sesion activa)
+    //    v6.6 FIX: Relajada la condicion — si no hay capturas >120s,
+    //    el iframe esta claramente muerto sin importar si la sesion
+    //    del parent esta activa (keep-alive chekea parent, no iframe).
+    //    v7.6 FIX: Reducido a 60s (era 120s). 120s = 6-7 números perdidos.
+    //    60s = máximo 3-4 perdidos, pero con Gap Recovery en el iframe,
+    //    muchos de esos números ya deberían haber sido capturados.
+    // ════════════════════════════════════════════════════════
+    setInterval(function() {
+      var noCap = Date.now() - _lastCaptureTime;
+      var onGame = isGamePage();
+
+      // v7.6: Reload si estamos en juego Y sin capturas >60s
+      if (onGame && noCap > 60000 && !_recoveryInProgress) {
+        console.log('[RollerWin] Sin capturas ' + Math.round(noCap/1000) + 's — iframe muerto, reload completo...');
+        _isRecovering = true;
+        _sessionExpired = true;
+        _saveState();
+        location.reload(); // reload en la misma pestaña
+      }
+    }, 10000); // check cada 10s
+
+    // ════════════════════════════════════════════════════════
+    // 6b. DETECCIÓN AL CARGAR: ya venimos de un recovery?
+    //     v6.2: Ejecutar a los 100ms (era 500ms)
+    // ════════════════════════════════════════════════════════
+    setTimeout(function() {
+      if (_isRecovering || _sessionExpired || _recoverCount > 0) {
+        console.log('[RollerWin] Post-load: recovering=' + _isRecovering +
+          ' expired=' + _sessionExpired + ' count=' + _recoverCount);
+
+        if (!isGamePage()) {
+          console.log('[RollerWin] No en pagina de juego — navegando...');
+          handleSessionExpired('post-load-redirect');
+          return;
+        }
+
+        // Click Jugar inmediato + cerrar modales
+        console.log('[RollerWin] En pagina de juego — click Jugar + cerrar modales...');
+        checkPlayButton();
+        detectAndCloseAnyModal();
+        
+        // Segundo intento mas rapido (v6.2: 600ms era 1500ms)
+        setTimeout(function() {
+          checkPlayButton();
+          detectAndCloseAnyModal();
+        }, 600);
+        
+        // Tercer intento (v6.2: nuevo)
+        setTimeout(function() {
+          checkPlayButton();
+          detectAndCloseAnyModal();
+        }, 1200);
+      }
+    }, 100); // v6.2: ejecutar a los 100ms (era 500ms)
+
+    // ════════════════════════════════════════════════════════
+    // 7. VISIBILITY + FOCUS
+    // ════════════════════════════════════════════════════════
+    document.addEventListener('visibilitychange', function() {
+      if (!document.hidden) {
+        betfuryKeepAlive();
+        if (!isGamePage() && _recoverCount > 0) {
+          handleSessionExpired('visibility');
+        }
+        if (isGamePage()) {
+          checkPlayButton();
+          detectAndCloseAnyModal();
+        }
+      }
+    });
+
+    window.addEventListener('focus', function() {
+      betfuryKeepAlive();
+      if (isGamePage()) {
+        checkPlayButton();
+        detectAndCloseAnyModal();
+      }
+    });
+
+    // ════════════════════════════════════════════════════════
+    // 8. REPORTAR estado al content script
+    // ════════════════════════════════════════════════════════
+    setInterval(function() {
+      try {
+        document.dispatchEvent(new CustomEvent('rw-status', {
+          detail: {
+            status: _isRecovering ? 'recovering' : 'alive',
+            keepAliveCount: _keepAliveCount,
+            lastResponse: _lastKeepAliveResponse,
+            noCaptureSec: Math.round((Date.now() - _lastCaptureTime) / 1000),
+            recoverCount: _recoverCount,
+            sessionExpired: _sessionExpired,
+            gameUrl: _gameUrl
+          }
+        }));
+      } catch(e) {}
+    }, 10000);
+
+    console.log('[RollerWin] v7.6 GAP-RECOVERY+DEDUP-SEQ-10s+PER-NUMBER | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
+
+  }
+
+  // ══════════════════════════════════════
+  // ============ IFRAME (Evolution) ======
+  // AQUI es donde se detectan los numeros
+  // ══════════════════════════════════════
+  console.log('[RollerWin] IFRAME detectado:', hostname, '— activando deteccion');
+
+  // v6.6 FIX: Detectar modal "SESIÓN FINALIZADA" dentro del iframe
+  // El parent NO puede ver el DOM del iframe, asi que el iframe debe
+  // detectar el modal y notificar al parent via postMessage
+  var _iframeModalNotified = false;
+  function detectIframeModal() {
+    var allEls = document.querySelectorAll('div, p, span, h1, h2, h3, dialog, section, article, main, li, label, td, th');
+    for (var i = 0; i < allEls.length; i++) {
+      var txt = (allEls[i].textContent || '');
+      var txtLow = txt.toLowerCase();
+      // "SESIÓN FINALIZADA" / "session ended" / "session expired"
+      if ((txtLow.indexOf('sesi') !== -1 && txtLow.indexOf('finalizada') !== -1) ||
+          (txtLow.indexOf('sesión') !== -1 && txtLow.indexOf('finalizada') !== -1) ||
+          (txtLow.indexOf('session') !== -1 && (txtLow.indexOf('ended') !== -1 || txtLow.indexOf('expired') !== -1))) {
+        if (!_iframeModalNotified) {
+          _iframeModalNotified = true;
+          console.log('[RollerWin] IFRAME: SESION FINALIZADA detectada → notificando parent');
+          try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-modal-detected' }, '*'); } catch(e) {}
+        }
+        // Intentar click OK dentro del iframe tambien
+        var okBtns = allEls[i].closest('div, dialog') ? allEls[i].closest('div, dialog').querySelectorAll('button, a, [role="button"], div[onclick], span[onclick]') : [];
+        for (var j = 0; j < okBtns.length; j++) {
+          var bt = (okBtns[j].textContent || '').trim();
+          if (bt === 'OK' || bt === 'Ok' || bt === 'ok' || bt === 'ACEPTAR' || bt === 'Aceptar') {
+            console.log('[RollerWin] IFRAME: Click OK en modal sesion');
+            okBtns[j].click();
+          }
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+  setInterval(detectIframeModal, 500);
+  try { new MutationObserver(function() { detectIframeModal(); }).observe(document.body, { childList: true, subtree: true }); } catch(e) {}
+
+  // v6.6 FIX: Detectar si el iframe pierde conexion (no hay eventos WS por >60s)
+  var _iframeLastActivity = Date.now();
+  var _iframeDeadNotified = false;
+
+  // Hook fetch/XHR dentro del iframe para detectar sesion expirada
+  var _ifOrigFetch = window.fetch;
+  if (_ifOrigFetch && !_ifOrigFetch._rwIframeSess) {
+    _ifOrigFetch._rwIframeSess = true;
+    window.fetch = function(input, init) {
+      _iframeLastActivity = Date.now();
+      var promise = _ifOrigFetch.apply(this, arguments);
+      if (promise) {
+        promise.then(function(r) {
+          if (r.status === 401 || r.status === 403 || r.redirected) {
+            var respUrl = (r.url || '').toLowerCase();
+            if (r.status === 401 || r.status === 403 || respUrl.indexOf('login') !== -1) {
+              console.log('[RollerWin] IFRAME: Fetch sesion expirada ' + r.status);
+              try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-fetch-' + r.status }, '*'); } catch(e) {}
+            }
+          }
+        }).catch(function() {});
+      }
+      return promise;
+    };
+  }
+
+  // v7.6 FIX: Notificar parent si el iframe esta muerto (sin actividad >45s, era 90s)
+  // Con giros de 18s, 90s = 5 números perdidos. 45s = máximo 2-3 perdidos.
+  setInterval(function() {
+    if (!_iframeDeadNotified && Date.now() - _iframeLastActivity > 45000) {
+      _iframeDeadNotified = true;
+      console.log('[RollerWin] IFRAME: Sin actividad >45s → notificando parent + Gap Recovery');
+      try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-dead-45s' }, '*'); } catch(e) {}
+      // v7.6: También activar Gap Recovery localmente
+      startGapRecovery();
+    }
+  }, 10000); // Check cada 10s (era 15s)
+
+  // v7.6 FIX: GAP RECOVERY SCANNER
+  // Cuando hay un gap >22s sin capturas (mas de un giro de 18s), significa que
+  // se perdió al menos un número. El Gap Recovery Scanner escanea el DOM de
+  // forma agresiva cada 3s hasta capturar el número perdido.
+  // También se activa cuando el WebSocket se reconecta.
+  var _iframeLastCaptureTime = Date.now();
+  var _gapRecoveryActive = false;
+  var _gapRecoveryTimer = null;
+  var _GAP_THRESHOLD = 22000; // 22s — mas de un giro (18s)
+  var _GAP_SCAN_INTERVAL = 3000; // 3s entre escaneos de gap
+
+  // v7.6 FIX: WS Reconnect Detection
+  // Trackea cuando un WebSocket se cierra y otro se abre.
+  // Al reconectar, escanea el DOM inmediatamente para capturar el resultado perdido.
+  var _wsWasClosed = false;
+  var _wsReconnectCount = 0;
+
+  // v7.5 FIX: Dedup por SECUENCIA — previene re-envío post-recovery
+  // La dedup por tiempo (9s) no basta cuando el iframe se recarga: _lastSentTimestamp
+  // se resetea a 0, y el DOM Scanner re-lee el número viejo visible en la mesa.
+  // Secuencia guarda los últimos 5 números enviados con timestamp.
+  // v7.6: Ventana de 10s — los giros duran ~18s, así que 10s NUNCA
+  // bloquea repeticiones legítimas (15,15 consecutivos = 18s > 10s → permitido).
+  // Pero SI bloquea re-envíos post-recovery que ocurren en 1-5s.
+  // Solo bloquea si el MISMO número está en la secuencia dentro de 10s.
+  var _sentSequence = []; // Array de {number, timestamp}
+  var _SEQUENCE_MAX = 5;
+  var _SEQUENCE_WINDOW = 10000; // 10s — mucho MENOR que duración de giro (18s)
+
+  function _checkSequenceDup(n) {
+    for (var i = 0; i < _sentSequence.length; i++) {
+      if (_sentSequence[i].number === n) {
+        if (Date.now() - _sentSequence[i].timestamp < _SEQUENCE_WINDOW) {
+          return true; // Mismo número dentro de 10s → duplicado post-recovery
+        }
+      }
     }
     return false;
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // NUMBER DETECTION — Ultra-tight patterns only
-  // ══════════════════════════════════════════════════════════════
+  function _addSequence(n) {
+    _sentSequence.push({ number: n, timestamp: Date.now() });
+    if (_sentSequence.length > _SEQUENCE_MAX) _sentSequence.shift();
+    _iframeLastCaptureTime = Date.now(); // v7.6: Actualizar timestamp de captura
+    // v7.6: Si habia un gap recovery activo, desactivarlo (se capturó un número)
+    if (_gapRecoveryActive) {
+      _gapRecoveryActive = false;
+      console.log('[RollerWin] GAP RECOVERY: número capturado, desactivando scanner');
+    }
+  }
 
-  // Only these specific JSON field names → roulette result number
-  var _RF_HI = [
-    'winningnumber', 'winning_number', 'winningpocket', 'winningnumberdisplay',
-    'resultnumber', 'result_number', 'ball_number', 'pocket_number',
-    'game_result_number', 'finalnumber', 'final_number',
-    'displaynumber', 'roulette_number', 'pocketid'
+  // v7.6: Función de Gap Recovery — escaneo agresivo del DOM
+  // Busca el número visible en el DOM usando selectores más amplios.
+  // Se usa cuando hay un gap >22s sin capturas o al reconectar WS.
+  function _gapRecoveryScan() {
+    var gapSelectors = [
+      '[class*="winning-number"]',
+      '[class*="winning-pocket"]',
+      '[class*="result-display"]',
+      '[class*="result-value"]',
+      '[class*="current-result"]',
+      '[class*="game-number-display"]',
+      '[class*="number-display"]',
+      '[data-result-number]',
+      '[data-winning-number]',
+      '[data-game-result]',
+      '[class*="overlay"] [class*="result"]',
+      '[class*="announced"]',
+      '[class*="round-result"]',
+      '[class*="roulette-result"]',
+      '[class*="live-result"]',
+      '[class*="last-number"]',
+      '[class*="lastnumber"]',
+      '[class*="game-result"]'
+    ];
+
+    for (var i = 0; i < gapSelectors.length; i++) {
+      try {
+        var els = document.querySelectorAll(gapSelectors[i]);
+        for (var j = 0; j < els.length; j++) {
+          var text = (els[j].textContent || '').trim();
+          var num = parseInt(text, 10);
+          if (!isNaN(num) && num >= 0 && num <= 36 && String(num) === text) {
+            console.log('[RollerWin] GAP RECOVERY: número ' + num + ' encontrado en DOM (' + gapSelectors[i] + ')');
+            sendToServer(num, 'GAP-RECOVERY:' + gapSelectors[i]);
+            return true;
+          }
+        }
+      } catch(e) {}
+    }
+    return false;
+  }
+
+  // v7.6: Iniciar Gap Recovery Scanner
+  function startGapRecovery() {
+    if (_gapRecoveryActive) return;
+    _gapRecoveryActive = true;
+    console.log('[RollerWin] GAP RECOVERY: activado (sin capturas >' + Math.round(_GAP_THRESHOLD/1000) + 's)');
+    // Escanear inmediatamente
+    _gapRecoveryScan();
+    // Escanear cada 3s
+    _gapRecoveryTimer = setInterval(function() {
+      if (!_gapRecoveryActive) {
+        clearInterval(_gapRecoveryTimer);
+        return;
+      }
+      _gapRecoveryScan();
+    }, _GAP_SCAN_INTERVAL);
+  }
+
+  // v7.6: Checker periódico para activar Gap Recovery
+  setInterval(function() {
+    if (!_gapRecoveryActive && Date.now() - _iframeLastCaptureTime > _GAP_THRESHOLD) {
+      startGapRecovery();
+    }
+  }, 5000); // Check cada 5s
+
+  // v6.4: Solicitar sincronización del último número al parent
+  // Esto previene que cualquier hook re-envíe el último resultado
+  // después de una recarga del iframe (popula _sentNumbers)
+  try {
+    var _syncHandler = function(e) {
+      try {
+        if (e.data && e.data.source === 'rollerwin-sync-reply' && typeof e.data.lastNumber === 'number') {
+          syncLastNumber(e.data.lastNumber);
+          // v7.4: Tambien poblar la secuencia para prevenir re-envío post-recarga
+          _addSequence(e.data.lastNumber);
+          window.removeEventListener('message', _syncHandler);
+        }
+      } catch(err) {}
+    };
+    window.parent.postMessage({ source: 'rollerwin-sync' }, '*');
+    window.addEventListener('message', _syncHandler);
+    // Timeout: si no hay respuesta en 2s, continuar sin sync
+    setTimeout(function() {
+      window.removeEventListener('message', _syncHandler);
+    }, 2000);
+  } catch(e) {}
+  // Re-solicitar sync cada 30s (por si el parent también recarga)
+  setInterval(function() {
+    try {
+      window.parent.postMessage({ source: 'rollerwin-sync' }, '*');
+    } catch(e) {}
+  }, 30000);
+
+  // Campos de resultado de ruleta (alta confianza)
+  var RESULT_FIELDS = [
+    'number', 'result', 'resultnumber', 'winningnumber', 'win_number',
+    'game_number', 'roulette_number', 'ball_number', 'pocket', 'pocket_number',
+    'winningpocket', 'pocketid', 'resultid', 'displaynumber',
+    'roundresult', 'gameoutcome', 'finalnumber', 'outcome',
+    'winningnumberdisplay', 'resultnumber', 'final_number', 'game_result',
+    'round_result', 'game_outcome', 'numberstr', 'numberstring'
   ];
-  var _RF_MD = [
-    'roundresult', 'game_result', 'round_result', 'outcome_number',
-    'win_number', 'game_number', 'gameoutcome', 'game_outcome'
-  ];
-  // v8.3: Removed 'result', 'number', 'outcome', 'resultid' from LOW — too generic
 
-  var _RP = {};
-  (function() {
-    for (var i = 0; i < _RF_HI.length; i++) _RP[_RF_HI[i].replace(/[_\-\s]/g,'')] = 3;
-    for (var i = 0; i < _RF_MD.length; i++) _RP[_RF_MD[i].replace(/[_\-\s]/g,'')] = 2;
-  })();
+  function isResultField(key) {
+    var k = key.replace(/[_\-\s]/g, '').toLowerCase();
+    for (var i = 0; i < RESULT_FIELDS.length; i++) {
+      if (k === RESULT_FIELDS[i].replace(/[_\-\s]/g, '')) return true;
+    }
+    return false;
+  }
 
-  function _tN(v) {
-    if (typeof v === 'number' && v >= 0 && v <= 36 && v === Math.floor(v)) return v;
-    if (typeof v === 'string') {
-      var s = v.trim();
+  function tryNum(val) {
+    if (typeof val === 'number' && val >= 0 && val <= 36 && val === Math.floor(val)) return val;
+    if (typeof val === 'string') {
+      var s = val.trim();
       if ((s.length === 1 || s.length === 2) && s === String(parseInt(s, 10))) {
         var n = parseInt(s, 10);
         if (n >= 0 && n <= 36) return n;
@@ -181,298 +1052,333 @@
     return null;
   }
 
-  // Object explorer — finds roulette number with priority
-  function _eO(obj, d, p) {
-    if (!obj || typeof obj !== 'object' || d > 4) return null;
+  function extractObj(obj, depth, path) {
+    if (!obj || typeof obj !== 'object' || depth > 4) return;
+
     if (Array.isArray(obj)) {
-      // Only check short arrays (not history lists)
-      if (obj.length === 0 || obj.length > 3) return null;
-      var pl = p.toLowerCase();
-      if (pl.indexOf('result') >= 0 || pl.indexOf('winning') >= 0 ||
-          pl.indexOf('outcome') >= 0 || pl.indexOf('pocket') >= 0) {
+      // FIX v5.0.1: Solo procesar arrays que representen UN resultado (length 1)
+      // o tomar el ULTIMO elemento (mas reciente, no el mas viejo como antes).
+      // Ignorar arrays largos que son claramente historial (length > 5).
+      if (obj.length === 0) return;
+      if (obj.length > 5) return; // Historial = mas de 5 resultados, ignorar
+
+      var pathLow = path.toLowerCase();
+      if (pathLow.indexOf('result') >= 0 || pathLow.indexOf('winning') >= 0 ||
+          pathLow.indexOf('outcome') >= 0 || pathLow.indexOf('pocket') >= 0) {
+        // Tomar el ULTIMO elemento (resultado mas reciente)
         var last = obj[obj.length - 1];
-        var n = _tN(last);
-        if (n !== null) return { n: n, p: 2 };
-        if (typeof last === 'object') return _eO(last, d + 1, p + '[L]');
+        var n = tryNum(last);
+        if (n !== null) { sendToServer(n, 'array@' + path); return; }
+        if (typeof last === 'object') extractObj(last, depth + 1, path + '[' + (obj.length-1) + ']');
       }
-      return null;
+      return;
     }
-    var best = null;
+
     var keys = Object.keys(obj);
     for (var i = 0; i < keys.length; i++) {
-      var k = keys[i], v = obj[k];
-      var kc = k.replace(/[_\-\s]/g, '').toLowerCase();
-      var pri = _RP[kc];
-      if (pri !== undefined) {
-        var n = _tN(v);
-        if (n !== null && (!best || pri > best.p)) {
-          best = { n: n, p: pri };
-        }
+      var key = keys[i];
+      var val = obj[key];
+
+      if (isResultField(key)) {
+        var n = tryNum(val);
+        if (n !== null) { sendToServer(n, key + '@' + path); return; }
       }
-      // Recurse into sub-objects (max depth 3)
-      if (typeof v === 'object' && v !== null && d < 3) {
-        var sub = _eO(v, d + 1, p + '.' + k);
-        if (sub && (!best || sub.p > best.p)) {
-          best = sub;
-        }
+
+      if (typeof val === 'object' && val !== null) {
+        extractObj(val, depth + 1, path + '.' + key);
       }
     }
-    return best;
   }
 
-  // Regex fallback — ONLY high-specificity patterns
-  function _eFT(text, src) {
-    if (!text || typeof text !== 'string' || text.length > 100000) return;
-    var pats = [
+  // Regex selectivo para texto de red
+  // FIX v5.0.1: Solo tomar el ULTIMO match (resultado mas reciente, no historial)
+  function extractFromText(text, source) {
+    if (!text || typeof text !== 'string' || text.length > 200000) return;
+    var patterns = [
+      /"resultNumber"\s*:\s*(\d{1,2})\b/gi,
       /"winningNumber"\s*:\s*(\d{1,2})\b/gi,
       /"winning_number"\s*:\s*(\d{1,2})\b/gi,
-      /"winningPocket"\s*:\s*(\d{1,2})\b/gi,
-      /"resultNumber"\s*:\s*(\d{1,2})\b/gi,
-      /"result_number"\s*:\s*(\d{1,2})\b/gi,
       /"ball_number"\s*:\s*(\d{1,2})\b/gi,
       /"pocket_number"\s*:\s*(\d{1,2})\b/gi,
       /"roulette_number"\s*:\s*(\d{1,2})\b/gi,
-      /"game_result_number"\s*:\s*(\d{1,2})\b/gi,
       /"finalNumber"\s*:\s*(\d{1,2})\b/gi,
+      /"game_number"\s*:\s*(\d{1,2})\b/gi,
       /"displayNumber"\s*:\s*(\d{1,2})\b/gi,
-      /"gameResult"\s*:\s*(\d{1,2})\b/gi,
-      /"game_result"\s*:\s*(\d{1,2})\b/gi,
-      /"round_result"\s*:\s*(\d{1,2})\b/gi
+      /"winningPocket"\s*:\s*(\d{1,2})\b/gi
     ];
-    for (var i = 0; i < pats.length; i++) {
-      var m; pats[i].lastIndex = 0;
-      if ((m = pats[i].exec(text)) !== null) {
+    var lastMatch = null;
+    for (var i = 0; i < patterns.length; i++) {
+      var m; patterns[i].lastIndex = 0;
+      while ((m = patterns[i].exec(text)) !== null) {
         var n = parseInt(m[1], 10);
-        if (n >= 0 && n <= 36) { _send(n, 'rx@' + src); return; }
+        if (n >= 0 && n <= 36) lastMatch = n;
       }
     }
+    // Solo enviar el ULTIMO match encontrado (resultado mas reciente)
+    if (lastMatch !== null) sendToServer(lastMatch, 'regex-last@' + source);
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // WEBSOCKET HOOK — Tracks game WSS, only processes game frames
-  // ══════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════
+  // HOOK WEBSOCKET (solo en iframes)
+  // ══════════════════════════════════════
   (function() {
-    var _O = window.WebSocket;
-    if (!_O || _O.__xV42) return;
-    _O.__xV42 = true;
-    var _P = function(url, protos) {
-      var ws = protos ? new _O(url, protos) : new _O(url);
-      var wsHost = '';
-      try { wsHost = new URL(url).hostname; } catch(e) { wsHost = url; }
+    var OrigWS = window.WebSocket;
+    if (!OrigWS || OrigWS.__rwV42) return;
+    OrigWS.__rwV42 = true;
 
-      // Track WSS host
-      if (url.indexOf('wss://') >= 0 || url.indexOf('ws://') >= 0) {
-        _wssHosts.push(wsHost);
-        if (_wssHosts.length > 5) _wssHosts.shift();
-        _dbgAdd('WSS: ' + wsHost.substring(0, 40));
+    var ProxyWS = function(url, protocols) {
+      console.log('[RollerWin] WS en iframe:', (url || '').substring(0, 80));
+      var ws = protocols ? new OrigWS(url, protocols) : new OrigWS(url);
 
-        // If this is a known game host, mark this iframe as a game iframe
-        if (_isGameHost(wsHost) && _isI) {
-          _isGame = true;
-          _dbgAdd('GAME IFRAME detected via WSS');
-          // Tell parent this is a game iframe
-          try {
-            window.parent.postMessage({
-              source: 'x-game-id-8f3k',
-              isGame: true,
-              hostname: _hn,
-              wssHost: wsHost
-            }, '*');
-          } catch(e) {}
-        }
-
-        _wsc = false;
-        _wrc++;
-        setTimeout(function() { if (_gRA) return; _sgr(); }, 1000);
+      // v7.6: WS Reconnect Detection — trackea closes y opens
+      if (_wsWasClosed) {
+        _wsReconnectCount++;
+        console.log('[RollerWin] WS RECONNECT #' + _wsReconnectCount + ' detectado — activando Gap Recovery');
+        _wsWasClosed = false;
+        // Activar Gap Recovery inmediatamente para capturar el número perdido
+        setTimeout(function() {
+          startGapRecovery();
+        }, 1000); // Esperar 1s a que el WS envie estado actual
       }
 
       ws.addEventListener('message', function(e) {
         try {
           var data = e.data;
-          _ila = Date.now();
+          // v7.6: Marcar actividad (para iframe dead detection)
+          _iframeLastActivity = Date.now();
           if (typeof data !== 'string') {
             if (data instanceof ArrayBuffer) {
               try { data = String.fromCharCode.apply(null, new Uint8Array(data)); } catch(er) { return; }
             } else return;
           }
 
-          // Socket.IO format: "42[...]" or "43[...]"
+          // Socket.io: 42["event",{...}]
           if (data.charAt(0) === '4' && (data.charAt(1) === '2' || data.charAt(1) === '3')) {
             try {
-              var pp = JSON.parse(data.substring(2));
-              if (Array.isArray(pp) && pp.length >= 2 && typeof pp[1] === 'object') {
-                var ev = String(pp[0] || '');
-                // v8.3: Only process SPECIFIC result events — no 'round', 'update', 'bet'
-                var isResultEvent = (ev.indexOf('result') >= 0 || ev.indexOf('complete') >= 0 ||
-                    ev.indexOf('win') >= 0 || ev.indexOf('spin') >= 0 ||
-                    ev.indexOf('end') >= 0 || ev.indexOf('finish') >= 0);
-                if (isResultEvent) {
-                  var _or = _eO(pp[1], 0, 's.' + ev);
-                  if (_or) _send(_or.n, 'o@' + ev);
-                  _eFT(data, 's.' + ev);
+              var p = JSON.parse(data.substring(2));
+              if (Array.isArray(p) && p.length >= 2 && typeof p[1] === 'object') {
+                var evt = String(p[0] || '');
+                // v6.5 FIX: Procesar TODOS los eventos socket.io, no solo los que
+                // contienen 'result/complete/win/round/spin'. Evolution puede cambiar
+                // los nombres de eventos. extractObj solo extrae si encuentra campos
+                // de resultado (isResultField), y extractFromText busca patterns
+                // especificos de ruleta. No hay falsos positivos.
+                // FIX: Primero intentar con eventos conocidos (prioridad alta)
+                if (evt.indexOf('result') >= 0 || evt.indexOf('complete') >= 0 ||
+                    evt.indexOf('win') >= 0 ||
+                    evt.indexOf('round') >= 0 || evt.indexOf('spin') >= 0 ||
+                    evt.indexOf('game') >= 0 || evt.indexOf('end') >= 0 ||
+                    evt.indexOf('finish') >= 0 || evt.indexOf('update') >= 0 ||
+                    evt.indexOf('new') >= 0 || evt.indexOf('bet') >= 0) {
+                  extractObj(p[1], 0, 'sio.' + evt);
+                  extractFromText(data, 'sio.' + evt);
+                } else {
+                  // v6.5: Fallback — intentar regex en TODOS los demas eventos.
+                  // Solo extractFromText (no extractObj) para evitar falsos positivos.
+                  // Esto cubre cualquier evento que contenga "resultNumber", etc.
+                  extractFromText(data, 'sio-fallback.' + evt);
                 }
-                // v8.3: Non-result Socket.IO events: SKIP entirely
-                // (no fallback regex for 'update', 'new', 'round', 'bet' etc.)
               }
             } catch(err) {}
           }
 
-          // Plain JSON WebSocket messages (common in Evolution)
+          // JSON
           if (data.charAt(0) === '{' || data.charAt(0) === '[') {
-            try {
-              var _or2 = _eO(JSON.parse(data), 0, 'w');
-              if (_or2) _send(_or2.n, 'o@w');
-              _eFT(data, 'w');
-            } catch(err) {}
+            try { extractObj(JSON.parse(data), 0, 'ws'); extractFromText(data, 'ws'); } catch(err) {}
           }
         } catch(err) {}
       });
-      ws.addEventListener('close', function() { _wsc = true; _idn = false; });
+
+      // v7.6: Trackear cuando el WS se cierra para detectar reconnects
+      ws.addEventListener('close', function(e) {
+        console.log('[RollerWin] WS CERRADO (code:' + e.code + ' reason:' + (e.reason || 'none') + ')');
+        _wsWasClosed = true;
+        _iframeDeadNotified = false; // Reset para permitir nueva notificación si se reconecta
+      });
+
       return ws;
     };
-    _P.prototype = _O.prototype;
-    _P.CONNECTING = _O.CONNECTING; _P.OPEN = _O.OPEN; _P.CLOSING = _O.CLOSING; _P.CLOSED = _O.CLOSED;
-    window.WebSocket = _P;
+
+    ProxyWS.prototype = OrigWS.prototype;
+    ProxyWS.CONNECTING = OrigWS.CONNECTING;
+    ProxyWS.OPEN = OrigWS.OPEN;
+    ProxyWS.CLOSING = OrigWS.CLOSING;
+    ProxyWS.CLOSED = OrigWS.CLOSED;
+    window.WebSocket = ProxyWS;
   })();
 
-  // ══════════════════════════════════════════════════════════════
-  // FETCH HOOK — Only in iframes, only game-related URLs
-  // ══════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════
+  // HOOK FETCH (solo en iframes)
+  // ══════════════════════════════════════
   (function() {
-    var _o = window.fetch;
-    if (!_o || _o.__xV42) return;
-    _o.__xV42 = true;
+    var origFetch = window.fetch;
+    if (!origFetch || origFetch.__rwV42) return;
+    origFetch.__rwV42 = true;
+
     window.fetch = function(input, init) {
-      _ila = Date.now();
       var url = '';
-      try { url = typeof input === 'string' ? input : (input instanceof Request) ? (input.url || '') : (input && input.url) ? input.url : ''; } catch(e) {}
-      var pr = _o.apply(this, arguments);
+      try {
+        url = typeof input === 'string' ? input :
+              (input instanceof Request) ? (input.url || '') :
+              (input && input.url) ? input.url : '';
+      } catch(e) {}
 
-      // Only scan fetch responses in iframes (parent shouldn't detect numbers)
-      if (!_isI) return pr;
+      var promise = origFetch.apply(this, arguments);
 
-      var ul = url.toLowerCase();
-      // v8.3: Very strict URL filtering
-      var isGameUrl = (ul.indexOf('result') >= 0 || ul.indexOf('roulette') >= 0 ||
-          ul.indexOf('evolution') >= 0 || ul.indexOf('round') >= 0 || ul.indexOf('wheel') >= 0);
-      var isExcluded = (ul.indexOf('history') >= 0 || ul.indexOf('state') >= 0 ||
-          ul.indexOf('stats') >= 0 || ul.indexOf('balance') >= 0 || ul.indexOf('user') >= 0 ||
-          ul.indexOf('account') >= 0 || ul.indexOf('wallet') >= 0 || ul.indexOf('bonus') >= 0);
+      var urlLow = url.toLowerCase();
+      // FIX v5.0.1: Excluir URLs de historial y estado — solo procesar resultados
+      if (urlLow.indexOf('result') >= 0 ||
+          urlLow.indexOf('roulette') >= 0 || urlLow.indexOf('evolution') >= 0 ||
+          urlLow.indexOf('round') >= 0 || urlLow.indexOf('wheel') >= 0) {
+        // EXCLUIR: URLs que contienen history o state (son datos historicos, no resultado actual)
+        if (urlLow.indexOf('history') >= 0 || urlLow.indexOf('state') >= 0 || urlLow.indexOf('stats') >= 0) {
+          return promise; // No procesar — es historial
+        }
 
-      if (isGameUrl && !isExcluded) {
-        pr.then(function(r) {
+        promise.then(function(r) {
           try {
-            r.clone().text().then(function(t) {
-              if (t) {
-                try { var _or = _eO(JSON.parse(t), 0, 'f'); if (_or) _send(_or.n, 'o@f'); } catch(e) {}
-                _eFT(t, 'f');
-              }
+            r.clone().text().then(function(text) {
+              if (text) { try { extractObj(JSON.parse(text), 0, 'fetch'); } catch(e) {} extractFromText(text, 'fetch'); }
             }).catch(function() {});
           } catch(e) {}
         }).catch(function() {});
       }
-      return pr;
+
+      return promise;
     };
   })();
 
-  // ══════════════════════════════════════════════════════════════
-  // XHR HOOK — Only in iframes, only game-related URLs
-  // ══════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════
+  // HOOK XHR (solo en iframes)
+  // ══════════════════════════════════════
   (function() {
-    var _oo = XMLHttpRequest.prototype.open;
-    var _os = XMLHttpRequest.prototype.send;
-    if (_os.__xV42) return;
-    _os.__xV42 = true;
-    XMLHttpRequest.prototype.open = function(m, u) {
-      this._xu = String(u || '');
-      return _oo.apply(this, arguments);
-    };
+    var origOpen = XMLHttpRequest.prototype.open;
+    var origSend = XMLHttpRequest.prototype.send;
+    if (origSend.__rwV42) return;
+    origSend.__rwV42 = true;
+
+    XMLHttpRequest.prototype.open = function(m, u) { this._rwUrl = String(u || ''); return origOpen.apply(this, arguments); };
     XMLHttpRequest.prototype.send = function() {
-      var s = this;
+      var self = this;
       this.addEventListener('load', function() {
-        // Only scan in iframes
-        if (!_isI) return;
-        var u = (s._xu || '').toLowerCase();
-        var isGameUrl = (u.indexOf('result') >= 0 || u.indexOf('roulette') >= 0 ||
-            u.indexOf('evolution') >= 0 || u.indexOf('round') >= 0 || u.indexOf('wheel') >= 0);
-        var isExcluded = (u.indexOf('history') >= 0 || u.indexOf('state') >= 0 ||
-            u.indexOf('stats') >= 0 || u.indexOf('balance') >= 0 || u.indexOf('user') >= 0 ||
-            u.indexOf('account') >= 0 || u.indexOf('wallet') >= 0);
-        if (isGameUrl && !isExcluded) {
+        var u = (self._rwUrl || '').toLowerCase();
+        // FIX v5.0.1: Excluir historial y estado
+        if (u.indexOf('result') >= 0 ||
+            u.indexOf('roulette') >= 0 || u.indexOf('evolution') >= 0 ||
+            u.indexOf('round') >= 0 || u.indexOf('wheel') >= 0) {
+          if (u.indexOf('history') >= 0 || u.indexOf('state') >= 0 || u.indexOf('stats') >= 0) return;
           try {
-            var t = s.responseText;
-            if (t) {
-              try { var _or = _eO(JSON.parse(t), 0, 'x'); if (_or) _send(_or.n, 'o@x'); } catch(e) {}
-              _eFT(t, 'x');
-            }
+            var t = self.responseText;
+            if (t) { try { extractObj(JSON.parse(t), 0, 'xhr'); } catch(e) {} extractFromText(t, 'xhr'); }
           } catch(e) {}
         }
       });
-      return _os.apply(this, arguments);
+      return origSend.apply(this, arguments);
     };
   })();
 
-  // ══════════════════════════════════════════════════════════════
-  // DOM SCANNER — Only in iframes, skip history elements
-  // ══════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════
+  // DOM SCANNER v5.0 — ULTRA ESTRICTO
+  // ════════════════════════════════════════════════════════
+  // PROBLEMA V4.9: Los selectores de history/past/track/circle capturaban
+  // numeros VIEJOS del display de Evolution, no el resultado actual.
+  // SOLUCION: Solo buscar el resultado ACTUAL mostrado en pantalla,
+  // nunca historial. + buffer de ultimos 15 numeros para rechazar repetidos.
+  // ════════════════════════════════════════════════════════
   (function() {
-    var HK = ['history','past','track','sequence','previous','older','last-result','lastresults',
-      'gamehistory','result-history','historyitem','resultshistory','bng','stats','statistics',
-      'roadmap','bigroad','beadroad','marker','recent','stat'];
-    var CK = ['winning-number','winningnumber','winning-pocket','winningpocket','result-display',
-      'resultdisplay','result-value','resultvalue','current-result','game-number-display',
-      'number-display','overlay-result','announced','lastnumber','round-result',
-      'roulette-result','live-result','detailed-result'];
+    // Palabras clave que indican HISTORIAL — NUNCA capturar de estos elementos
+    var HISTORY_KEYWORDS = ['history','past','track','sequence','previous','older','last-result',
+      'lastresults','gamehistory','result-history','historyitem','resultshistory',
+      'bng','stats','statistics','roadmap','bigroad','beadroad','marker'];
 
-    function _iH(el) {
+    // Palabras clave que indican el RESULTADO ACTUAL — SOLO capturar de estos
+    var CURRENT_KEYWORDS = ['winning-number','winningnumber','winning-pocket','winningpocket',
+      'result-display','resultdisplay','result-value','resultvalue','current-result',
+      'game-number-display','number-display','overlay-result','announced','lastnumber',
+      'round-result','roulette-result','live-result','detailed-result'];
+
+    function isHistoryElement(el) {
       if (!el) return false;
       var c = ((el.className || '') + ' ' + (el.id || '') + ' ' + (el.getAttribute('data-test') || '')).toLowerCase();
-      for (var i = 0; i < HK.length; i++) { if (c.indexOf(HK[i]) >= 0) return true; }
-      var pr = el.parentElement; var d = 0;
-      while (pr && d < 5) {
-        var pc = ((pr.className || '') + ' ' + (pr.id || '')).toLowerCase();
-        for (var i = 0; i < HK.length; i++) { if (pc.indexOf(HK[i]) >= 0) return true; }
-        pr = pr.parentElement; d++;
+      for (var i = 0; i < HISTORY_KEYWORDS.length; i++) {
+        if (c.indexOf(HISTORY_KEYWORDS[i]) >= 0) return true;
+      }
+      // Tambien excluir elementos dentro de un contenedor de historial
+      var parent = el.parentElement;
+      var depth = 0;
+      while (parent && depth < 5) {
+        var pc = ((parent.className || '') + ' ' + (parent.id || '')).toLowerCase();
+        for (var i = 0; i < HISTORY_KEYWORDS.length; i++) {
+          if (pc.indexOf(HISTORY_KEYWORDS[i]) >= 0) return true;
+        }
+        parent = parent.parentElement;
+        depth++;
       }
       return false;
     }
 
-    function _iC(el) {
+    function isCurrentElement(el) {
       if (!el) return false;
       var c = ((el.className || '') + ' ' + (el.id || '') + ' ' + (el.getAttribute('data-test') || '')).toLowerCase();
-      for (var i = 0; i < CK.length; i++) { if (c.indexOf(CK[i]) >= 0) return true; }
-      if (el.hasAttribute('data-result-number') || el.hasAttribute('data-winning-number') || el.hasAttribute('data-game-result')) return true;
+      for (var i = 0; i < CURRENT_KEYWORDS.length; i++) {
+        if (c.indexOf(CURRENT_KEYWORDS[i]) >= 0) return true;
+      }
+      // data attributes especificos de resultado actual
+      if (el.hasAttribute('data-result-number') || el.hasAttribute('data-winning-number') ||
+          el.hasAttribute('data-game-result')) return true;
       return false;
     }
 
-    var SS = [
-      '[class*="winning-number"]','[class*="winning-pocket"]','[class*="result-display"]',
-      '[class*="result-value"]','[class*="current-result"]','[class*="game-number-display"]',
-      '[class*="number-display"]','[data-result-number]','[data-winning-number]',
-      '[data-game-result]','[class*="overlay"] [class*="result"]','[class*="announced"]',
-      '[class*="round-result"]','[class*="roulette-result"]','[class*="live-result"]'
+    // Solo selectores que apuntan al RESULTADO ACTUAL, nunca historial
+    var STRICT_SELECTORS = [
+      '[class*="winning-number"]',
+      '[class*="winning-pocket"]',
+      '[class*="result-display"]',
+      '[class*="result-value"]',
+      '[class*="current-result"]',
+      '[class*="game-number-display"]',
+      '[class*="number-display"]',
+      '[data-result-number]',
+      '[data-winning-number]',
+      '[data-game-result]',
+      '[class*="overlay"] [class*="result"]',
+      '[class*="announced"]',
+      '[class*="round-result"]',
+      '[class*="roulette-result"]',
+      '[class*="live-result"]'
     ];
 
-    var _ldn = -1, _ldt = 0, _DRL = 15000;
+    // v6.4 FIX: Change-detect con limite de tiempo para DOM Scanner
+    // El DOM muestra el mismo numero hasta el proximo giro (~18s).
+    // Sin esto, el scan cada 8s re-enviaria el mismo numero.
+    // REGLA: Si el numero CAMBIO → enviar. Si es el MISMO numero pero lleva
+    // >15s visible → es un NUEVO giro → tambien enviar.
+    // Esto permite capturar repeticiones legitimas (ej: 15, 15 consecutivos)
+    // mientras bloquea re-envios del mismo giro.
+    var _lastDomNumber = -1;
+    var _lastDomNumberTime = 0;
+    var _DOM_REPEAT_LIMIT = 15000; // 15s — si el mismo numero lleva >15s, es nuevo giro
 
-    function scan() {
-      // v8.3: Only scan DOM in iframes (parent should NOT scan DOM for numbers)
-      if (!_isI) return;
-
-      for (var i = 0; i < SS.length; i++) {
+    function scanDOM() {
+      for (var i = 0; i < STRICT_SELECTORS.length; i++) {
         try {
-          var els = document.querySelectorAll(SS[i]);
+          var els = document.querySelectorAll(STRICT_SELECTORS[i]);
           for (var j = 0; j < els.length; j++) {
-            if (_iH(els[j])) continue;
-            if (!_iC(els[j]) && !els[j].hasAttribute('data-result-number') && !els[j].hasAttribute('data-winning-number')) continue;
-            var tx = (els[j].textContent || '').trim();
-            var n = parseInt(tx, 10);
-            if (!isNaN(n) && n >= 0 && n <= 36 && String(n) === tx) {
+            // DOBLE FILTRO: debe ser un elemento de resultado actual Y no estar en historial
+            if (isHistoryElement(els[j])) continue;
+            if (!isCurrentElement(els[j]) && !els[j].hasAttribute('data-result-number') &&
+                !els[j].hasAttribute('data-winning-number')) continue;
+
+            var text = (els[j].textContent || '').trim();
+            var num = parseInt(text, 10);
+            if (!isNaN(num) && num >= 0 && num <= 36 && String(num) === text) {
               var now = Date.now();
-              if (n === _ldn && now - _ldt < _DRL) return;
-              _ldn = n; _ldt = now;
-              _send(n, 'D:' + SS[i]);
-              return;
+              // Enviar si: numero CAMBIO, o mismo numero visible >15s (nuevo giro)
+              if (num === _lastDomNumber && now - _lastDomNumberTime < _DOM_REPEAT_LIMIT) return;
+              _lastDomNumber = num;
+              _lastDomNumberTime = now;
+              sendToServer(num, 'DOM-v6.4:' + STRICT_SELECTORS[i]);
+              return; // Solo capturar el primer match valido
             }
           }
         } catch(e) {}
@@ -481,14 +1387,24 @@
 
     function setup() {
       if (!document.body) return;
-      setTimeout(scan, 500);
-      setTimeout(scan, 2000);
-      var tm = null;
+      // v7.6: Escaneo inicial rapido (500ms en vez de 3s)
+      // Esto es critico post-recovery: el número del gap puede estar visible
+      // inmediatamente al cargar el iframe.
+      setTimeout(scanDOM, 500);
+      // Segundo escaneo a los 2s (por si el DOM tarda en renderizar)
+      setTimeout(scanDOM, 2000);
+
+      // v7.6: MutationObserver con debounce de 500ms (era 2s)
+      // 2s era muy lento: si un número aparece y cambia en <2s (common durante
+      // restart de mesa), se pierde. 500ms captura cambios rápidos.
+      var timer = null;
       new MutationObserver(function() {
-        if (tm) return;
-        tm = setTimeout(function() { tm = null; scan(); }, 500);
+        if (timer) return;
+        timer = setTimeout(function() { timer = null; scanDOM(); }, 500);
       }).observe(document.body, { childList: true, subtree: true, characterData: true });
-      setInterval(scan, 6000);
+
+      // Scan periodico cada 6s (era 8s)
+      setInterval(scanDOM, 6000);
     }
 
     if (document.readyState === 'loading') {
@@ -498,592 +1414,58 @@
     }
   })();
 
-  // ══════════════════════════════════════════════════════════════
-  // postMessage HOOK — Only in iframes
-  // ══════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════
+  // HOOK postMessage (solo en iframes)
+  // ══════════════════════════════════════
   (function() {
-    if (!_isI) return; // v8.3: Parent does NOT hook postMessage for detection
-    var _o = window.postMessage;
-    if (_o.__xV42) return;
-    _o.__xV42 = true;
+    var orig = window.postMessage;
+    if (orig.__rwV42) return;
+    orig.__rwV42 = true;
+
     window.postMessage = function(data, origin, transfer) {
-      try {
-        if (typeof data === 'object' && data !== null) {
-          var _or = _eO(data, 0, 'po');
-          if (_or) _send(_or.n, 'o@po');
-        }
-      } catch(e) {}
-      return _o.call(window, data, origin, transfer);
+      try { if (typeof data === 'object' && data !== null) extractObj(data, 0, 'postMsg-out'); } catch(e) {}
+      return orig.call(window, data, origin, transfer);
     };
-    window.addEventListener('message', function(ev) {
+
+    window.addEventListener('message', function(event) {
       try {
-        var d = ev.data;
-        if (typeof d === 'object' && d !== null) {
-          var _or = _eO(d, 0, 'pi');
-          if (_or) _send(_or.n, 'o@pi');
-        }
+        var data = event.data;
+        if (typeof data === 'object' && data !== null) extractObj(data, 0, 'postMsg-in');
       } catch(e) {}
     });
   })();
 
-  // ══════════════════════════════════════════════════════════════
-  // EventSource HOOK — Only in iframes
-  // ══════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════
+  // HOOK EventSource (solo en iframes)
+  // ══════════════════════════════════════
   (function() {
-    if (!_isI) return; // v8.3: Parent does NOT hook EventSource
     if (typeof window.EventSource === 'undefined') return;
-    var _O = window.EventSource;
-    if (_O.__xV42) return;
-    _O.__xV42 = true;
-    var _P = function(url, opts) {
-      var es = opts ? new _O(url, opts) : new _O(url);
-      var ad = es.addEventListener.bind(es);
+    var Orig = window.EventSource;
+    if (Orig.__rwV42) return;
+    Orig.__rwV42 = true;
+
+    var Proxy = function(url, opts) {
+      var es = opts ? new Orig(url, opts) : new Orig(url);
+      var add = es.addEventListener.bind(es);
       ['result','game','update','roulette','number','outcome','round'].forEach(function(t) {
-        ad(t, function(e) {
+        add(t, function(e) {
           try {
             if (typeof e.data === 'string') {
-              try { var _or = _eO(JSON.parse(e.data), 0, 'e.' + t); if (_or) _send(_or.n, 'o@e.' + t); } catch(err) {}
-              _eFT(e.data, 'e.' + t);
+              extractFromText(e.data, 'sse.' + t);
+              try { extractObj(JSON.parse(e.data), 0, 'sse.' + t); } catch(err) {}
             }
           } catch(err) {}
         });
       });
       return es;
     };
-    _P.prototype = _O.prototype;
-    _P.CONNECTING = _O.CONNECTING; _P.OPEN = _O.OPEN; _P.CLOSED = _O.CLOSED;
-    window.EventSource = _P;
+
+    Proxy.prototype = Orig.prototype;
+    Proxy.CONNECTING = Orig.CONNECTING;
+    Proxy.OPEN = Orig.OPEN;
+    Proxy.CLOSED = Orig.CLOSED;
+    window.EventSource = Proxy;
   })();
 
-  // ══════════════════════════════════════════════════════════════
-  // Iframe activity tracking (used by gap recovery + dead detection)
-  // ══════════════════════════════════════════════════════════════
-  var _ila = Date.now();
-  var _idn = false;
-
-  // Iframe dead detection
-  setInterval(function() {
-    if (!_isI) return;
-    if (!_idn && Date.now() - _ila > 45000) {
-      _idn = true;
-      try { window.parent.postMessage({ source: 'x-se-a3p', reason: 'id45' }, '*'); } catch(e) {}
-      _sgr();
-    }
-  }, 10000);
-
-  // ══════════════════════════════════════════════════════════════
-  // Gap Recovery — DOM scan after silence (only in iframes)
-  // ══════════════════════════════════════════════════════════════
-  var _ilCT = Date.now();
-  var _gRA = false;
-  var _gRT = null;
-  var _GT = 22000;
-  var _GSI = 3000;
-  var _wsc = false;
-  var _wrc = 0;
-
-  function _grs() {
-    if (!_isI) return; // v8.3: Only gap-recover in iframes
-    var sels = [
-      '[class*="winning-number"]','[class*="winning-pocket"]','[class*="result-display"]',
-      '[class*="result-value"]','[class*="current-result"]','[class*="game-number-display"]',
-      '[class*="number-display"]','[data-result-number]','[data-winning-number]',
-      '[data-game-result]','[class*="overlay"] [class*="result"]','[class*="announced"]',
-      '[class*="round-result"]','[class*="roulette-result"]','[class*="live-result"]',
-      '[class*="last-number"]','[class*="lastnumber"]','[class*="game-result"]'
-    ];
-    for (var i = 0; i < sels.length; i++) {
-      try {
-        var els = document.querySelectorAll(sels[i]);
-        for (var j = 0; j < els.length; j++) {
-          var tx = (els[j].textContent || '').trim();
-          var n = parseInt(tx, 10);
-          if (!isNaN(n) && n >= 0 && n <= 36 && String(n) === tx) {
-            _send(n, 'GR:' + sels[i]);
-            return true;
-          }
-        }
-      } catch(e) {}
-    }
-    return false;
-  }
-
-  function _sgr() {
-    if (_gRA) return;
-    _gRA = true;
-    _grs();
-    _gRT = setInterval(function() {
-      if (!_gRA) { clearInterval(_gRT); return; }
-      _grs();
-    }, _GSI);
-  }
-
-  setInterval(function() {
-    if (!_isI) return;
-    if (!_gRA && Date.now() - _ilCT > _GT) { _sgr(); }
-  }, 5000);
-
-  // Sync with parent (iframe → parent dedup sync)
-  try {
-    var _sh = function(e) {
-      try {
-        if (e.data && e.data.source === 'x-sy-r7w' && typeof e.data.lastNumber === 'number') {
-          _sLN(e.data.lastNumber);
-          _aS(e.data.lastNumber);
-          window.removeEventListener('message', _sh);
-        }
-      } catch(err) {}
-    };
-    window.parent.postMessage({ source: 'x-sy-m2q' }, '*');
-    window.addEventListener('message', _sh);
-    setTimeout(function() { window.removeEventListener('message', _sh); }, 2000);
-  } catch(e) {}
-  setInterval(function() {
-    try { window.parent.postMessage({ source: 'x-sy-m2q' }, '*'); } catch(e) {}
-  }, 30000);
-
-  // ══════════════════════════════════════════════════════════════
-  // PARENT PAGE — Relay only, NO detection hooks
-  // ══════════════════════════════════════════════════════════════
-
-  if (!_isI) {
-    var _pLN = -1;
-    // Track which iframes are game iframes
-    var _gameFrames = {};  // hostname → { isGame, wssHosts, lastNumber, lastTime }
-    var _activeTable = true; // v8.3: Parent ALWAYS relays — filtering is done by iframe identity
-
-    // v8.3: Table config polling — determine which casino is active
-    var _activeCasino = '';
-    function _checkTable() {
-      try {
-        fetch(_SV + '/api/capture/table-config', {
-          method: 'GET'
-        }).then(function(r) { return r.json(); }).then(function(data) {
-          if (data && data.selectedTable) {
-            var sel = data.selectedTable;
-            if (sel.indexOf('pinnacle') >= 0) {
-              _activeCasino = 'pinnacle';
-            } else if (sel.indexOf('betfury') >= 0) {
-              _activeCasino = 'betfury';
-            }
-            _activeTable = true;
-          }
-        }).catch(function() {});
-      } catch(e) {}
-    }
-    setTimeout(_checkTable, 1500);
-    setInterval(_checkTable, 10000);
-
-    // Listen for messages from iframes
-    window.addEventListener('message', function(ev) {
-      try {
-        var d = ev.data;
-        if (!d) return;
-
-        // iframe identified itself as a game iframe
-        if (d.source === 'x-game-id-8f3k' && d.isGame) {
-          _gameFrames[d.hostname] = {
-            isGame: true,
-            wssHost: d.wssHost || '',
-            lastNumber: -1,
-            lastTime: 0
-          };
-          _dbgAdd('GAME FRAME: ' + (d.hostname || '?') + ' wss=' + (d.wssHost || '?').substring(0, 30));
-          return;
-        }
-
-        // iframe sent debug info
-        if (d.source === 'x-dbg-8f3k' && d.log) {
-          _dbg = d.log;
-          try {
-            document.dispatchEvent(new CustomEvent('x-dbg', { detail: { log: _dbg } }));
-          } catch(e) {}
-          return;
-        }
-
-        // iframe sent a detected number
-        if (d.source === 'x-rc-8f3k' && typeof d.number === 'number') {
-          var iframeHost = d.hostname || '';
-          var iframeWss = (d.wssHosts || [])[0] || '';
-
-          // v8.3: Accept number from iframe if:
-          // 1. The iframe connected to a known game WSS host, OR
-          // 2. The iframe's hostname matches the active casino domain
-          var isFromGame = d.isGame === true;
-          var wssIsGame = _isGameHost(iframeWss);
-          var hostMatchesCasino = false;
-          if (_activeCasino === 'betfury') {
-            hostMatchesCasino = (iframeHost.indexOf('betfury') >= 0 || iframeHost.indexOf('evolution') >= 0 || iframeHost.indexOf('pragmatic') >= 0);
-          } else if (_activeCasino === 'pinnacle') {
-            hostMatchesCasino = (iframeHost.indexOf('pinnacle') >= 0 || iframeHost.indexOf('evolution') >= 0 || iframeHost.indexOf('pragmatic') >= 0);
-          }
-
-          // Also accept if iframe has ANY known game provider WSS
-          if (!isFromGame && wssIsGame) {
-            isFromGame = true;
-          }
-
-          if (isFromGame || wssIsGame || hostMatchesCasino) {
-            _pLN = d.number;
-            try {
-              document.dispatchEvent(new CustomEvent('x-d', { detail: { number: d.number, color: d.color } }));
-            } catch(e) {}
-            // Send to server
-            _sendToServer(d.number);
-            _dbgAdd('RELAY #' + d.number + ' from ' + iframeHost.substring(0, 25) + ' game=' + isFromGame);
-          } else {
-            _dbgAdd('BLOCKED #' + d.number + ' from ' + iframeHost.substring(0, 25) + ' (not game)');
-          }
-          return;
-        }
-
-        // Sync request from iframe
-        if (d && d.source === 'x-sy-m2q' && typeof d.lastNumber === 'number') {
-          try { window.postMessage({ source: 'x-sy-r7w', lastNumber: _pLN }, '*'); } catch(e) {}
-        }
-      } catch(e) {}
-    });
-
-    // ══════════════════════════════════════════════════════════════
-    // PARENT: Session management (keep-alive, modals, recovery)
-    // ══════════════════════════════════════════════════════════════
-
-    function _getRouletteURL() {
-      if (_hn.indexOf('pinnacle') >= 0) {
-        return 'https://casino.pinnacle.com/es/live-casino/games/european-roulette/';
-      }
-      return 'https://betfury.com/es/casino/games/roulette-live-by-evolution';
-    }
-
-    function _isGamePage(url) {
-      if (!url) url = location.href;
-      return url.indexOf('/casino/games/') !== -1 || url.indexOf('/live-casino/games/') !== -1;
-    }
-
-    function _getPlayTexts() {
-      if (_hn.indexOf('pinnacle') >= 0) {
-        return ['play', 'play now', 'spin', 'start', 'jugar'];
-      }
-      return ['jugar', 'play', 'play now', 'spin', 'start'];
-    }
-
-    var _kac = 0, _lct = Date.now(), _lkr = 'pending';
-    var _LSK = 'x-v8-rs';
-    var _rws = JSON.parse(localStorage.getItem(_LSK) || '{}');
-    var _rc = _rws.recoverCount || 0;
-    var _ir = !!_rws.isRecovering;
-    var _se = !!_rws.sessionExpired;
-    var _lcp = _rws.lastCaptureTime || Date.now();
-
-    function _ss() {
-      try {
-        localStorage.setItem(_LSK, JSON.stringify({
-          recoverCount: _rc, isRecovering: _ir, sessionExpired: _se,
-          lastCaptureTime: _lcp, gameUrl: _gu, rt: _rt, rip: _rip, ts: Date.now()
-        }));
-      } catch(e) {}
-    }
-    _ss();
-
-    var _gu = _rws.gameUrl || location.href;
-    var _pso = history.pushState;
-    var _rso = history.replaceState;
-    if (history.pushState) {
-      history.pushState = function() {
-        var r = _pso.apply(this, arguments);
-        if (_isGamePage()) { _gu = location.href; _ss(); }
-        return r;
-      };
-    }
-    if (history.replaceState) {
-      history.replaceState = function() {
-        var r = _rso.apply(this, arguments);
-        if (_isGamePage()) { _gu = location.href; _ss(); }
-        return r;
-      };
-    }
-    setInterval(function() {
-      if (_isGamePage() && _gu !== location.href) { _gu = location.href; _ss(); }
-    }, 10000);
-
-    document.addEventListener('x-d', function() {
-      _lct = Date.now(); _lcp = _lct;
-      if (!_rip) { _ir = false; _se = false; }
-      _ss();
-    });
-
-    // Session expired from iframe
-    window.addEventListener('message', function(e) {
-      try {
-        if (e.data && e.data.source === 'x-se-a3p') {
-          _se = true; _ss(); _hse(e.data.reason);
-        }
-      } catch(err) {}
-    });
-
-    // Fetch intercept (parent) — session detection ONLY, no number detection
-    var _of = window.fetch;
-    if (_of && !_of.__xKA) {
-      _of.__xKA = true;
-      window.fetch = function(input, init) {
-        var url = '';
-        try { url = typeof input === 'string' ? input : (input && input.url ? input.url : ''); } catch(e) {}
-        var pr = _of.apply(this, arguments);
-        if (pr && url) {
-          pr.then(function(r) {
-            if (r.redirected) {
-              var ru = (r.url || '').toLowerCase();
-              if (ru.indexOf('login') !== -1 || ru.indexOf('signin') !== -1 || ru.indexOf('auth') !== -1) {
-                _se = true; _ss(); _hse('fr-' + ru);
-              }
-            }
-            if (r.status === 401 || r.status === 403) { _se = true; _ss(); _hse('fi-' + r.status); }
-          }).catch(function() {});
-        }
-        return pr;
-      };
-    }
-
-    // XHR intercept (parent) — session detection ONLY
-    var _oxo = XMLHttpRequest.prototype.open;
-    var _oxs = XMLHttpRequest.prototype.send;
-    if (!_oxs.__xKH) {
-      _oxs.__xKH = true;
-      XMLHttpRequest.prototype.open = function(m, u) { this._xu = String(u || ''); return _oxo.apply(this, arguments); };
-      XMLHttpRequest.prototype.send = function() {
-        var s = this;
-        this.addEventListener('load', function() {
-          var ru = (s.responseURL || '').toLowerCase();
-          if (ru.indexOf('login') !== -1 || ru.indexOf('signin') !== -1) { _se = true; _ss(); _hse('xr-l'); return; }
-          if (s.status === 401 || s.status === 403) { _se = true; _ss(); _hse('xi-' + s.status); }
-        });
-        return _oxs.apply(this, arguments);
-      };
-    }
-
-    // Keep-alive
-    function _ka() {
-      _kac++;
-      fetch(location.pathname || '/', { method: 'GET', credentials: 'include', redirect: 'follow' }).then(function(r) {
-        _lkr = r.status;
-        if (r.redirected) {
-          var ru = (r.url || '').toLowerCase();
-          if (ru.indexOf('login') !== -1 || ru.indexOf('signin') !== -1) { _se = true; _ss(); _hse('kr'); return; }
-        }
-        r.clone().text().then(function(txt) {
-          if (txt && txt.length < 5000 && txt.indexOf('<') !== -1) {
-            var tl = txt.toLowerCase();
-            if ((tl.indexOf('login') !== -1 || tl.indexOf('sign in') !== -1) && tl.indexOf('password') !== -1) {
-              _se = true; _ss(); _hse('kh');
-            }
-          }
-        }).catch(function() {});
-        if (r.status === 401 || r.status === 403) { _se = true; _ss(); _hse('k-' + r.status); }
-      }).catch(function() {});
-    }
-    setTimeout(_ka, 1500);
-    setInterval(_ka, 30000);
-
-    // Click button by text
-    function _cbt(texts) {
-      var sels = 'button, a, [role="button"], div[onclick], span[onclick], [class*="btn"], [class*="button"]';
-      var all = document.querySelectorAll(sels);
-      for (var i = 0; i < all.length; i++) {
-        var bt = (all[i].textContent || '').trim();
-        for (var j = 0; j < texts.length; j++) {
-          if (bt === texts[j]) { all[i].click(); return true; }
-        }
-      }
-      var all2 = document.querySelectorAll('div, span, a');
-      for (var i = 0; i < all2.length; i++) {
-        var bt = (all2[i].textContent || '').trim();
-        if (bt.length > 0 && bt.length <= 20) {
-          var st = window.getComputedStyle(all2[i]);
-          if (st.cursor === 'pointer' || all2[i].getAttribute('role') === 'button') {
-            for (var j = 0; j < texts.length; j++) {
-              if (bt === texts[j]) { all2[i].click(); return true; }
-            }
-          }
-        }
-      }
-      return false;
-    }
-
-    // Handle session expired
-    var _rip = !!_rws.rip;
-    var _rt = _rws.rt || 0;
-    if (_rip && Date.now() - _rt > 60000) { _rip = false; }
-
-    function _hse(reason) {
-      if (_rip) return;
-      var now = Date.now();
-      if (now - _rt < 12000) return;
-      _rip = true; _rt = now; _ir = true; _se = true; _rc++; _ss();
-      var okTexts = ['OK', 'Ok', 'ok', 'ACEPTAR', 'Aceptar', 'aceptar', 'VOLVER', 'Volver', 'volver', 'INICIAR', 'Iniciar', 'iniciar', 'CONTINUAR', 'Continuar', 'continuar'];
-      var ck = _cbt(okTexts);
-      setTimeout(function() {
-        var tu = _getRouletteURL();
-        if (_gu && _isGamePage(_gu) && _gu.indexOf('roulette') !== -1) { tu = _gu; }
-        location.replace(tu);
-      }, ck ? 500 : 100);
-      setTimeout(function() { _rip = false; _ss(); }, 20000);
-    }
-
-    // Detect and close modals
-    function _dam() {
-      var all = document.querySelectorAll('div, p, span, h1, h2, h3, dialog, section, article, main, li, label, td, th');
-      for (var i = 0; i < all.length; i++) {
-        var t = (all[i].textContent || '');
-        var tl = t.toLowerCase();
-        var exp = (tl.indexOf('sesi') !== -1 && tl.indexOf('finalizada') !== -1) ||
-                  (tl.indexOf('session') !== -1 && (tl.indexOf('expired') !== -1 || tl.indexOf('ended') !== -1));
-        if (exp) { _hse('ms'); return true; }
-        var lb = (tl.indexOf('saldo') !== -1 && tl.indexOf('bajo') !== -1) ||
-                 (tl.indexOf('balance') !== -1 && tl.indexOf('low') !== -1) ||
-                 (tl.indexOf('insufficient') !== -1 && tl.indexOf('balance') !== -1);
-        if (lb) { _cbt(['CERRAR', 'Cerrar', 'cerrar', 'CLOSE', 'Close', 'OK', 'Ok', 'ok']); return true; }
-      }
-      return false;
-    }
-    setInterval(_dam, 400);
-    try { new MutationObserver(function() { _dam(); }).observe(document.body, { childList: true, subtree: true }); } catch(e) {}
-
-    // Check play button
-    var _pbc = 0;
-    function _cpb() {
-      if (_pbc > Date.now()) return false;
-      if (!_isGamePage()) return false;
-      var btns = document.querySelectorAll('button, a, [role="button"], div[onclick], [class*="btn"], [class*="button"]');
-      var ptexts = _getPlayTexts();
-      for (var i = 0; i < btns.length; i++) {
-        var bt = (btns[i].textContent || '').trim().toLowerCase();
-        for (var j = 0; j < ptexts.length; j++) {
-          if (bt === ptexts[j]) {
-            if (btns[i].getAttribute('target') === '_blank') continue;
-            if (btns[i].tagName.toLowerCase() === 'a' && btns[i].getAttribute('target')) continue;
-            btns[i].click();
-            _pbc = Date.now() + 5000;
-            _ir = true; _ss();
-            return true;
-          }
-        }
-      }
-      return false;
-    }
-    setInterval(_cpb, 400);
-
-    // Dead iframe reload
-    setInterval(function() {
-      var nc = Date.now() - _lct;
-      if (_isGamePage() && nc > 60000 && !_rip) {
-        _ir = true; _se = true; _ss();
-        location.reload();
-      }
-    }, 10000);
-
-    // Post-load recovery
-    setTimeout(function() {
-      if (_ir || _se || _rc > 0) {
-        if (!_isGamePage()) { _hse('plr'); return; }
-        _cpb(); _dam();
-        setTimeout(function() { _cpb(); _dam(); }, 600);
-        setTimeout(function() { _cpb(); _dam(); }, 1200);
-      }
-    }, 100);
-
-    // Visibility + focus
-    document.addEventListener('visibilitychange', function() {
-      if (!document.hidden) {
-        _ka();
-        if (!_isGamePage() && _rc > 0) _hse('vis');
-        if (_isGamePage()) { _cpb(); _dam(); }
-      }
-    });
-    window.addEventListener('focus', function() {
-      _ka();
-      if (_isGamePage()) { _cpb(); _dam(); }
-    });
-
-    // Report status to content script overlay
-    setInterval(function() {
-      try {
-        document.dispatchEvent(new CustomEvent('x-s', {
-          detail: {
-            status: _ir ? 'recovering' : 'alive',
-            keepAliveCount: _kac,
-            lastResponse: _lkr,
-            noCaptureSec: Math.round((Date.now() - _lct) / 1000),
-            recoverCount: _rc,
-            sessionExpired: _se,
-            gameUrl: _gu,
-            activeTable: _activeTable,
-            activeCasino: _activeCasino,
-            gameFrames: Object.keys(_gameFrames).length,
-            debug: _dbg.slice()
-          }
-        }));
-      } catch(e) {}
-    }, 3000);
-  }
-
-  // ══════════════════════════════════════════════════════════════
-  // IFRAME: Modal detection
-  // ══════════════════════════════════════════════════════════════
-  if (_isI) {
-    var _imn = false;
-    function _dim() {
-      var all = document.querySelectorAll('div, p, span, h1, h2, h3, dialog, section, article, main, li, label, td, th');
-      for (var i = 0; i < all.length; i++) {
-        var t = (all[i].textContent || '').toLowerCase();
-        if ((t.indexOf('sesi') !== -1 && t.indexOf('finalizada') !== -1) ||
-            (t.indexOf('session') !== -1 && (t.indexOf('ended') !== -1 || t.indexOf('expired') !== -1))) {
-          if (!_imn) {
-            _imn = true;
-            try { window.parent.postMessage({ source: 'x-se-a3p', reason: 'im' }, '*'); } catch(e) {}
-          }
-          var pr = all[i].closest ? all[i].closest('div, dialog') : null;
-          if (pr) {
-            var obs = pr.querySelectorAll('button, a, [role="button"], div[onclick], span[onclick]');
-            for (var j = 0; j < obs.length; j++) {
-              var bt = (obs[j].textContent || '').trim();
-              if (bt === 'OK' || bt === 'Ok' || bt === 'ok' || bt === 'ACEPTAR' || bt === 'Aceptar') { obs[j].click(); }
-            }
-          }
-          return true;
-        }
-      }
-      return false;
-    }
-    setInterval(_dim, 500);
-    try { new MutationObserver(function() { _dim(); }).observe(document.body, { childList: true, subtree: true }); } catch(e) {}
-
-    // Iframe fetch hook (session detection ONLY — no number detection from fetch in iframe session check)
-    var _iof = window.fetch;
-    if (_iof && !_iof.__xIS) {
-      _iof.__xIS = true;
-      window.fetch = function(input, init) {
-        _ila = Date.now();
-        var pr = _iof.apply(this, arguments);
-        if (pr) {
-          pr.then(function(r) {
-            if (r.status === 401 || r.status === 403 || r.redirected) {
-              var ru = (r.url || '').toLowerCase();
-              if (r.status === 401 || r.status === 403 || ru.indexOf('login') !== -1) {
-                try { window.parent.postMessage({ source: 'x-se-a3p', reason: 'if-' + r.status }, '*'); } catch(e) {}
-              }
-            }
-          }).catch(function() {});
-        }
-        return pr;
-      };
-    }
-
-    // Initial debug message
-    _dbgAdd('IFRAME: ' + _hn + ' url=' + location.href.substring(0, 60));
-  }
-
-  // Parent initial debug
-  if (!_isI) {
-    _dbgAdd('PARENT: ' + _hn + ' path=' + location.pathname);
-  }
+  console.log('[RollerWin] v7.6 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup 9s + SEQ 10s + Per-Number + GapRecovery');
 })();

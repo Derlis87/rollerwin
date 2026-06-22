@@ -1,12 +1,20 @@
-var _ln = null;
-var _tc = 0;
-var _ic = false;
+// RollerWin Capture v7.6.1 — Background Service Worker
+// Inyecta el script de deteccion en MUNDO PRINCIPAL en TODOS los frames
+// v7.6.1: Agregado soporte para Pinnacle + tabs permission
+var lastNumber = null;
+var totalCaptured = 0;
+var isConnected = false;
 
-function _inj(tid, fids) {
-  var t = { tabId: tid };
-  if (fids && fids.length > 0) { t.frameIds = fids; } else { t.allFrames = true; }
+function injectMainScript(tabId, frameIds) {
+  var target = { tabId: tabId };
+  if (frameIds && frameIds.length > 0) {
+    target.frameIds = frameIds;
+  } else {
+    target.allFrames = true;
+  }
+
   chrome.scripting.executeScript({
-    target: t,
+    target: target,
     files: ['inject-main.js'],
     injectImmediately: true,
     world: 'MAIN'
@@ -15,64 +23,62 @@ function _inj(tid, fids) {
   });
 }
 
-function _ok(url) {
+function isCasino(url) {
   if (!url) return false;
   return url.indexOf('betfury.com') >= 0 || url.indexOf('betfury.io') >= 0 || url.indexOf('pinnacle.com') >= 0;
 }
 
-chrome.tabs.onUpdated.addListener(function(tid, ci, tab) {
-  if (ci.status !== 'complete') return;
-  if (!_ok(tab.url)) return;
-  _inj(tid);
+chrome.tabs.onUpdated.addListener(function(tabId, changeInfo, tab) {
+  if (changeInfo.status !== 'complete') return;
+  if (!isCasino(tab.url)) return;
+  injectMainScript(tabId);
 });
 
-chrome.webNavigation.onCompleted.addListener(function(d) {
-  if (d.frameId === 0) return;
-  // Use d.url (the frame's own URL) instead of tab.url for reliability
-  if (!_ok(d.url)) return;
-  _inj(d.tabId, [d.frameId]);
+chrome.webNavigation.onCompleted.addListener(function(details) {
+  if (details.frameId === 0) return;
+  if (!isCasino(details.url)) return;
+  injectMainScript(details.tabId, [details.frameId]);
 });
 
-chrome.tabs.onActivated.addListener(function(ai) {
-  chrome.tabs.get(ai.tabId, function(tab) {
-    if (!_ok(tab.url)) return;
-    _inj(ai.tabId);
+chrome.tabs.onActivated.addListener(function(activeInfo) {
+  chrome.tabs.get(activeInfo.tabId, function(tab) {
+    if (!isCasino(tab.url)) return;
+    injectMainScript(activeInfo.tabId);
   });
 });
 
-// Re-inject when the extension is installed/updated on already-open tabs
 chrome.runtime.onInstalled.addListener(function() {
   chrome.tabs.query({ url: '*://*.betfury.com/*' }, function(tabs) {
-    tabs.forEach(function(tab) { _inj(tab.id); });
+    tabs.forEach(function(tab) { injectMainScript(tab.id); });
   });
   chrome.tabs.query({ url: '*://*.betfury.io/*' }, function(tabs) {
-    tabs.forEach(function(tab) { _inj(tab.id); });
+    tabs.forEach(function(tab) { injectMainScript(tab.id); });
   });
   chrome.tabs.query({ url: '*://*.pinnacle.com/*' }, function(tabs) {
-    tabs.forEach(function(tab) { _inj(tab.id); });
+    tabs.forEach(function(tab) { injectMainScript(tab.id); });
   });
 });
 
-chrome.runtime.onMessage.addListener(function(msg, sender, sr) {
+chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
   if (msg.type === 'number') {
-    _ln = { number: msg.number, color: msg.color, time: Date.now() };
-    _tc = msg.total || (_tc + 1);
-    _ic = true;
-    chrome.action.setBadgeText({ text: String(_tc) });
+    lastNumber = { number: msg.number, color: msg.color, time: Date.now() };
+    totalCaptured = msg.total || (totalCaptured + 1);
+    isConnected = true;
+    chrome.action.setBadgeText({ text: String(totalCaptured) });
     chrome.action.setBadgeBackgroundColor({ color: '#22c55e' });
   }
   if (msg.type === 'getStatus') {
-    sr({ lastNumber: _ln, totalCaptured: _tc, isConnected: _ic });
+    sendResponse({ lastNumber: lastNumber, totalCaptured: totalCaptured, isConnected: isConnected });
   }
   if (msg.type === 'reset') {
-    _tc = 0; _ln = null;
+    totalCaptured = 0; lastNumber = null;
     chrome.action.setBadgeText({ text: '' });
-    sr({ ok: true });
+    sendResponse({ ok: true });
   }
   if (msg.type === 'forceInject') {
     chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
-      if (tabs[0]) { _inj(tabs[0].id); sr({ ok: true }); }
-      else { sr({ ok: false }); }
+      if (tabs[0]) { injectMainScript(tabs[0].id); sendResponse({ ok: true }); }
+      else { sendResponse({ ok: false }); }
     });
   }
   return true;
