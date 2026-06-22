@@ -7,7 +7,7 @@
 
   var _SV = 'https://rollerwin3.onrender.com';
   var _lN = -1, _lT = 0, _sC = 0;
-  var _lST = 0, _DW = 9000, _sNS = {};
+  var _lST = 0, _DW = 6000, _sNS = {};
   var _isI = (window.self !== window.top);
   var _hn = location.hostname || '';
   var _RD = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
@@ -22,7 +22,7 @@
     if (n >= 0 && n <= 36) { _sNS[n] = Date.now(); }
   }
 
-  var _sQ = [], _SQM = 5, _SQW = 10000;
+  var _sQ = [], _SQM = 5, _SQW = 8000;
   function _cSD(n) {
     for (var i = 0; i < _sQ.length; i++) {
       if (_sQ[i].n === n && Date.now() - _sQ[i].t < _SQW) return true;
@@ -494,13 +494,41 @@
     try { window.parent.postMessage({ source: 'x-sy-m2q' }, '*'); } catch(e) {}
   }, 30000);
 
-  // Result field detection
-  var _RF = ['number','result','resultnumber','winningnumber','win_number','game_number',
-    'roulette_number','ball_number','pocket','pocket_number','winningpocket','pocketid',
-    'resultid','displaynumber','roundresult','gameoutcome','finalnumber','outcome',
-    'winningnumberdisplay','resultnumber','final_number','game_result','round_result',
-    'game_outcome','numberstr','numberstring','result_number','winning_number',
-    'game_result_number','total','value','id','outcome_number','bet_result'];
+  // ══════════════════════════════════════════════════════════════
+  // NUMBER DETECTION ENGINE — v8.1 (priority-based, no false positives)
+  // ══════════════════════════════════════════════════════════════
+
+  // Field recognition — ONLY specific roulette result fields
+  // REMOVED: total, value, id, bet_result (caused false positives from balance/bets)
+  var _RF = [
+    'winningnumber','winning_number','winningpocket','winningnumberdisplay',
+    'resultnumber','result_number','ball_number','pocket_number',
+    'game_result_number','finalnumber','final_number',
+    'displaynumber','roulette_number','pocketid','pocket',
+    'win_number','game_number',
+    'roundresult','game_result','round_result',
+    'gameoutcome','game_outcome','outcome_number',
+    'result','number','resultid','outcome',
+    'numberstr','numberstring'
+  ];
+
+  // Priority map: higher = more likely to be the actual roulette result
+  // This prevents generic keys like "number" or "result" from winning over
+  // specific keys like "winningNumber" or "ball_number"
+  var _RP = {};
+  (function() {
+    var hi = [
+      'winningnumberdisplay','winningnumber','winning_number','winningpocket','win_number',
+      'resultnumber','result_number','ball_number','pocket_number','game_result_number',
+      'finalnumber','final_number','displaynumber','roulette_number','pocketid','pocket'
+    ];
+    var md = ['game_number','roundresult','game_result','round_result','outcome_number'];
+    var lo = ['result','number','resultid','gameoutcome','outcome','game_outcome','numberstr','numberstring'];
+    for (var i = 0; i < hi.length; i++) _RP[hi[i].replace(/[_\-\s]/g,'')] = 3;
+    for (var i = 0; i < md.length; i++) _RP[md[i].replace(/[_\-\s]/g,'')] = 2;
+    for (var i = 0; i < lo.length; i++) _RP[lo[i].replace(/[_\-\s]/g,'')] = 1;
+  })();
+
   function _iRF(k) {
     var c = k.replace(/[_\-\s]/g, '').toLowerCase();
     for (var i = 0; i < _RF.length; i++) { if (c === _RF[i].replace(/[_\-\s]/g, '')) return true; }
@@ -517,45 +545,75 @@
     return null;
   }
 
+  // Object extraction — returns {n: number, p: priority} or null
+  // Collects ALL matches and returns the HIGHEST priority one
   function _eO(obj, d, p) {
-    if (!obj || typeof obj !== 'object' || d > 4) return;
+    if (!obj || typeof obj !== 'object' || d > 4) return null;
     if (Array.isArray(obj)) {
-      if (obj.length === 0 || obj.length > 5) return;
+      if (obj.length === 0 || obj.length > 5) return null;
       var pl = p.toLowerCase();
       if (pl.indexOf('result') >= 0 || pl.indexOf('winning') >= 0 ||
           pl.indexOf('outcome') >= 0 || pl.indexOf('pocket') >= 0) {
         var last = obj[obj.length - 1];
         var n = _tN(last);
-        if (n !== null) { _send(n, 'a@' + p); return; }
-        if (typeof last === 'object') _eO(last, d + 1, p + '[' + (obj.length - 1) + ']');
+        if (n !== null) return { n: n, p: 2 };
+        if (typeof last === 'object') return _eO(last, d + 1, p + '[' + (obj.length - 1) + ']');
       }
-      return;
+      return null;
     }
+    var best = null;
     var keys = Object.keys(obj);
     for (var i = 0; i < keys.length; i++) {
       var k = keys[i], v = obj[k];
-      if (_iRF(k)) { var n = _tN(v); if (n !== null) { _send(n, k + '@' + p); return; } }
-      if (typeof v === 'object' && v !== null) _eO(v, d + 1, p + '.' + k);
+      // Check if this key is a recognized roulette field with a priority
+      var kc = k.replace(/[_\-\s]/g, '').toLowerCase();
+      var pri = _RP[kc];
+      if (pri !== undefined) {
+        var n = _tN(v);
+        if (n !== null && (!best || pri > best.p)) {
+          best = { n: n, p: pri };
+        }
+      }
+      // Recurse into nested objects
+      if (typeof v === 'object' && v !== null && d < 3) {
+        var sub = _eO(v, d + 1, p + '.' + k);
+        if (sub && (!best || sub.p > best.p)) {
+          best = sub;
+        }
+      }
     }
+    return best;
   }
 
+  // Regex text extraction — takes FIRST match (not last)
+  // This prevents history numbers from overriding the current result
   function _eFT(text, src) {
     if (!text || typeof text !== 'string' || text.length > 200000) return;
     var pats = [
-      /"resultNumber"\s*:\s*(\d{1,2})\b/gi, /"winningNumber"\s*:\s*(\d{1,2})\b/gi,
-      /"winning_number"\s*:\s*(\d{1,2})\b/gi, /"ball_number"\s*:\s*(\d{1,2})\b/gi,
-      /"pocket_number"\s*:\s*(\d{1,2})\b/gi, /"roulette_number"\s*:\s*(\d{1,2})\b/gi,
-      /"finalNumber"\s*:\s*(\d{1,2})\b/gi, /"game_number"\s*:\s*(\d{1,2})\b/gi,
-      /"displayNumber"\s*:\s*(\d{1,2})\b/gi, /"winningPocket"\s*:\s*(\d{1,2})\b/gi,
-      /"result_number"\s*:\s*(\d{1,2})\b/gi, /"gameResult"\s*:\s*(\d{1,2})\b/gi,
-      /"game_result"\s*:\s*(\d{1,2})\b/gi, /"round_result"\s*:\s*(\d{1,2})\b/gi
+      /"resultNumber"\s*:\s*(\d{1,2})\b/gi,
+      /"winningNumber"\s*:\s*(\d{1,2})\b/gi,
+      /"winning_number"\s*:\s*(\d{1,2})\b/gi,
+      /"ball_number"\s*:\s*(\d{1,2})\b/gi,
+      /"pocket_number"\s*:\s*(\d{1,2})\b/gi,
+      /"roulette_number"\s*:\s*(\d{1,2})\b/gi,
+      /"finalNumber"\s*:\s*(\d{1,2})\b/gi,
+      /"game_number"\s*:\s*(\d{1,2})\b/gi,
+      /"displayNumber"\s*:\s*(\d{1,2})\b/gi,
+      /"winningPocket"\s*:\s*(\d{1,2})\b/gi,
+      /"result_number"\s*:\s*(\d{1,2})\b/gi,
+      /"game_result_number"\s*:\s*(\d{1,2})\b/gi,
+      /"gameResult"\s*:\s*(\d{1,2})\b/gi,
+      /"game_result"\s*:\s*(\d{1,2})\b/gi,
+      /"round_result"\s*:\s*(\d{1,2})\b/gi
     ];
-    var lm = null;
+    // Take the FIRST match across all patterns (most specific first)
     for (var i = 0; i < pats.length; i++) {
       var m; pats[i].lastIndex = 0;
-      while ((m = pats[i].exec(text)) !== null) { var n = parseInt(m[1], 10); if (n >= 0 && n <= 36) lm = n; }
+      if ((m = pats[i].exec(text)) !== null) {
+        var n = parseInt(m[1], 10);
+        if (n >= 0 && n <= 36) { _send(n, 'rx@' + src); return; }
+      }
     }
-    if (lm !== null) _send(lm, 'rx@' + src);
   }
 
   // === HOOK WEBSOCKET ===
@@ -581,23 +639,33 @@
               var pp = JSON.parse(data.substring(2));
               if (Array.isArray(pp) && pp.length >= 2 && typeof pp[1] === 'object') {
                 var ev = String(pp[0] || '');
-                if (ev.indexOf('result') >= 0 || ev.indexOf('complete') >= 0 ||
+                // v8.1 FIX: Tighter event filtering
+                // ONLY process events that clearly indicate a round RESULT
+                // REMOVED: update, new, bet (these are balance/bet events, NOT results)
+                var isResultEvent = (ev.indexOf('result') >= 0 || ev.indexOf('complete') >= 0 ||
                     ev.indexOf('win') >= 0 || ev.indexOf('round') >= 0 ||
-                    ev.indexOf('spin') >= 0 || ev.indexOf('game') >= 0 ||
-                    ev.indexOf('end') >= 0 || ev.indexOf('finish') >= 0 ||
-                    ev.indexOf('update') >= 0 || ev.indexOf('new') >= 0 ||
-                    ev.indexOf('bet') >= 0) {
-                  _eO(pp[1], 0, 's.' + ev);
+                    ev.indexOf('spin') >= 0 || ev.indexOf('end') >= 0 ||
+                    ev.indexOf('finish') >= 0);
+                if (isResultEvent) {
+                  // High-confidence: both object extraction and regex
+                  var _or = _eO(pp[1], 0, 's.' + ev);
+                  if (_or) _send(_or.n, 'o@' + ev);
                   _eFT(data, 's.' + ev);
                 } else {
-                  _eO(pp[1], 0, 'sf.' + ev);
+                  // Low-confidence: ONLY strict regex (no generic object traversal)
+                  // This catches edge cases where a casino uses unusual event names
+                  // but the data still contains explicit resultNumber/winningNumber keys
                   _eFT(data, 'sf.' + ev);
                 }
               }
             } catch(err) {}
           }
           if (data.charAt(0) === '{' || data.charAt(0) === '[') {
-            try { _eO(JSON.parse(data), 0, 'w'); _eFT(data, 'w'); } catch(err) {}
+            try {
+              var _or2 = _eO(JSON.parse(data), 0, 'w');
+              if (_or2) _send(_or2.n, 'o@w');
+              _eFT(data, 'w');
+            } catch(err) {}
           }
         } catch(err) {}
       });
@@ -624,7 +692,13 @@
         if (ul.indexOf('history') >= 0 || ul.indexOf('state') >= 0 || ul.indexOf('stats') >= 0) return pr;
         pr.then(function(r) {
           try { r.clone().text().then(function(t) {
-            if (t) { try { _eO(JSON.parse(t), 0, 'f'); } catch(e) {} _eFT(t, 'f'); }
+            if (t) {
+              try {
+                var _or = _eO(JSON.parse(t), 0, 'f');
+                if (_or) _send(_or.n, 'o@f');
+              } catch(e) {}
+              _eFT(t, 'f');
+            }
           }).catch(function() {}); } catch(e) {}
         }).catch(function() {});
       }
@@ -648,7 +722,13 @@
           if (u.indexOf('history') >= 0 || u.indexOf('state') >= 0 || u.indexOf('stats') >= 0) return;
           try {
             var t = s.responseText;
-            if (t) { try { _eO(JSON.parse(t), 0, 'x'); } catch(e) {} _eFT(t, 'x'); }
+            if (t) {
+              try {
+                var _or = _eO(JSON.parse(t), 0, 'x');
+                if (_or) _send(_or.n, 'o@x');
+              } catch(e) {}
+              _eFT(t, 'x');
+            }
           } catch(e) {}
         }
       });
@@ -743,11 +823,22 @@
     if (_o.__xV42) return;
     _o.__xV42 = true;
     window.postMessage = function(data, origin, transfer) {
-      try { if (typeof data === 'object' && data !== null) _eO(data, 0, 'po'); } catch(e) {}
+      try {
+        if (typeof data === 'object' && data !== null) {
+          var _or = _eO(data, 0, 'po');
+          if (_or) _send(_or.n, 'o@po');
+        }
+      } catch(e) {}
       return _o.call(window, data, origin, transfer);
     };
     window.addEventListener('message', function(ev) {
-      try { var d = ev.data; if (typeof d === 'object' && d !== null) _eO(d, 0, 'pi'); } catch(e) {}
+      try {
+        var d = ev.data;
+        if (typeof d === 'object' && d !== null) {
+          var _or = _eO(d, 0, 'pi');
+          if (_or) _send(_or.n, 'o@pi');
+        }
+      } catch(e) {}
     });
   })();
 
@@ -763,7 +854,13 @@
       ['result','game','update','roulette','number','outcome','round'].forEach(function(t) {
         ad(t, function(e) {
           try {
-            if (typeof e.data === 'string') { _eFT(e.data, 'e.' + t); try { _eO(JSON.parse(e.data), 0, 'e.' + t); } catch(err) {} }
+            if (typeof e.data === 'string') {
+              try {
+                var _or = _eO(JSON.parse(e.data), 0, 'e.' + t);
+                if (_or) _send(_or.n, 'o@e.' + t);
+              } catch(err) {}
+              _eFT(e.data, 'e.' + t);
+            }
           } catch(err) {}
         });
       });

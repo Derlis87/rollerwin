@@ -1245,6 +1245,27 @@ export function DashboardLive() {
     setSmartPrediction(null)
   }, [])
 
+  // Copy sequence to clipboard
+  const [copied, setCopied] = useState(false)
+  const handleCopySequence = useCallback(() => {
+    if (numbers.length === 0) return
+    const text = numbers.join(', ')
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }).catch(() => {
+      // Fallback for older browsers
+      const ta = document.createElement('textarea')
+      ta.value = text
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }, [numbers])
+
   // Leave table
   const handleLeaveTable = useCallback(() => {
     setIsJoined(false)
@@ -2060,7 +2081,17 @@ export function DashboardLive() {
                     </div>
 
                     <div className="pt-4 border-t border-zinc-800">
-                      <p className="text-zinc-500 text-xs mb-2">Secuencia actual:</p>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-zinc-500 text-xs">Secuencia actual:</p>
+                        {numbers.length > 0 && (
+                          <button
+                            onClick={handleCopySequence}
+                            className="flex items-center gap-1 text-[10px] text-zinc-400 hover:text-cyan-400 transition-colors px-1.5 py-0.5 rounded hover:bg-zinc-800"
+                          >
+                            {copied ? <><Check className="w-3 h-3" /> Copiado!</> : <><Copy className="w-3 h-3" /> Copiar</>}
+                          </button>
+                        )}
+                      </div>
                       <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
                         <AnimatePresence>
                           {numbers.map((num, index) => (

@@ -101,7 +101,7 @@ function releaseWriteLock(number: number): void {
 // bloquear SOLO ese número. Perite 15,15 legítimos si están separados >12s.
 // Los giros duran ~18s, así que 12s nunca bloquea giros diferentes.
 const _dedupCache = new Map<number, number>() // number → timestamp
-const DEDUP_WINDOW_MS = 12000 // 12 seconds
+const DEDUP_WINDOW_MS = 8000 // 8 seconds (reduced from 12s to prevent false-positive blocking)
 
 function isDuplicate(number: number): boolean {
   const now = Date.now()
