@@ -403,3 +403,34 @@ Stage Summary:
 - Anti-detection: zero console.log, obfuscated globals (__xQ3mP, __xK7cW), randomized event/postMessage IDs
 - Multi-casino: Betfury (Evolution + Pragmatic) + Pinnacle (European + Azure)
 - Bug fix: _ci2 strict mode error in content.js → renamed to _dt with proper var declaration
+
+---
+Task ID: 1
+Agent: main
+Task: v8.3 — Fix wrong number capture (parent detection + table matching broken)
+
+Work Log:
+- Diagnosed 3 root causes in v8.2:
+  1. Parent page ran ALL detection hooks (WS/Fetch/XHR/DOM/postMessage/EventSource) — caught numbers from lobby/balance/non-game data
+  2. _activeTable URL matching was fragile — iframe URLs (evolution.com, pragmaticplay.com) never match Betfury/Pinnacle paths
+  3. _activeTable started as false, so no numbers sent to server until first successful poll
+- Complete rewrite of inject-main.js as v8.3 with new architecture:
+  - Parent page: RELAY ONLY — no detection hooks. Only receives numbers from iframes and forwards to server
+  - iframes: ALL detection hooks run only in iframes (fetch/XHR/DOM/postMessage/EventSource all check `if (!_isI) return`)
+  - Game iframe identification: when iframe connects WSS to known game hosts (evolution, pragmatic, etc.), it self-identifies as game iframe via postMessage to parent
+  - Parent filtering: accepts numbers only from iframes that are game-identified OR have game WSS hosts
+  - Removed generic fields (result, number, outcome) from LOW priority — only specific roulette fields remain
+  - Added more URL exclusion patterns (balance, user, account, wallet, bonus)
+  - Added 'recent', 'stat' to DOM history-key blacklist
+  - Array length check reduced from 5 to 3 (tighter)
+  - Non-result Socket.IO events completely skipped (no fallback regex)
+  - Added debug logging: every detection shows source, iframe hostname, game status
+  - content.js v8.3: shows game frame count, active casino, last 3 debug lines
+  - manifest.json: version 8.3.0
+- Built rollerwin-capture-v8.3.zip
+
+Stage Summary:
+- v8.3 ZIP at /home/z/my-project/download/rollerwin-capture-v8.3.zip
+- Key change: Parent NO LONGER detects numbers — only relays from game iframes
+- Game iframes self-identify via WSS host detection
+- Debug overlay shows: casino, game frames count, last 3 detection events

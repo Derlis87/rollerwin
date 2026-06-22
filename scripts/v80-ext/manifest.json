@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "RollerWin Capture",
-  "version": "8.0.0",
-  "description": "Captura numeros de ruleta en vivo",
+  "version": "8.3.0",
+  "description": "Captura numeros de ruleta en vivo v8.3",
   "permissions": ["scripting", "activeTab", "storage", "webNavigation", "tabs"],
   "host_permissions": ["<all_urls>"],
   "background": {
