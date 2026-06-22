@@ -50,7 +50,7 @@
   function refreshStatus() {
     if (!statusEl) return;
     var lines = [];
-    lines.push('Motor v9.0 | ' + _casinoName);
+    lines.push('Motor v9.1 | ' + _casinoName);
     if (sentCount > 0) {
       lines.push(sentCount + ' numeros capturados');
     } else {
@@ -105,7 +105,7 @@
 
     statusEl = document.createElement('div');
     statusEl.style.cssText = 'font-size:10px;color:#a1a1aa;white-space:pre-line;line-height:1.5;';
-    statusEl.textContent = 'Motor v9.0\nEsperando numeros...\n\nServidor: ' + SERVER_URL;
+    statusEl.textContent = 'Motor v9.1\nEsperando numeros...\n\nServidor: ' + SERVER_URL;
 
     var lastRow = document.createElement('div');
     lastRow.style.cssText = 'margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.1);display:flex;align-items:center;gap:8px;';
@@ -150,5 +150,5 @@
     });
   }
 
-  console.log('[RollerWin] Content Script v9.0 activo [PARENT]', location.hostname);
+  console.log('[RollerWin] Content Script v9.1 activo [PARENT]', location.hostname);
 })();

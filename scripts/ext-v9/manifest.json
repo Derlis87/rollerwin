@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "RollerWin Capture",
-  "version": "9.0",
+  "version": "9.1",
   "description": "Captura numeros de ruleta en Betfury y Pinnacle — envia al dashboard RollerWin",
   "permissions": ["scripting", "activeTab", "storage", "webNavigation", "tabs"],
   "host_permissions": ["<all_urls>"],
@@ -10,7 +10,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["*://*.betfury.com/*", "*://*.betfury.io/*", "*://*.pinnacle.com/*", "*://*.casino.pinnacle.com/*"],
+      "matches": ["*://*.betfury.com/*", "*://*.betfury.io/*", "*://*.pinnacle.com/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
