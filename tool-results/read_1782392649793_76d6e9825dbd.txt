@@ -1,0 +1,770 @@
+     1→// RollerWin Capture v9.3 — Basado en motor v7.6.1 probado
+     2→// ARQUITECTURA CLAVE: PARENT no detecta nada. IFRAME detecta todo.
+     3→// El parent page SOLO retransmite lo que llega via postMessage desde iframes.
+     4→// Soporta: Betfury Evolution, Betfury Pragmatic, Pinnacle European, Pinnacle Azure
+     5→(function() {
+     6→  'use strict';
+     7→
+     8→  if (window.__rwMainV93) return;
+     9→  window.__rwMainV93 = true;
+    10→
+    11→  var SERVER = 'https://rollerwin3.onrender.com';
+    12→  var RED = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
+    13→  var isInIframe = (window.self !== window.top);
+    14→  var hostname = location.hostname || '';
+    15→
+    16→  console.log('[RW] v9.3 CARGADO en ' + (isInIframe ? 'IFRAME' : 'PARENT') + ' | ' + hostname);
+    17→
+    18→  // ═══ DEDUP por TIEMPO — 9s entre envios ═══
+    19→  var _lastSentTimestamp = 0;
+    20→  var _DEDUP_WINDOW = 9000;
+    21→  var _sentSequence = [];
+    22→  var _SEQUENCE_MAX = 5;
+    23→  var _SEQUENCE_WINDOW = 10000;
+    24→  var sentCount = 0;
+    25→
+    26→  function _isDuplicate(n) {
+    27→    if (Date.now() - _lastSentTimestamp < _DEDUP_WINDOW) {
+    28→      console.log('[RW] DUP: ' + n + ' (ultimo envio hace ' + Math.round(Date.now() - _lastSentTimestamp) + 's)');
+    29→      return true;
+    30→    }
+    31→    if (_checkSequenceDup(n)) {
+    32→      console.log('[RW] DUP-SEQ: ' + n + ' (en secuencia reciente)');
+    33→      return true;
+    34→    }
+    35→    return false;
+    36→  }
+    37→
+    38→  function _markSent(n) {
+    39→    _lastSentTimestamp = Date.now();
+    40→    _sentSequence.push({ number: n, timestamp: Date.now() });
+    41→    if (_sentSequence.length > _SEQUENCE_MAX) _sentSequence.shift();
+    42→  }
+    43→
+    44→  function _checkSequenceDup(n) {
+    45→    for (var i = 0; i < _sentSequence.length; i++) {
+    46→      if (_sentSequence[i].number === n && Date.now() - _sentSequence[i].timestamp < _SEQUENCE_WINDOW) return true;
+    47→    }
+    48→    return false;
+    49→  }
+    50→
+    51→  function syncLastNumber(n) {
+    52→    if (n >= 0 && n <= 36) {
+    53→      _sentSequence.push({ number: n, timestamp: Date.now() });
+    54→      if (_sentSequence.length > _SEQUENCE_MAX) _sentSequence.shift();
+    55→      console.log('[RW] SYNC: numero ' + n + ' marcado como enviado');
+    56→    }
+    57→  }
+    58→
+    59→  function getColor(n) {
+    60→    if (n === 0) return 'green';
+    61→    return RED.indexOf(n) >= 0 ? 'red' : 'black';
+    62→  }
+    63→
+    64→  function tryNum(val) {
+    65→    if (typeof val === 'number' && val >= 0 && val <= 36 && val === Math.floor(val)) return val;
+    66→    if (typeof val === 'string') {
+    67→      var s = val.trim();
+    68→      if ((s.length === 1 || s.length === 2) && s === String(parseInt(s, 10))) {
+    69→        var n = parseInt(s, 10);
+    70→        if (n >= 0 && n <= 36) return n;
+    71→      }
+    72→    }
+    73→    return null;
+    74→  }
+    75→
+    76→  // ══════════════════════════════════════
+    77→  // ENVIAR numero al servidor
+    78→  // ══════════════════════════════════════
+    79→  function sendToServer(n, source) {
+    80→    if (n < 0 || n > 36) return;
+    81→    if (_isDuplicate(n)) return;
+    82→
+    83→    _markSent(n);
+    84→    sentCount++;
+    85→
+    86→    console.log('%c[RW] #' + sentCount + ': ' + n + ' (' + getColor(n) + ') — ' + source +
+    87→      (isInIframe ? ' [IFRAME ' + hostname + ']' : ' [PARENT]'),
+    88→      'color: #22c55e; font-weight: bold; font-size: 14px;');
+    89→
+    90→    // Enviar al servidor con reintento
+    91→    (function doSend(attempt) {
+    92→      fetch(SERVER + '/api/capture/receive', {
+    93→        method: 'POST',
+    94→        headers: { 'Content-Type': 'application/json' },
+    95→        body: JSON.stringify({ number: n })
+    96→      }).then(function(r) {
+    97→        if (r.ok) {
+    98→          console.log('[RW] Servidor OK:', n);
+    99→        } else if (attempt < 2) {
+   100→          setTimeout(function() { doSend(attempt + 1); }, 2000);
+   101→        }
+   102→      }).catch(function() {
+   103→        if (attempt < 2) setTimeout(function() { doSend(attempt + 1); }, 2000);
+   104→      });
+   105→    })(0);
+   106→
+   107→    // Notificar al parent (si estamos en iframe)
+   108→    if (isInIframe) {
+   109→      try {
+   110→        window.parent.postMessage({
+   111→          source: 'rollerwin-capture',
+   112→          number: n, color: getColor(n), hostname: hostname
+   113→        }, '*');
+   114→      } catch(e) {}
+   115→    }
+   116→
+   117→    // CustomEvent para content.js
+   118→    try {
+   119→      document.dispatchEvent(new CustomEvent('rw-number', {
+   120→        detail: { number: n, color: getColor(n) }
+   121→      }));
+   122→    } catch(e) {}
+   123→  }
+   124→
+   125→  // ═══════════════════════════════════════════════════════════════
+   126→  // ============ PARENT PAGE ============
+   127→  // NO detecta numeros directamente.
+   128→  // Solo retransmite lo que llega de los iframes via postMessage.
+   129→  // + Auto-recovery para Betfury (sesion expirada, reload)
+   130→  // ═══════════════════════════════════════════════════════════════
+   131→  if (!isInIframe) {
+   132→    console.log('[RW] PARENT page — esperando numeros de iframes via postMessage');
+   133→
+   134→    var _parentLastNumber = -1;
+   135→    var _lastCaptureTime = Date.now();
+   136→    var _isPinnacle = hostname.indexOf('pinnacle') >= 0;
+   137→
+   138→    window.addEventListener('message', function(event) {
+   139→      try {
+   140→        var data = event.data;
+   141→        if (data && data.source === 'rollerwin-capture' && typeof data.number === 'number') {
+   142→          console.log('[RW] PARENT: recibido ' + data.number + ' de iframe ' + (data.hostname || ''));
+   143→          _parentLastNumber = data.number;
+   144→          _lastCaptureTime = Date.now();
+   145→          try {
+   146→            document.dispatchEvent(new CustomEvent('rw-number', {
+   147→              detail: { number: data.number, color: data.color }
+   148→            }));
+   149→          } catch(e) {}
+   150→        }
+   151→        if (data && data.source === 'rollerwin-sync' && typeof data.lastNumber === 'number') {
+   152→          try {
+   153→            window.postMessage({ source: 'rollerwin-sync-reply', lastNumber: _parentLastNumber }, '*');
+   154→          } catch(e) {}
+   155→        }
+   156→        // Session expired desde iframe
+   157→        if (data && data.source === 'rollerwin-session-expired') {
+   158→          console.log('[RW] PARENT: session expired from iframe — ' + (data.reason || ''));
+   159→          if (!_isPinnacle) {
+   160→            setTimeout(function() { location.reload(); }, 1000);
+   161→          }
+   162→        }
+   163→      } catch(e) {}
+   164→    });
+   165→
+   166→    // ═══ AUTO-RECOVERY (solo Betfury) ═══
+   167→    if (!_isPinnacle) {
+   168→      var _keepAliveCount = 0;
+   169→      var _recoveryInProgress = false;
+   170→
+   171→      function betfuryKeepAlive() {
+   172→        fetch('https://betfury.com/api/keep-alive', { method: 'GET', credentials: 'include' })
+   173→          .then(function(r) {
+   174→            _keepAliveCount++;
+   175→            console.log('[RW] Keep-alive #' + _keepAliveCount + ' HTTP ' + r.status);
+   176→            if (r.status === 401 || r.status === 403) {
+   177→              console.log('[RW] Sesion expirada (keep-alive)');
+   178→              if (!_recoveryInProgress) { _recoveryInProgress = true; location.reload(); }
+   179→            }
+   180→          })
+   181→          .catch(function() {});
+   182→      }
+   183→
+   184→      setInterval(betfuryKeepAlive, 45000);
+   185→      setTimeout(betfuryKeepAlive, 2000);
+   186→
+   187→      // Reload si sin capturas >90s
+   188→      setInterval(function() {
+   189→        if (Date.now() - _lastCaptureTime > 90000 && !_recoveryInProgress) {
+   190→          console.log('[RW] Sin capturas >90s — reload...');
+   191→          _recoveryInProgress = true;
+   192→          location.reload();
+   193→        }
+   194→      }, 15000);
+   195→
+   196→      // Deteccion de pagina de juego
+   197→      function isGamePage() {
+   198→        return location.href.indexOf('/casino/games/') !== -1;
+   199→      }
+   200→
+   201→      // Click "Jugar" si aparece
+   202→      function checkPlayButton() {
+   203→        var btns = document.querySelectorAll('button, a, div[role="button"], span[role="button"]');
+   204→        for (var i = 0; i < btns.length; i++) {
+   205→          var t = (btns[i].textContent || '').trim().toLowerCase();
+   206→          if ((t === 'jugar' || t === 'play now' || t === 'play') && !btns[i].getAttribute('target')) {
+   207→            console.log('[RW] Click Jugar:', t);
+   208→            btns[i].click();
+   209→            return true;
+   210→          }
+   211→        }
+   212→        return false;
+   213→      }
+   214→
+   215→      function detectAndCloseAnyModal() {
+   216→        var allEls = document.querySelectorAll('div, dialog, [role="dialog"]');
+   217→        for (var i = 0; i < allEls.length; i++) {
+   218→          var txt = ((allEls[i].textContent || '') || '').toLowerCase();
+   219→          if (txt.indexOf('sesi') !== -1 && txt.indexOf('finalizada') !== -1) {
+   220→            var okBtns = allEls[i].querySelectorAll('button, a, [role="button"]');
+   221→            for (var j = 0; j < okBtns.length; j++) {
+   222→              var bt = (okBtns[j].textContent || '').trim();
+   223→              if (bt === 'OK' || bt === 'Ok' || bt === 'ACEPTAR' || bt === 'Aceptar') {
+   224→                console.log('[RW] Click OK en modal');
+   225→                okBtns[j].click();
+   226→                return true;
+   227→              }
+   228→            }
+   229→          }
+   230→        }
+   231→        return false;
+   232→      }
+   233→
+   234→      // Check recovery al cargar
+   235→      setTimeout(function() {
+   236→        if (isGamePage()) { checkPlayButton(); detectAndCloseAnyModal(); }
+   237→      }, 500);
+   238→      setTimeout(function() {
+   239→        if (isGamePage()) { checkPlayButton(); detectAndCloseAnyModal(); }
+   240→      }, 1500);
+   241→
+   242→      document.addEventListener('visibilitychange', function() {
+   243→        if (!document.hidden && isGamePage()) { checkPlayButton(); detectAndCloseAnyModal(); }
+   244→      });
+   245→    }
+   246→
+   247→    console.log('[RW] v9.3 PARENT ACTIVO | Mesa lista para recibir de iframes');
+   248→    return; // === FIN PARENT — no ejecutar nada mas ===
+   249→  }
+   250→
+   251→  // ═══════════════════════════════════════════════════════════════
+   252→  // ============ IFRAME (donde corre el juego) ======
+   253→  // AQUI es donde se detectan los numeros — el motor v7.6.1 probado
+   254→  // ═══════════════════════════════════════════════════════════════
+   255→  console.log('[RW] IFRAME — activando motor de deteccion v9.3 | ' + hostname);
+   256→
+   257→  // v7.6: Gap Recovery
+   258→  var _iframeLastCaptureTime = Date.now();
+   259→  var _iframeLastActivity = Date.now();
+   260→  var _gapRecoveryActive = false;
+   261→  var _GAP_THRESHOLD = 22000;
+   262→  var _wsWasClosed = false;
+   263→
+   264→  // Notificar parent si iframe muerto (solo Betfury)
+   265→  var _isPinnacleIframe = hostname.indexOf('pinnacle') >= 0 || hostname.indexOf('ignition') >= 0;
+   266→  if (!_isPinnacleIframe) {
+   267→    setInterval(function() {
+   268→      if (Date.now() - _iframeLastActivity > 45000) {
+   269→        console.log('[RW] IFRAME: Sin actividad >45s — notificando parent');
+   270→        try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-dead-45s' }, '*'); } catch(e) {}
+   271→        startGapRecovery();
+   272→      }
+   273→    }, 10000);
+   274→  }
+   275→
+   276→  // Hook fetch UNIFICADO: detecta 401/403 + extrae resultados
+   277→  var _ifOrigFetch = window.fetch;
+   278→  if (_ifOrigFetch && !_ifOrigFetch._rwV93) {
+   279→    _ifOrigFetch._rwV93 = true;
+   280→    window.fetch = function(input, init) {
+   281→      _iframeLastActivity = Date.now();
+   282→      var url = '';
+   283→      try {
+   284→        url = typeof input === 'string' ? input :
+   285→              (input instanceof Request) ? (input.url || '') :
+   286→              (input && input.url) ? input.url : '';
+   287→      } catch(e) {}
+   288→      var promise = _ifOrigFetch.apply(this, arguments);
+   289→
+   290→      // Deteccion de sesion expirada
+   291→      if (promise) {
+   292→        promise.then(function(r) {
+   293→          if (r.status === 401 || r.status === 403) {
+   294→            console.log('[RW] IFRAME: Fetch ' + r.status);
+   295→            try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-fetch-' + r.status }, '*'); } catch(e) {}
+   296→          }
+   297→        }).catch(function() {});
+   298→      }
+   299→
+   300→      // Extraccion de resultados de URLs relevantes
+   301→      var urlLow = url.toLowerCase();
+   302→      if (urlLow.indexOf('result') >= 0 || urlLow.indexOf('roulette') >= 0 ||
+   303→          urlLow.indexOf('evolution') >= 0 || urlLow.indexOf('round') >= 0 ||
+   304→          urlLow.indexOf('wheel') >= 0) {
+   305→        if (urlLow.indexOf('history') >= 0 || urlLow.indexOf('state') >= 0 || urlLow.indexOf('stats') >= 0) {
+   306→          return promise;
+   307→        }
+   308→        promise.then(function(r) {
+   309→          try {
+   310→            r.clone().text().then(function(text) {
+   311→              if (text) {
+   312→                try { extractObj(JSON.parse(text), 0, 'fetch'); } catch(e) {}
+   313→                extractFromText(text, 'fetch');
+   314→              }
+   315→            }).catch(function() {});
+   316→          } catch(e) {}
+   317→        }).catch(function() {});
+   318→      }
+   319→
+   320→      return promise;
+   321→    };
+   322→  }
+   323→
+   324→  // Solicitar sync del ultimo numero al parent
+   325→  try {
+   326→    var _syncHandler = function(e) {
+   327→      try {
+   328→        if (e.data && e.data.source === 'rollerwin-sync-reply' && typeof e.data.lastNumber === 'number') {
+   329→          syncLastNumber(e.data.lastNumber);
+   330→          window.removeEventListener('message', _syncHandler);
+   331→        }
+   332→      } catch(err) {}
+   333→    };
+   334→    window.parent.postMessage({ source: 'rollerwin-sync' }, '*');
+   335→    window.addEventListener('message', _syncHandler);
+   336→    setTimeout(function() { window.removeEventListener('message', _syncHandler); }, 2000);
+   337→  } catch(e) {}
+   338→
+   339→  // ═══ EXTRACTORES — motor v7.6.1 probado ═══
+   340→  var RESULT_FIELDS = [
+   341→    'number', 'result', 'resultnumber', 'winningnumber', 'win_number',
+   342→    'game_number', 'roulette_number', 'ball_number', 'pocket', 'pocket_number',
+   343→    'winningpocket', 'pocketid', 'resultid', 'displaynumber',
+   344→    'roundresult', 'gameoutcome', 'finalnumber', 'outcome',
+   345→    'winningnumberdisplay', 'resultnumber', 'final_number', 'game_result',
+   346→    'round_result', 'game_outcome', 'numberstr', 'numberstring'
+   347→  ];
+   348→
+   349→  function isResultField(key) {
+   350→    var k = key.replace(/[_\-\s]/g, '').toLowerCase();
+   351→    for (var i = 0; i < RESULT_FIELDS.length; i++) {
+   352→      if (k === RESULT_FIELDS[i].replace(/[_\-\s]/g, '')) return true;
+   353→    }
+   354→    return false;
+   355→  }
+   356→
+   357→  function extractObj(obj, depth, path) {
+   358→    if (!obj || typeof obj !== 'object' || depth > 4) return;
+   359→
+   360→    if (Array.isArray(obj)) {
+   361→      if (obj.length === 0 || obj.length > 5) return;
+   362→      var pathLow = path.toLowerCase();
+   363→      if (pathLow.indexOf('result') >= 0 || pathLow.indexOf('winning') >= 0 ||
+   364→          pathLow.indexOf('outcome') >= 0 || pathLow.indexOf('pocket') >= 0) {
+   365→        var last = obj[obj.length - 1];
+   366→        var n = tryNum(last);
+   367→        if (n !== null) { sendToServer(n, 'array@' + path); return; }
+   368→        if (typeof last === 'object') extractObj(last, depth + 1, path + '[' + (obj.length-1) + ']');
+   369→      }
+   370→      return;
+   371→    }
+   372→
+   373→    var keys = Object.keys(obj);
+   374→    for (var i = 0; i < keys.length; i++) {
+   375→      var key = keys[i];
+   376→      var val = obj[key];
+   377→      if (isResultField(key)) {
+   378→        var n = tryNum(val);
+   379→        if (n !== null) { sendToServer(n, key + '@' + path); return; }
+   380→      }
+   381→      if (typeof val === 'object' && val !== null) {
+   382→        extractObj(val, depth + 1, path + '.' + key);
+   383→      }
+   384→    }
+   385→  }
+   386→
+   387→  function extractFromText(text, source) {
+   388→    if (!text || typeof text !== 'string' || text.length > 200000) return;
+   389→    var patterns = [
+   390→      /"resultNumber"\s*:\s*(\d{1,2})\b/gi,
+   391→      /"winningNumber"\s*:\s*(\d{1,2})\b/gi,
+   392→      /"winning_number"\s*:\s*(\d{1,2})\b/gi,
+   393→      /"ball_number"\s*:\s*(\d{1,2})\b/gi,
+   394→      /"pocket_number"\s*:\s*(\d{1,2})\b/gi,
+   395→      /"roulette_number"\s*:\s*(\d{1,2})\b/gi,
+   396→      /"finalNumber"\s*:\s*(\d{1,2})\b/gi,
+   397→      /"game_number"\s*:\s*(\d{1,2})\b/gi,
+   398→      /"displayNumber"\s*:\s*(\d{1,2})\b/gi,
+   399→      /"winningPocket"\s*:\s*(\d{1,2})\b/gi
+   400→    ];
+   401→    var lastMatch = null;
+   402→    for (var i = 0; i < patterns.length; i++) {
+   403→      var m; patterns[i].lastIndex = 0;
+   404→      while ((m = patterns[i].exec(text)) !== null) {
+   405→        var n = parseInt(m[1], 10);
+   406→        if (n >= 0 && n <= 36) lastMatch = n;
+   407→      }
+   408→    }
+   409→    if (lastMatch !== null) sendToServer(lastMatch, 'regex@' + source);
+   410→  }
+   411→
+   412→  // ═══ HOOK WEBSOCKET (solo iframe) ═══
+   413→  (function() {
+   414→    var OrigWS = window.WebSocket;
+   415→    if (!OrigWS || OrigWS.__rwV93) return;
+   416→    OrigWS.__rwV93 = true;
+   417→
+   418→    var ProxyWS = function(url, protocols) {
+   419→      console.log('[RW] WS abierto en iframe: ' + (url || '').substring(0, 100));
+   420→      var ws = protocols ? new OrigWS(url, protocols) : new OrigWS(url);
+   421→
+   422→      // v7.6: WS Reconnect Detection
+   423→      if (_wsWasClosed) {
+   424→        _wsWasClosed = false;
+   425→        console.log('[RW] WS RECONNECT — activando Gap Recovery');
+   426→        setTimeout(startGapRecovery, 1000);
+   427→      }
+   428→
+   429→      ws.addEventListener('message', function(e) {
+   430→        try {
+   431→          _iframeLastActivity = Date.now();
+   432→          var data = e.data;
+   433→
+   434→          if (typeof data !== 'string') {
+   435→            if (data instanceof ArrayBuffer) {
+   436→              try { data = String.fromCharCode.apply(null, new Uint8Array(data)); } catch(er) { return; }
+   437→            } else return;
+   438→          }
+   439→
+   440→          // Socket.io: 42["event",{...}]
+   441→          if (data.charAt(0) === '4' && (data.charAt(1) === '2' || data.charAt(1) === '3')) {
+   442→            try {
+   443→              var p = JSON.parse(data.substring(2));
+   444→              if (Array.isArray(p) && p.length >= 2 && typeof p[1] === 'object') {
+   445→                var evt = String(p[0] || '');
+   446→                // v6.5: Procesar TODOS los eventos socket.io
+   447→                // extractObj/extractFromText solo extraen si encuentran campos de resultado
+   448→                if (evt.indexOf('result') >= 0 || evt.indexOf('complete') >= 0 ||
+   449→                    evt.indexOf('win') >= 0 || evt.indexOf('round') >= 0 ||
+   450→                    evt.indexOf('spin') >= 0 || evt.indexOf('game') >= 0 ||
+   451→                    evt.indexOf('end') >= 0 || evt.indexOf('finish') >= 0 ||
+   452→                    evt.indexOf('update') >= 0 || evt.indexOf('new') >= 0 ||
+   453→                    evt.indexOf('bet') >= 0) {
+   454→                  extractObj(p[1], 0, 'sio.' + evt);
+   455→                  extractFromText(data, 'sio.' + evt);
+   456→                } else {
+   457→                  // Fallback: regex en todos los demas eventos
+   458→                  extractFromText(data, 'sio-fallback.' + evt);
+   459→                }
+   460→              }
+   461→            } catch(err) {}
+   462→          }
+   463→
+   464→          // JSON puro
+   465→          if (data.charAt(0) === '{' || data.charAt(0) === '[') {
+   466→            try { extractObj(JSON.parse(data), 0, 'ws'); extractFromText(data, 'ws'); } catch(err) {}
+   467→          }
+   468→        } catch(err) {}
+   469→      });
+   470→
+   471→      ws.addEventListener('close', function(e) {
+   472→        console.log('[RW] WS CERRADO (code:' + e.code + ')');
+   473→        _wsWasClosed = true;
+   474→      });
+   475→
+   476→      return ws;
+   477→    };
+   478→
+   479→    ProxyWS.prototype = OrigWS.prototype;
+   480→    ProxyWS.CONNECTING = OrigWS.CONNECTING;
+   481→    ProxyWS.OPEN = OrigWS.OPEN;
+   482→    ProxyWS.CLOSING = OrigWS.CLOSING;
+   483→    ProxyWS.CLOSED = OrigWS.CLOSED;
+   484→    window.WebSocket = ProxyWS;
+   485→  })();
+   486→
+   487→  // ═══ HOOK XHR (solo iframe) ═══
+   488→  (function() {
+   489→    var origOpen = XMLHttpRequest.prototype.open;
+   490→    var origSend = XMLHttpRequest.prototype.send;
+   491→    if (origSend.__rwV93) return;
+   492→    origSend.__rwV93 = true;
+   493→
+   494→    XMLHttpRequest.prototype.open = function(m, u) {
+   495→      this._rwUrl = String(u || '');
+   496→      return origOpen.apply(this, arguments);
+   497→    };
+   498→    XMLHttpRequest.prototype.send = function() {
+   499→      var self = this;
+   500→      this.addEventListener('load', function() {
+   501→        var u = (self._rwUrl || '').toLowerCase();
+   502→        if (u.indexOf('result') >= 0 || u.indexOf('roulette') >= 0 ||
+   503→            u.indexOf('evolution') >= 0 || u.indexOf('round') >= 0 || u.indexOf('wheel') >= 0) {
+   504→          if (u.indexOf('history') >= 0 || u.indexOf('state') >= 0 || u.indexOf('stats') >= 0) return;
+   505→          try {
+   506→            var t = self.responseText;
+   507→            if (t) {
+   508→              try { extractObj(JSON.parse(t), 0, 'xhr'); } catch(e) {}
+   509→              extractFromText(t, 'xhr');
+   510→            }
+   511→          } catch(e) {}
+   512→        }
+   513→      });
+   514→      return origSend.apply(this, arguments);
+   515→    };
+   516→  })();
+   517→
+   518→  // ═══ HOOK postMessage (solo iframe) ═══
+   519→  (function() {
+   520→    var orig = window.postMessage;
+   521→    if (orig.__rwV93) return;
+   522→    orig.__rwV93 = true;
+   523→
+   524→    window.postMessage = function(data, origin, transfer) {
+   525→      try {
+   526→        if (typeof data === 'object' && data !== null && data.source !== 'rollerwin-capture' && data.source !== 'rollerwin-sync') {
+   527→          extractObj(data, 0, 'postMsg-out');
+   528→        }
+   529→      } catch(e) {}
+   530→      return orig.call(window, data, origin, transfer);
+   531→    };
+   532→
+   533→    window.addEventListener('message', function(event) {
+   534→      try {
+   535→        var data = event.data;
+   536→        if (typeof data === 'object' && data !== null &&
+   537→            data.source !== 'rollerwin-capture' && data.source !== 'rollerwin-sync' &&
+   538→            data.source !== 'rollerwin-sync-reply' && data.source !== 'rollerwin-session-expired') {
+   539→          extractObj(data, 0, 'postMsg-in');
+   540→        }
+   541→      } catch(e) {}
+   542→    });
+   543→  })();
+   544→
+   545→  // ═══ HOOK EventSource (solo iframe) ═══
+   546→  (function() {
+   547→    if (typeof window.EventSource === 'undefined') return;
+   548→    var Orig = window.EventSource;
+   549→    if (Orig.__rwV93) return;
+   550→    Orig.__rwV93 = true;
+   551→
+   552→    var Proxy = function(url, opts) {
+   553→      var es = opts ? new Orig(url, opts) : new Orig(url);
+   554→      var add = es.addEventListener.bind(es);
+   555→      ['result','game','update','roulette','number','outcome','round'].forEach(function(t) {
+   556→        add(t, function(e) {
+   557→          try {
+   558→            if (typeof e.data === 'string') {
+   559→              extractFromText(e.data, 'sse.' + t);
+   560→              try { extractObj(JSON.parse(e.data), 0, 'sse.' + t); } catch(err) {}
+   561→            }
+   562→          } catch(err) {}
+   563→        });
+   564→      });
+   565→      return es;
+   566→    };
+   567→
+   568→    Proxy.prototype = Orig.prototype;
+   569→    Proxy.CONNECTING = Orig.CONNECTING;
+   570→    Proxy.OPEN = Orig.OPEN;
+   571→    Proxy.CLOSED = Orig.CLOSED;
+   572→    window.EventSource = Proxy;
+   573→  })();
+   574→
+   575→  // ═══ DOM SCANNER v7.6 — ULTRA ESTRICTO (solo iframe) ═══
+   576→  (function() {
+   577→    var HISTORY_KW = ['history','past','track','sequence','previous','older','last-result',
+   578→      'lastresults','gamehistory','result-history','historyitem','resultshistory',
+   579→      'bng','stats','statistics','roadmap','bigroad','beadroad','marker', 'recent', 'last'];
+   580→
+   581→    var CURRENT_KW = ['winning-number','winningnumber','winning-pocket','winningpocket',
+   582→      'result-display','resultdisplay','result-value','resultvalue','current-result',
+   583→      'game-number-display','number-display','overlay-result','announced','lastnumber',
+   584→      'round-result','roulette-result','live-result','detailed-result'];
+   585→
+   586→    function isHistoryEl(el) {
+   587→      if (!el) return false;
+   588→      var c = ((el.className || '') + ' ' + (el.id || '') + ' ' + (el.getAttribute('data-test') || '')).toLowerCase();
+   589→      for (var i = 0; i < HISTORY_KW.length; i++) {
+   590→        if (c.indexOf(HISTORY_KW[i]) >= 0) return true;
+   591→      }
+   592→      var p = el.parentElement;
+   593→      var d = 0;
+   594→      while (p && d < 5) {
+   595→        var pc = ((p.className || '') + ' ' + (p.id || '')).toLowerCase();
+   596→        for (var i = 0; i < HISTORY_KW.length; i++) {
+   597→          if (pc.indexOf(HISTORY_KW[i]) >= 0) return true;
+   598→        }
+   599→        p = p.parentElement;
+   600→        d++;
+   601→      }
+   602→      return false;
+   603→    }
+   604→
+   605→    function isCurrentEl(el) {
+   606→      if (!el) return false;
+   607→      var c = ((el.className || '') + ' ' + (el.id || '') + ' ' + (el.getAttribute('data-test') || '')).toLowerCase();
+   608→      for (var i = 0; i < CURRENT_KW.length; i++) {
+   609→        if (c.indexOf(CURRENT_KW[i]) >= 0) return true;
+   610→      }
+   611→      if (el.hasAttribute('data-result-number') || el.hasAttribute('data-winning-number') ||
+   612→          el.hasAttribute('data-game-result')) return true;
+   613→      return false;
+   614→    }
+   615→
+   616→    var SELECTORS = [
+   617→      '[class*="winning-number"]',
+   618→      '[class*="winning-pocket"]',
+   619→      '[class*="result-display"]',
+   620→      '[class*="result-value"]',
+   621→      '[class*="current-result"]',
+   622→      '[class*="game-number-display"]',
+   623→      '[class*="number-display"]',
+   624→      '[data-result-number]',
+   625→      '[data-winning-number]',
+   626→      '[data-game-result]',
+   627→      '[class*="overlay"] [class*="result"]',
+   628→      '[class*="announced"]',
+   629→      '[class*="round-result"]',
+   630→      '[class*="roulette-result"]',
+   631→      '[class*="live-result"]',
+   632→      '[class*="last-number"]',
+   633→      '[class*="lastnumber"]',
+   634→      '[class*="game-result"]'
+   635→    ];
+   636→
+   637→    var _lastDomNumber = -1;
+   638→    var _lastDomNumberTime = 0;
+   639→    var _DOM_REPEAT = 15000;
+   640→
+   641→    function scanDOM() {
+   642→      for (var i = 0; i < SELECTORS.length; i++) {
+   643→        try {
+   644→          var els = document.querySelectorAll(SELECTORS[i]);
+   645→          for (var j = 0; j < els.length; j++) {
+   646→            if (isHistoryEl(els[j])) continue;
+   647→            if (!isCurrentEl(els[j]) && !els[j].hasAttribute('data-result-number') &&
+   648→                !els[j].hasAttribute('data-winning-number')) continue;
+   649→
+   650→            var text = (els[j].textContent || '').trim();
+   651→            var num = parseInt(text, 10);
+   652→            if (!isNaN(num) && num >= 0 && num <= 36 && String(num) === text) {
+   653→              var now = Date.now();
+   654→              if (num === _lastDomNumber && now - _lastDomNumberTime < _DOM_REPEAT) return;
+   655→              _lastDomNumber = num;
+   656→              _lastDomNumberTime = now;
+   657→              sendToServer(num, 'DOM:' + SELECTORS[i]);
+   658→              return;
+   659→            }
+   660→          }
+   661→        } catch(e) {}
+   662→      }
+   663→    }
+   664→
+   665→    // Gap Recovery Scanner
+   666→    function _gapRecoveryScan() {
+   667→      var gapSelectors = [
+   668→        '[class*="winning-number"]', '[class*="winning-pocket"]',
+   669→        '[class*="result-display"]', '[class*="result-value"]',
+   670→        '[class*="current-result"]', '[class*="number-display"]',
+   671→        '[data-result-number]', '[data-winning-number]', '[data-game-result]',
+   672→        '[class*="announced"]', '[class*="round-result"]',
+   673→        '[class*="roulette-result"]', '[class*="live-result"]',
+   674→        '[class*="last-number"]', '[class*="lastnumber"]', '[class*="game-result"]'
+   675→      ];
+   676→      for (var i = 0; i < gapSelectors.length; i++) {
+   677→        try {
+   678→          var els = document.querySelectorAll(gapSelectors[i]);
+   679→          for (var j = 0; j < els.length; j++) {
+   680→            var text = (els[j].textContent || '').trim();
+   681→            var num = parseInt(text, 10);
+   682→            if (!isNaN(num) && num >= 0 && num <= 36 && String(num) === text) {
+   683→              console.log('[RW] GAP RECOVERY: ' + num + ' en ' + gapSelectors[i]);
+   684→              sendToServer(num, 'GAP-RECOVERY:' + gapSelectors[i]);
+   685→              return true;
+   686→            }
+   687→          }
+   688→        } catch(e) {}
+   689→      }
+   690→      return false;
+   691→    }
+   692→
+   693→    // Iniciar Gap Recovery
+   694→    function startGapRecovery() {
+   695→      if (_gapRecoveryActive) return;
+   696→      _gapRecoveryActive = true;
+   697→      console.log('[RW] GAP RECOVERY activado');
+   698→      _gapRecoveryScan();
+   699→      var timer = setInterval(function() {
+   700→        if (!_gapRecoveryActive) { clearInterval(timer); return; }
+   701→        _gapRecoveryScan();
+   702→      }, 3000);
+   703→    }
+   704→
+   705→    // Exponer startGapRecovery globalmente
+   706→    window._startGapRecovery = startGapRecovery;
+   707→
+   708→    // Check periódico para gap recovery
+   709→    setInterval(function() {
+   710→      if (!_gapRecoveryActive && Date.now() - _iframeLastCaptureTime > _GAP_THRESHOLD) {
+   711→        startGapRecovery();
+   712→      }
+   713→    }, 5000);
+   714→
+   715→    // Actualizar _iframeLastCaptureTime cuando se envia un numero
+   716→    var _origSendToServer = sendToServer;
+   717→    // Not needed — already handled by _markSent
+   718→
+   719→    function setup() {
+   720→      if (!document.body) return;
+   721→      setTimeout(scanDOM, 500);
+   722→      setTimeout(scanDOM, 2000);
+   723→
+   724→      var timer = null;
+   725→      new MutationObserver(function() {
+   726→        if (timer) return;
+   727→        timer = setTimeout(function() { timer = null; scanDOM(); }, 500);
+   728→      }).observe(document.body, { childList: true, subtree: true, characterData: true });
+   729→
+   730→      setInterval(scanDOM, 6000);
+   731→    }
+   732→
+   733→    if (document.readyState === 'loading') {
+   734→      document.addEventListener('DOMContentLoaded', function() { setTimeout(setup, 100); });
+   735→    } else {
+   736→      setTimeout(setup, 100);
+   737→    }
+   738→  })();
+   739→
+   740→  // Detectar modal "SESIÓN FINALIZADA" dentro del iframe
+   741→  (function() {
+   742→    var _notified = false;
+   743→    function detectModal() {
+   744→      var allEls = document.querySelectorAll('div, p, span, h1, h2, h3, dialog');
+   745→      for (var i = 0; i < allEls.length; i++) {
+   746→        var txt = ((allEls[i].textContent || '') || '').toLowerCase();
+   747→        if ((txt.indexOf('sesi') !== -1 && txt.indexOf('finalizada') !== -1) ||
+   748→            (txt.indexOf('session') !== -1 && (txt.indexOf('ended') !== -1 || txt.indexOf('expired') !== -1))) {
+   749→          if (!_notified) {
+   750→            _notified = true;
+   751→            console.log('[RW] IFRAME: SESION FINALIZADA detectada');
+   752→            try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-modal' }, '*'); } catch(e) {}
+   753→          }
+   754→          var okBtns = allEls[i].querySelectorAll('button, a, [role="button"]');
+   755→          for (var j = 0; j < okBtns.length; j++) {
+   756→            var bt = (okBtns[j].textContent || '').trim();
+   757→            if (bt === 'OK' || bt === 'Ok' || bt === 'ACEPTAR' || bt === 'Aceptar') {
+   758→              okBtns[j].click();
+   759→            }
+   760→          }
+   761→          return;
+   762→        }
+   763→      }
+   764→    }
+   765→    setInterval(detectModal, 500);
+   766→    try { new MutationObserver(function() { detectModal(); }).observe(document.body, { childList: true, subtree: true }); } catch(e) {}
+   767→  })();
+   768→
+   769→  console.log('[RW] v9.3 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup 9s + SEQ 10s + GapRecovery');
+   770→})();

@@ -1,9 +1,9 @@
-// RollerWin Capture v9.0 - Content Script (ISOLATED world)
+// RollerWin Capture v9.3 - Content Script (ISOLATED world)
 // Crea la UI flotante y recibe numeros via postMessage y CustomEvent del MAIN world
 (function() {
   'use strict';
-  if (window.__rwContentV9) return;
-  window.__rwContentV9 = true;
+  if (window.__rwContentV93) return;
+  window.__rwContentV93 = true;
 
   var SERVER_URL = 'https://rollerwin3.onrender.com';
   var _casinoName = location.hostname.indexOf('pinnacle') >= 0 ? 'Pinnacle' : 'Betfury';
@@ -50,7 +50,7 @@
   function refreshStatus() {
     if (!statusEl) return;
     var lines = [];
-    lines.push('Motor v9.1 | ' + _casinoName);
+    lines.push('Motor v9.3 | ' + _casinoName);
     if (sentCount > 0) {
       lines.push(sentCount + ' numeros capturados');
     } else {
@@ -100,12 +100,12 @@
     panel.style.cssText = 'pointer-events:auto;background:rgba(0,0,0,0.92);border:1px solid #22c55e;border-radius:10px;padding:10px 14px;color:white;max-width:300px;min-width:220px;';
     panel.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">' +
       '<div id="rw-dot" style="width:8px;height:8px;border-radius:50%;background:#f59e0b;box-shadow:0 0 6px #f59e0b;"></div>' +
-      '<span style="font-size:11px;font-weight:600;color:#e4e4e7;">RollerWin Capture v9.0</span>' +
+      '<span style="font-size:11px;font-weight:600;color:#e4e4e7;">RollerWin Capture v9.3</span>' +
       '<span style="font-size:9px;color:#71717a;margin-left:auto;">' + _casinoName + '</span></div>';
 
     statusEl = document.createElement('div');
     statusEl.style.cssText = 'font-size:10px;color:#a1a1aa;white-space:pre-line;line-height:1.5;';
-    statusEl.textContent = 'Motor v9.1\nEsperando numeros...\n\nServidor: ' + SERVER_URL;
+    statusEl.textContent = 'Motor v9.3\nEsperando numeros del iframe...\n\nServidor: ' + SERVER_URL;
 
     var lastRow = document.createElement('div');
     lastRow.style.cssText = 'margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.1);display:flex;align-items:center;gap:8px;';
@@ -150,5 +150,5 @@
     });
   }
 
-  console.log('[RollerWin] Content Script v9.1 activo [PARENT]', location.hostname);
+  console.log('[RW] Content v9.3 [PARENT]', location.hostname);
 })();

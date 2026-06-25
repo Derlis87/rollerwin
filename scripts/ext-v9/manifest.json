@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "RollerWin Capture",
-  "version": "9.2",
+  "version": "9.3",
   "description": "Captura numeros de ruleta en Betfury y Pinnacle — envia al dashboard RollerWin",
   "permissions": ["scripting", "activeTab", "storage", "webNavigation", "tabs"],
   "host_permissions": ["<all_urls>"],
