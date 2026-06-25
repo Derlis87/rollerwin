@@ -1,6 +1,6 @@
-// RollerWin Capture v9.1 — MAIN WORLD DETECTION ENGINE
-// Detecta numeros de ruleta en CUALQUIER contexto (parent + iframe)
-// Funciona en Betfury y Pinnacle, Evolution y Pragmatic Play.
+// RollerWin Capture v9.2 — PRECISION DETECTION ENGINE
+// FIX: Elimina falsos positivos — solo captura resultados REALES de ruleta
+// v9.2: extractFromText eliminado, RESULT_FIELDS restrictivos, dedup 20s
 (function() {
   'use strict';
 
@@ -12,13 +12,13 @@
   var isInIframe = (window.self !== window.top);
   var hostname = location.hostname || '';
 
-  console.log('[RW] v9.1 CARGADO en ' + (isInIframe ? 'IFRAME' : 'PARENT') + ' | ' + hostname + ' | ' + location.href.substring(0, 80));
+  console.log('[RW] v9.2 CARGADO en ' + (isInIframe ? 'IFRAME' : 'PARENT') + ' | ' + hostname + ' | ' + location.href.substring(0, 80));
 
   // ═══════════════════════════════════════════════════
-  // DEDUP por tiempo: 9s entre envios
+  // DEDUP: 20s entre envios (una ronda tarda ~30-60s)
   // ═══════════════════════════════════════════════════
   var _lastSentTime = 0;
-  var _DEDUP_MS = 9000;
+  var _DEDUP_MS = 20000;
   var _sentCount = 0;
 
   function _isDup() {
@@ -37,7 +37,6 @@
     if (typeof val === 'number' && val >= 0 && val <= 36 && val === Math.floor(val)) return val;
     if (typeof val === 'string') {
       var s = String(val).trim();
-      // Aceptar "0" a "36" como strings exactos
       if (s.length >= 1 && s.length <= 2) {
         var n = parseInt(s, 10);
         if (!isNaN(n) && n >= 0 && n <= 36 && String(n) === s) return n;
@@ -49,21 +48,21 @@
   // ═══════════════════════════════════════════════════
   // ENVIAR numero al servidor
   // ═══════════════════════════════════════════════════
-  function sendNumber(n, source) {
+  function sendNumber(n, source, confidence) {
     if (n === null || n < 0 || n > 36) return;
     if (_isDup()) {
-      console.log('[RW] DUP: ' + n + ' (' + source + ')');
+      console.log('[RW] DUP ignorado: ' + n + ' (' + source + ')');
       return;
     }
 
     _markSent();
     _sentCount++;
     var color = getColor(n);
-    console.log('%c[RW] #' + _sentCount + ': ' + n + ' (' + color + ') — ' + source +
+    var confTag = confidence ? ' [' + confidence + ']' : '';
+    console.log('%c[RW] #' + _sentCount + ': ' + n + ' (' + color + ')' + confTag + ' — ' + source +
       (isInIframe ? ' [IFRAME ' + hostname + ']' : ' [PARENT ' + hostname + ']'),
       'color: #22c55e; font-weight: bold; font-size: 14px;');
 
-    // Enviar al servidor con reintento
     (function doSend(attempt) {
       fetch(SERVER + '/api/capture/receive', {
         method: 'POST',
@@ -80,7 +79,6 @@
       });
     })(0);
 
-    // Notificar al parent si estamos en iframe
     if (isInIframe) {
       try {
         window.parent.postMessage({
@@ -90,7 +88,6 @@
       } catch(e) {}
     }
 
-    // Siempre notificar al content script via CustomEvent
     try {
       document.dispatchEvent(new CustomEvent('rw-number', {
         detail: { number: n, color: color }
@@ -99,49 +96,75 @@
   }
 
   // ═══════════════════════════════════════════════════
-  // EXTRACTORES — procesan datos y buscan numeros
+  // EXTRACTOR DE OBJETOS JSON — VERSION PRECISA
+  // Solo campos ALTAMENTE especificos de resultado de ruleta
   // ═══════════════════════════════════════════════════
 
-  // Campos JSON que indícan resultado de ruleta
-  var RESULT_FIELDS = [
-    'number', 'result', 'resultnumber', 'winningnumber', 'win_number',
-    'game_number', 'roulette_number', 'ball_number', 'pocket', 'pocket_number',
-    'winningpocket', 'pocketid', 'resultid', 'displaynumber',
-    'roundresult', 'gameoutcome', 'finalnumber', 'outcome',
-    'winningnumberdisplay', 'final_number', 'game_result',
-    'round_result', 'game_outcome', 'numberstr', 'numberstring',
-    'resultnumber', 'gameresult', 'winner', 'winning', 'betresult',
-    'lucky_number', 'selectednumber', 'chosen_number'
+  // CAMPOS ALTA CONFIANZA: nombres que SOLO aparecen en contexto de resultado
+  var HIGH_CONF = [
+    'winningnumber', 'winning_number', 'winningNumber',
+    'resultnumber', 'result_number', 'resultNumber',
+    'roulettenumber', 'roulette_number', 'rouletteNumber',
+    'ballnumber', 'ball_number', 'ballNumber',
+    'pocketnumber', 'pocket_number', 'pocketNumber',
+    'winningpocket', 'winning_pocket', 'winningPocket',
+    'displaynumber', 'display_number', 'displayNumber',
+    'finalnumber', 'final_number', 'finalNumber',
+    'winningnumberdisplay', 'winning_number_display'
   ];
 
-  function isResultField(key) {
+  // CAMPOS MEDIA CONFIANZA: pueden ser resultado pero tambien otras cosas
+  // Solo se aceptan si estan en un contexto claro de game/round/roulette
+  var MED_CONF = [
+    'gameresult', 'game_result', 'gameResult',
+    'roundresult', 'round_result', 'roundResult',
+    'gameoutcome', 'game_outcome', 'gameOutcome',
+    'result'
+  ];
+
+  function isHighConf(key) {
     var k = key.replace(/[_\-\s]/g, '').toLowerCase();
-    for (var i = 0; i < RESULT_FIELDS.length; i++) {
-      if (k === RESULT_FIELDS[i].replace(/[_\-\s]/g, '')) return true;
+    for (var i = 0; i < HIGH_CONF.length; i++) {
+      if (k === HIGH_CONF[i].replace(/[_\-\s]/g, '')) return true;
     }
     return false;
   }
 
-  // Extraer numero de un objeto JSON recursivamente
+  function isMedConf(key) {
+    var k = key.replace(/[_\-\s]/g, '').toLowerCase();
+    for (var i = 0; i < MED_CONF.length; i++) {
+      if (k === MED_CONF[i].replace(/[_\-\s]/g, '')) return true;
+    }
+    return false;
+  }
+
+  // Extraer numero de un objeto JSON — recursivo pero controlado
   function extractObj(obj, depth, path) {
-    if (!obj || typeof obj !== 'object' || depth > 5) return;
+    if (!obj || typeof obj !== 'object' || depth > 3) return;
 
     if (Array.isArray(obj)) {
-      // Ignorar arrays vacios o muy largos (historial)
-      if (obj.length === 0 || obj.length > 5) return;
-
+      // NO procesar arrays genericos — solo arrays con nombre claro de resultado
       var pathLow = path.toLowerCase();
-      // Solo procesar arrays en contextos de resultado
-      if (pathLow.indexOf('result') >= 0 || pathLow.indexOf('winning') >= 0 ||
-          pathLow.indexOf('outcome') >= 0 || pathLow.indexOf('pocket') >= 0 ||
-          pathLow.indexOf('number') >= 0 || pathLow.indexOf('game') >= 0 ||
-          pathLow.indexOf('round') >= 0 || pathLow.indexOf('bet') >= 0) {
-        // Tomar ULTIMO elemento (mas reciente)
-        var last = obj[obj.length - 1];
-        var n = tryNum(last);
-        if (n !== null) { sendNumber(n, 'array@' + path); return; }
-        if (typeof last === 'object') extractObj(last, depth + 1, path + '[]');
+      var isResultArray = pathLow.indexOf('winningnumber') >= 0 ||
+          pathLow.indexOf('resultnumber') >= 0 ||
+          pathLow.indexOf('roulettenumber') >= 0 ||
+          pathLow.indexOf('pocketnumber') >= 0 ||
+          pathLow.indexOf('ballnumber') >= 0 ||
+          pathLow.indexOf('finalnumber') >= 0 ||
+          pathLow.indexOf('gameresult') >= 0 ||
+          pathLow.indexOf('roundresult') >= 0;
+
+      if (!isResultArray) return;
+      if (obj.length === 0 || obj.length > 100) return;
+
+      // Tomar el ULTIMO elemento (resultado mas reciente)
+      var last = obj[obj.length - 1];
+      var n = tryNum(last);
+      if (n !== null) {
+        sendNumber(n, 'array@' + path, 'HIGH');
+        return;
       }
+      if (typeof last === 'object') extractObj(last, depth + 1, path + '[]');
       return;
     }
 
@@ -150,40 +173,68 @@
       var key = keys[i];
       var val = obj[key];
 
-      // Si la key es un campo de resultado, intentar extraer
-      if (isResultField(key)) {
+      // ALTA CONFIANZA: enviar inmediatamente
+      if (isHighConf(key)) {
         var n = tryNum(val);
-        if (n !== null) { sendNumber(n, key + '@' + path); return; }
+        if (n !== null) {
+          sendNumber(n, key + '@' + path, 'HIGH');
+          return;
+        }
       }
 
-      // Si el valor es un objeto, bajar un nivel
-      if (typeof val === 'object' && val !== null && depth < 5) {
+      // MEDIA CONFIANZA: solo si el PATH contiene contexto de juego
+      if (isMedConf(key)) {
+        var pathLow = path.toLowerCase();
+        var inGameContext = pathLow.indexOf('game') >= 0 || pathLow.indexOf('round') >= 0 ||
+            pathLow.indexOf('roulette') >= 0 || pathLow.indexOf('wheel') >= 0 ||
+            pathLow.indexOf('spin') >= 0 || pathLow.indexOf('result') >= 0 ||
+            pathLow.indexOf('outcome') >= 0 || pathLow.indexOf('win') >= 0 ||
+            pathLow.indexOf('bet') >= 0 || depth === 0;
+        if (inGameContext) {
+          var n2 = tryNum(val);
+          if (n2 !== null) {
+            sendNumber(n2, key + '@' + path, 'MED');
+            return;
+          }
+        }
+      }
+
+      // Bajar un nivel SOLO si es un objeto y no hemos llegado al limite
+      if (typeof val === 'object' && val !== null && depth < 3) {
         extractObj(val, depth + 1, path + '.' + key);
       }
     }
   }
 
-  // Regex para texto plano — busca patrones de resultado en strings
+  // ═══════════════════════════════════════════════════
+  // EXTRACTOR DE TEXTO — VERSION RESTRINGIDA
+  // Solo los patrones MAS especificos, sin falsos positivos
+  // ═══════════════════════════════════════════════════
   function extractFromText(text, source) {
-    if (!text || typeof text !== 'string' || text.length > 500000) return;
+    if (!text || typeof text !== 'string' || text.length > 100000) return;
 
-    // Patrones especificos de campo JSON (alto confianza)
+    // SOLO patrones camelCase o snake_case muy especificos
     var patterns = [
-      /"resultNumber"\s*:\s*(\d{1,2})\b/gi,
-      /"winningNumber"\s*:\s*(\d{1,2})\b/gi,
-      /"winning_number"\s*:\s*(\d{1,2})\b/gi,
-      /"ball_number"\s*:\s*(\d{1,2})\b/gi,
-      /"pocket_number"\s*:\s*(\d{1,2})\b/gi,
-      /"roulette_number"\s*:\s*(\d{1,2})\b/gi,
-      /"finalNumber"\s*:\s*(\d{1,2})\b/gi,
-      /"game_number"\s*:\s*(\d{1,2})\b/gi,
-      /"displayNumber"\s*:\s*(\d{1,2})\b/gi,
-      /"winningPocket"\s*:\s*(\d{1,2})\b/gi,
+      /"winningNumber"\s*:\s*"?(\d{1,2})\b/gi,
+      /"winning_number"\s*:\s*"?(\d{1,2})\b/gi,
+      /"resultNumber"\s*:\s*"?(\d{1,2})\b/gi,
+      /"result_number"\s*:\s*"?(\d{1,2})\b/gi,
+      /"rouletteNumber"\s*:\s*"?(\d{1,2})\b/gi,
+      /"roulette_number"\s*:\s*"?(\d{1,2})\b/gi,
+      /"ballNumber"\s*:\s*"?(\d{1,2})\b/gi,
+      /"ball_number"\s*:\s*"?(\d{1,2})\b/gi,
+      /"pocketNumber"\s*:\s*"?(\d{1,2})\b/gi,
+      /"pocket_number"\s*:\s*"?(\d{1,2})\b/gi,
+      /"winningPocket"\s*:\s*"?(\d{1,2})\b/gi,
+      /"winning_pocket"\s*:\s*"?(\d{1,2})\b/gi,
+      /"displayNumber"\s*:\s*"?(\d{1,2})\b/gi,
+      /"display_number"\s*:\s*"?(\d{1,2})\b/gi,
+      /"finalNumber"\s*:\s*"?(\d{1,2})\b/gi,
+      /"final_number"\s*:\s*"?(\d{1,2})\b/gi,
       /"gameResult"\s*:\s*"?(\d{1,2})\b/gi,
-      /"result"\s*:\s*(\d{1,2})\b/gi,
-      /"number"\s*:\s*(\d{1,2})\b/gi,
-      /"pocket"\s*:\s*(\d{1,2})\b/gi,
-      /"outcome"\s*:\s*(\d{1,2})\b/gi
+      /"game_result"\s*:\s*"?(\d{1,2})\b/gi,
+      /"roundResult"\s*:\s*"?(\d{1,2})\b/gi,
+      /"round_result"\s*:\s*"?(\d{1,2})\b/gi
     ];
 
     var lastMatch = null;
@@ -195,7 +246,23 @@
         if (n >= 0 && n <= 36) lastMatch = n;
       }
     }
-    if (lastMatch !== null) sendNumber(lastMatch, 'regex@' + source);
+    if (lastMatch !== null) sendNumber(lastMatch, 'regex@' + source, 'HIGH');
+  }
+
+  // ═══════════════════════════════════════════════════
+  // LOG DE TRAFICO (debug) — muestra lo que llega por WS
+  // ═══════════════════════════════════════════════════
+  var _wsMsgCount = 0;
+  var _lastWsLog = 0;
+
+  function debugLogWs(data, source) {
+    var now = Date.now();
+    _wsMsgCount++;
+    // Solo logear cada 50 mensajes o cada 10 segundos
+    if (now - _lastWsLog > 10000 || _wsMsgCount <= 5) {
+      _lastWsLog = now;
+      console.log('[RW] WS #' + _wsMsgCount + ' (' + source + '): ' + (data || '').substring(0, 200));
+    }
   }
 
   // ═══════════════════════════════════════════════════
@@ -210,17 +277,14 @@
       console.log('[RW] WS abierto: ' + (url || '').substring(0, 120));
       var ws = protocols ? new OrigWS(url, protocols) : new OrigWS(url);
 
-      // Interceptar TODOS los mensajes del WebSocket
       ws.addEventListener('message', function(e) {
         try {
           var data = e.data;
 
-          // Convertir ArrayBuffer a string si es binario
           if (typeof data !== 'string') {
             if (data instanceof ArrayBuffer) {
               try { data = String.fromCharCode.apply(null, new Uint8Array(data)); } catch(er) { return; }
             } else if (data instanceof Blob) {
-              // Blob: leer como texto
               data.arrayBuffer().then(function(buf) {
                 try {
                   var str = String.fromCharCode.apply(null, new Uint8Array(buf));
@@ -251,30 +315,54 @@
           if (Array.isArray(p) && p.length >= 2) {
             var evtName = String(p[0] || '');
             var evtData = p[1];
-            // Procesar el payload del evento
-            if (typeof evtData === 'object' && evtData !== null) {
+
+            debugLogWs(data, 'sio.' + evtName);
+
+            // Filtrar eventos que claramente NO son resultados
+            var evtLow = evtName.toLowerCase();
+            var isGameEvent = evtLow.indexOf('result') >= 0 ||
+                evtLow.indexOf('win') >= 0 ||
+                evtLow.indexOf('game') >= 0 ||
+                evtLow.indexOf('round') >= 0 ||
+                evtLow.indexOf('spin') >= 0 ||
+                evtLow.indexOf('complete') >= 0 ||
+                evtLow.indexOf('outcome') >= 0 ||
+                evtLow.indexOf('number') >= 0 ||
+                evtLow.indexOf('pocket') >= 0 ||
+                evtLow.indexOf('ball') >= 0 ||
+                evtLow.indexOf('roulette') >= 0 ||
+                evtLow.indexOf('update') >= 0 ||
+                evtLow.indexOf('state') >= 0 ||
+                evtLow.indexOf('bet') >= 0 ||
+                evtLow.indexOf('history') >= 0;
+
+            // Procesar SOLO eventos relevantes al juego
+            if (isGameEvent && typeof evtData === 'object' && evtData !== null) {
               extractObj(evtData, 0, 'sio.' + evtName);
             }
-            // Siempre hacer regex en el texto completo del mensaje
-            extractFromText(data, 'sio.' + evtName);
+
+            // Regex restringido solo en eventos de juego
+            if (isGameEvent) {
+              extractFromText(data, 'sio.' + evtName);
+            }
           }
         } catch(err) {}
+        return;
       }
 
-      // JSON puro (empieza con { o [)
+      // JSON puro
       if (data.charAt(0) === '{' || data.charAt(0) === '[') {
         try {
           var parsed = JSON.parse(data);
+          debugLogWs(data, 'ws-json');
           extractObj(parsed, 0, 'ws-json');
         } catch(err) {}
         extractFromText(data, 'ws-json');
+        return;
       }
 
-      // Mensajes que no son JSON ni socket.io pero contienen numeros
-      // Buscar patrones como "number:15" o "result=32" etc.
-      if (data.charAt(0) !== '{' && data.charAt(0) !== '[' && data.charAt(0) !== '4') {
-        extractFromText(data, 'ws-other');
-      }
+      // NO procesar mensajes de texto plano que no son JSON
+      // Esto evita falsos positivos de mensajes de chat, etc.
     }
 
     ProxyWS.prototype = OrigWS.prototype;
@@ -304,15 +392,11 @@
       var promise = origFetch.apply(this, arguments);
       var urlLow = (url || '').toLowerCase();
 
-      // Procesar URLs que puedan contener resultados de juego
-      // Excluir: historial, stats, estado, static assets
-      var isRelevant = urlLow.indexOf('result') >= 0 ||
-          urlLow.indexOf('roulette') >= 0 || urlLow.indexOf('evolution') >= 0 ||
-          urlLow.indexOf('pragmatic') >= 0 || urlLow.indexOf('round') >= 0 ||
-          urlLow.indexOf('wheel') >= 0 || urlLow.indexOf('game') >= 0 ||
-          urlLow.indexOf('live') >= 0 || urlLow.indexOf('bet') >= 0 ||
-          urlLow.indexOf('play') >= 0 || urlLow.indexOf('table') >= 0 ||
-          urlLow.indexOf('outcome') >= 0 || urlLow.indexOf('win') >= 0;
+      // Solo URLs que claramente contienen resultados de juego
+      var isResult = urlLow.indexOf('result') >= 0 ||
+          urlLow.indexOf('winning') >= 0 ||
+          urlLow.indexOf('outcome') >= 0 ||
+          urlLow.indexOf('roulette') >= 0;
 
       var isExcluded = urlLow.indexOf('history') >= 0 ||
           urlLow.indexOf('state') >= 0 || urlLow.indexOf('stats') >= 0 ||
@@ -320,13 +404,16 @@
           urlLow.indexOf('.png') >= 0 || urlLow.indexOf('.jpg') >= 0 ||
           urlLow.indexOf('.svg') >= 0 || urlLow.indexOf('.woff') >= 0 ||
           urlLow.indexOf('favicon') >= 0 || urlLow.indexOf('analytics') >= 0 ||
-          urlLow.indexOf('tracker') >= 0 || urlLow.indexOf('telemetry') >= 0;
+          urlLow.indexOf('tracker') >= 0 || urlLow.indexOf('telemetry') >= 0 ||
+          urlLow.indexOf('balance') >= 0 || urlLow.indexOf('user') >= 0 ||
+          urlLow.indexOf('profile') >= 0 || urlLow.indexOf('settings') >= 0 ||
+          urlLow.indexOf('bonus') >= 0 || urlLow.indexOf('promo') >= 0;
 
-      if (isRelevant && !isExcluded) {
+      if (isResult && !isExcluded) {
         promise.then(function(r) {
           try {
             r.clone().text().then(function(text) {
-              if (text && text.length < 200000) {
+              if (text && text.length < 50000) {
                 try { extractObj(JSON.parse(text), 0, 'fetch:' + url.substring(0, 60)); } catch(e) {}
                 extractFromText(text, 'fetch:' + url.substring(0, 60));
               }
@@ -356,17 +443,15 @@
       var self = this;
       this.addEventListener('load', function() {
         var u = (self._rwUrl || '').toLowerCase();
-        var isRelevant = u.indexOf('result') >= 0 || u.indexOf('roulette') >= 0 ||
-            u.indexOf('evolution') >= 0 || u.indexOf('pragmatic') >= 0 ||
-            u.indexOf('round') >= 0 || u.indexOf('wheel') >= 0 ||
-            u.indexOf('game') >= 0 || u.indexOf('live') >= 0 ||
-            u.indexOf('outcome') >= 0 || u.indexOf('win') >= 0;
+        var isResult = u.indexOf('result') >= 0 || u.indexOf('winning') >= 0 ||
+            u.indexOf('outcome') >= 0 || u.indexOf('roulette') >= 0;
         var isExcluded = u.indexOf('history') >= 0 || u.indexOf('state') >= 0 ||
-            u.indexOf('stats') >= 0 || u.indexOf('.js') >= 0;
-        if (isRelevant && !isExcluded) {
+            u.indexOf('stats') >= 0 || u.indexOf('.js') >= 0 ||
+            u.indexOf('balance') >= 0 || u.indexOf('user') >= 0;
+        if (isResult && !isExcluded) {
           try {
             var t = self.responseText;
-            if (t && t.length < 200000) {
+            if (t && t.length < 50000) {
               try { extractObj(JSON.parse(t), 0, 'xhr'); } catch(e) {}
               extractFromText(t, 'xhr');
             }
@@ -378,7 +463,7 @@
   })();
 
   // ═══════════════════════════════════════════════════
-  // HOOK postMessage — intercepta mensajes entre ventanas
+  // HOOK postMessage — MENOS agresivo
   // ═══════════════════════════════════════════════════
   (function() {
     var orig = window.postMessage;
@@ -388,9 +473,15 @@
     window.postMessage = function(data, origin, transfer) {
       try {
         if (typeof data === 'object' && data !== null) {
-          // No procesar nuestros propios mensajes
           if (data.source !== 'rollerwin-capture' && data.source !== 'rollerwin-sync') {
-            extractObj(data, 0, 'postMsg-out');
+            // Solo procesar si contiene campos de alta confianza
+            var str = JSON.stringify(data).toLowerCase();
+            if (str.indexOf('winningnumber') >= 0 || str.indexOf('resultnumber') >= 0 ||
+                str.indexOf('roulettenumber') >= 0 || str.indexOf('ballnumber') >= 0 ||
+                str.indexOf('pocketnumber') >= 0 || str.indexOf('gameresult') >= 0 ||
+                str.indexOf('roundresult') >= 0) {
+              extractObj(data, 0, 'postMsg-out');
+            }
           }
         }
       } catch(e) {}
@@ -402,14 +493,20 @@
         var data = event.data;
         if (typeof data === 'object' && data !== null) {
           if (data.source === 'rollerwin-capture' || data.source === 'rollerwin-sync') return;
-          extractObj(data, 0, 'postMsg-in');
+          var str = JSON.stringify(data).toLowerCase();
+          if (str.indexOf('winningnumber') >= 0 || str.indexOf('resultnumber') >= 0 ||
+              str.indexOf('roulettenumber') >= 0 || str.indexOf('ballnumber') >= 0 ||
+              str.indexOf('pocketnumber') >= 0 || str.indexOf('gameresult') >= 0 ||
+              str.indexOf('roundresult') >= 0) {
+            extractObj(data, 0, 'postMsg-in');
+          }
         }
       } catch(e) {}
     });
   })();
 
   // ═══════════════════════════════════════════════════
-  // HOOK EventSource (SSE)
+  // HOOK EventSource (SSE) — restringido
   // ═══════════════════════════════════════════════════
   (function() {
     if (typeof window.EventSource === 'undefined') return;
@@ -421,10 +518,10 @@
       console.log('[RW] SSE abierto: ' + (url || '').substring(0, 100));
       var es = opts ? new Orig(url, opts) : new Orig(url);
 
-      // Escuchar TODOS los eventos (no solo los de la lista)
       var origAdd = es.addEventListener.bind(es);
-      var eventTypes = ['result','game','update','roulette','number','outcome','round',
-        'message', 'open', 'data', 'state', 'change', 'complete', 'end', 'spin', 'bet'];
+      // Solo escuchar eventos claramente de resultado
+      var eventTypes = ['result', 'game', 'roulette', 'number', 'outcome',
+        'round', 'spin', 'complete', 'win'];
 
       eventTypes.forEach(function(t) {
         origAdd(t, function(e) {
@@ -448,14 +545,15 @@
   })();
 
   // ═══════════════════════════════════════════════════
-  // DOM SCANNER — busca resultado actual en pantalla
-  // Excluye elementos de historial
+  // DOM SCANNER — busca resultado ACTUAL en pantalla
+  // Selectores muy especificos, excluye historial
   // ═══════════════════════════════════════════════════
   (function() {
-    var HISTORY_KW = ['history','past','track','sequence','previous','older',
-      'last-result','lastresults','gamehistory','result-history','historyitem',
-      'resultshistory','bng','stats','statistics','roadmap','bigroad','beadroad',
-      'marker','scoreboard','score'];
+    // Keywords de historial — cualquier elemento con estos se ignora
+    var HISTORY_KW = ['history', 'past', 'track', 'sequence', 'previous', 'older',
+      'last-result', 'lastresults', 'gamehistory', 'result-history', 'historyitem',
+      'resultshistory', 'bng', 'stats', 'statistics', 'roadmap', 'bigroad', 'beadroad',
+      'marker', 'scoreboard', 'score', 'recent', 'hot', 'cold', 'last'];
 
     function isHistoryEl(el) {
       if (!el) return false;
@@ -463,7 +561,6 @@
       for (var i = 0; i < HISTORY_KW.length; i++) {
         if (c.indexOf(HISTORY_KW[i]) >= 0) return true;
       }
-      // Check parents up to 5 levels
       var p = el.parentElement;
       var d = 0;
       while (p && d < 5) {
@@ -477,38 +574,27 @@
       return false;
     }
 
-    // Selectores para resultado ACTUAL (no historial)
+    // Selectores ALTAMENTE especificos para resultado ACTUAL
     var SELECTORS = [
       '[class*="winning-number"]',
       '[class*="winning-pocket"]',
       '[class*="result-display"]',
       '[class*="result-value"]',
       '[class*="current-result"]',
-      '[class*="game-number-display"]',
-      '[class*="number-display"]',
       '[data-result-number]',
       '[data-winning-number]',
       '[data-game-result]',
-      '[class*="overlay"] [class*="result"]',
       '[class*="announced"]',
       '[class*="round-result"]',
       '[class*="roulette-result"]',
       '[class*="live-result"]',
-      // Pragmatic Play specificos
-      '[class*="game-result"]',
-      '[class*="result-number"]',
-      '[class*="winning"]',
-      '[class*="last-number"]',
-      '[class*="lastnumber"]',
-      '[data-number]',
       '[class*="ball-number"]',
       '[class*="pocket-number"]'
     ];
 
-    // Change-detect: enviar si el numero CAMBIO o si lleva >15s visible
     var _lastDomNum = -1;
     var _lastDomTime = 0;
-    var _DOM_REPEAT = 15000;
+    var _DOM_REPEAT = 20000; // No repetir DOM scan del mismo numero en 20s
 
     function scanDOM() {
       for (var i = 0; i < SELECTORS.length; i++) {
@@ -523,7 +609,7 @@
               if (num === _lastDomNum && now - _lastDomTime < _DOM_REPEAT) return;
               _lastDomNum = num;
               _lastDomTime = now;
-              sendNumber(num, 'DOM:' + SELECTORS[i]);
+              sendNumber(num, 'DOM:' + SELECTORS[i], 'DOM');
               return;
             }
           }
@@ -540,10 +626,10 @@
       var timer = null;
       new MutationObserver(function() {
         if (timer) return;
-        timer = setTimeout(function() { timer = null; scanDOM(); }, 500);
+        timer = setTimeout(function() { timer = null; scanDOM(); }, 1000);
       }).observe(document.body, { childList: true, subtree: true, characterData: true });
 
-      setInterval(scanDOM, 6000);
+      setInterval(scanDOM, 8000);
     }
 
     if (document.readyState === 'loading') {
@@ -561,12 +647,11 @@
       try {
         var data = event.data;
         if (data && data.source === 'rollerwin-capture' && typeof data.number === 'number') {
-          // El iframe ya envio al servidor. Solo actualizar UI.
           console.log('[RW] PARENT: recibido ' + data.number + ' de iframe ' + (data.hostname || ''));
         }
       } catch(e) {}
     });
   }
 
-  console.log('[RW] v9.1 MOTOR ACTIVO | ' + (isInIframe ? 'IFRAME' : 'PARENT') + ' | ' + hostname);
+  console.log('[RW] v9.2 MOTOR PRECISO ACTIVO | ' + (isInIframe ? 'IFRAME' : 'PARENT') + ' | ' + hostname);
 })();
