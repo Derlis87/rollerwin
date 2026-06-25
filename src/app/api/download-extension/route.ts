@@ -13,7 +13,9 @@ export async function GET() {
         'Content-Type': 'application/zip',
         'Content-Disposition': 'attachment; filename=RollerWin-Capture-Extension.zip,',
         'Content-Length': String(fileBuffer.length),
-        'Cache-Control': 'no-cache',
+        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+        'Pragma': 'no-cache',
+        'Expires': '0',
       },
     })
   } catch {
