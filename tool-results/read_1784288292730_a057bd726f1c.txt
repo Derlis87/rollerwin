@@ -1,0 +1,1472 @@
+     1→// RollerWin Capture v7.6 - MAIN WORLD DETECTION ENGINE
+     2→// SOLO detecta numeros desde iframes (donde corre Evolution)
+     3→// El parent page SOLO retransmite lo que llega via postMessage desde iframes
+     4→// FIX v5.0: DOM Scanner capturaba numeros del historial (circulos viejos)
+     5→// FIX v5.1: extractObj toma ULTIMO elemento, regex ultimo match, excluye URLs historial
+     6→// FIX v5.2: Buffer GLOBAL eliminado — bloqueaba repeticiones legitimas de ruleta
+     7→// FIX v6.0: AUTO-RECOVERY COMPLETO reescrito:
+     8→//   - Persistencia en localStorage (sobrevive recargas de pagina)
+     9→//   - Busqueda de botones ampliada (div/span/a/button, no solo button)
+    10→//   - Deteccion de sesion expirada via keep-alive 401/403
+    11→//   - checkPlayButton SIEMPRE activo (no depende de _recovering)
+    12→//   - Click OK primero, esperar cierre, luego navegar
+    13→//   - Deteccion de pagina "Jugar" sin depender de estado
+    14→// FIX v6.4: DEDUP DEFINITIVO — 100% fiel a la secuencia real:
+    15→//   - ELIMINADO _lastSentNumber: bloqueaba repetidos legitimas (ej: 15, 15)
+    16→//   - DEDUP por tiempo 9s: bloquea multiples hooks del MISMO giro unicamente
+    17→//   - DOM Scanner con change-detect + 15s: mismo numero visible >15s = nuevo giro
+    18→//   - Sync parent↔iframe: popula _sentNumbers (no _lastSentNumber)
+    19→// FIX v6.5: 3 BUGS DEFINITIVOS:
+    20→//   - BUG 1 (Duplicados/Skips): Servidor ELIMINO sequence dedup. Solo dedup por tiempo.
+    21→//   - BUG 2 (Skips): WS hook ampliado + fallback extractFromText.
+    22→//   - BUG 3 (Session Recovery): _recoveryInProgress PERSISTIDO en localStorage.
+    23→// FIX v6.6: IFRAME SESSION RECOVERY — el bug que causaba "Recovers: 0":
+    24→//   - El modal "SESIÓN FINALIZADA" aparece DENTRO del iframe (Evolution),
+    25→//     NO en el parent. El parent NO puede ver el DOM del iframe.
+    26→//   - Antes: parent buscaba modal en su propio DOM → nunca lo encontraba.
+    27→//   - Ahora: iframe detecta modal → postMessage al parent → recovery.
+    28→//   - Reload si sin capturas >120s sin importar keep-alive (iframe muerto).
+    29→//   - iframe tambien detecta fetch 401/403 y notifica al parent.
+    30→//   - iframe detecta falta de actividad >90s y notifica al parent.
+    31→// FIX v6.7: 3 BUGS CRITICOS:
+    32→//   - BUG 1 (Números saltados): DEDUP por VALOR bloqueaba repeticiones legítimas
+    33→//     (ej: 15,15). Ahora dedup por TIEMPO GLOBAL: solo bloquea si se envió
+    34→//     CUALQUIER número en los últimos 9s, sin importar el valor.
+    35→//   - BUG 2 (Nueva pestaña): checkPlayButton clickeaba <a target="_blank">
+    36→//     al recuperar sesión. Ahora IGNORA elementos con target="_blank".
+    37→//     location.href → location.replace() para forzar misma pestaña.
+    38→//   - BUG 3 (Duplicados): syncLastNumber mejorado + dedup global previene
+    39→//     re-envío del último número cuando el iframe se recarga.
+    40→// FIX v7.6: 4 BUGS CRITICOS DE RECOVERY:
+    41→//   - BUG 1 (Número saltado al reiniciar mesa): syncLastNumber seteaba
+    42→//     _lastSentTimestamp, bloqueando DEDUP-TIME por 9s. El DOM Scanner
+    43→//     no podía capturar el número del gap. Ahora sync NO toca _lastSentTimestamp.
+    44→//   - BUG 2 (MutationObserver 2s muy lento): Si un número aparece y cambia
+    45→//     en <2s durante restart, se pierde. Reducido a 500ms.
+    46→//   - BUG 3 (Sin Gap Recovery): Agregado scanner agresivo cuando hay gap >22s.
+    47→//     Escanea DOM cada 3s hasta capturar un número. También se activa
+    48→//     al reconectar WS.
+    49→//   - BUG 4 (iframe dead 90s muy lento): Reducido a 45s + detección de
+    50→//     WS reconnect para escaneo inmediato del DOM.
+    51→(function() {
+    52→  'use strict';
+    53→
+    54→  if (window.__rwMainV73) return;
+    55→  window.__rwMainV73 = true;
+    56→
+    57→  var SERVER = 'https://rollerwin3.onrender.com';
+    58→  var lastNum = -1;
+    59→  var lastTime = 0;
+    60→  var sentCount = 0;
+    61→
+    62→  // ═══ DEDUP v6.4: Dedup por TIEMPO — 100% fiel a la secuencia real ═══
+    63→  // REGLA: Un numero se envía UNA VEZ por giro, sin importar su valor.
+    64→  // Si el mismo numero cae en giros consecutivos (ej: 15, 15), AMBOS se capturan.
+    65→  // Solo se bloquea si multiples hooks (WS, Fetch, XHR, DOM) detectan el
+    66→  // MISMO giro — dedup por tiempo de 9s cubre esto.
+    67→  //
+    68→  // Por que 9s? Los giros duran ~18s. El hook mas rapido (WS) detecta al
+    69→  // inicio (T=0). El DOM Scanner corre cada 8s, max deteccion del mismo
+    70→  // giro es T=8s (8-0=8s < 9s → bloqueado). El proximo giro a T=18s:
+    71→  // 18-0=18s > 9s → permitido, incluso si es el mismo numero.
+    72→  //
+    73→  // DOM Scanner: usa change-detect con limite de 15s. Si el mismo numero
+    74→  // lleva >15s visible en pantalla, es un NUEVO giro → permite re-enviar.
+    75→  // v6.7 FIX: DEDUP por secuencia, NO por valor.
+    76→  // Antes: _sentNumbers = { number: timestamp } — si cae 15,15 legítimos,
+    77→  // el segundo 15 se bloqueaba porque el primero estaba en el mapa.
+    78→  // Ahora: _lastSentTimestamp global — solo bloquea si CUALQUIER numero fue
+    79→  // enviado en los ultimos 9s (independiente del valor). Los giros duran ~18s.
+    80→  var _lastSentTimestamp = 0;
+    81→  var _DEDUP_WINDOW = 9000;  // 9s
+    82→  var _sentNumbersSet = {}; // Set de numeros enviados (para sync, no para dedup)
+    83→
+    84→  function _isDuplicate(n) {
+    85→    var now = Date.now();
+    86→    // v6.7: Solo dedup por TIEMPO GLOBAL — si se envio CUALQUIER numero
+    87→    // en los ultimos 9s, este hook detecta el mismo giro → bloquear.
+    88→    // Esto permite repetidos legítimos (15,15) si estan separados >9s.
+    89→    if (now - _lastSentTimestamp < _DEDUP_WINDOW) {
+    90→      console.log('[RollerWin] DUP: ' + n + ' bloqueado (ultimo envio hace ' + Math.round(now - _lastSentTimestamp) + 's)');
+    91→      return true;
+    92→    }
+    93→    return false;
+    94→  }
+    95→
+    96→  function _markSent(n) {
+    97→    var now = Date.now();
+    98→    _lastSentTimestamp = now;
+    99→    _sentNumbersSet[n] = now;
+   100→    // Limpiar entradas viejas (+5s de buffer)
+   101→    for (var num in _sentNumbersSet) {
+   102→      if (now - _sentNumbersSet[num] > _DEDUP_WINDOW + 5000) {
+   103→        delete _sentNumbersSet[num];
+   104→      }
+   105→    }
+   106→  }
+   107→
+   108→  // Sincronizar desde el parent (sobrevive recargas de iframe)
+   109→  // Popula _sentNumbers para que el iframe recargado no re-envie el ultimo numero
+   110→  // v7.6 FIX: NO setear _lastSentTimestamp! Solo poblar _sentNumbersSet y secuencia.
+   111→  // Si seteamos _lastSentTimestamp, el DEDUP-TIME bloquea TODAS las capturas por 9s,
+   112→  // impidiendo que el DOM Scanner capture el número que apareció durante el gap.
+   113→  function syncLastNumber(n) {
+   114→    if (n >= 0 && n <= 36) {
+   115→      var now = Date.now();
+   116→      _sentNumbersSet[n] = now;
+   117→      // v7.6: NO tocar _lastSentTimestamp — dejarlo en 0 para que el primer
+   118→      // escaneo DOM pueda capturar inmediatamente. DEDUP-SEQ previene re-envío
+   119→      // del número sincronizado (misma valor dentro de 10s → bloqueado).
+   120→      console.log('[RollerWin] SYNC: numero ' + n + ' marcado como enviado (desde parent, v7.6 sin timestamp)');
+   121→    }
+   122→  }
+   123→
+   124→  var isInIframe = (window.self !== window.top);
+   125→  var hostname = location.hostname || '';
+   126→
+   127→  var RED = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
+   128→
+   129→  function getColor(n) {
+   130→    if (n === 0) return 'green';
+   131→    return RED.indexOf(n) >= 0 ? 'red' : 'black';
+   132→  }
+   133→
+   134→  // ══════════════════════════════════════
+   135→  // ENVIAR numero al servidor RollerWin
+   136→  // ══════════════════════════════════════
+   137→  function sendToServer(n, source) {
+   138→    if (n < 0 || n > 36) return;
+   139→
+   140→    var now = Date.now();
+   141→
+   142→    // DEDUP v6.1: Map de TODOS los numeros recientes (no solo lastNum).
+   143→    // Si el numero fue enviado en los ultimos 12s, es el mismo giro → bloquear.
+   144→    // Los giros duran ~18s, asi que 12s jamas bloquea repetidos legitimas.
+   145→    if (_isDuplicate(n)) {
+   146→      console.log('[RollerWin] DEDUP: ' + n + ' bloqueado (ultimo envio hace ' + Math.round(now - _lastSentTimestamp) + 's) — ' + source);
+   147→      return;
+   148→    }
+   149→
+   150→    // v7.4: DEDUP por SECUENCIA — previene re-envío post-recovery/recarga
+   151→    // El iframe se recarga sin estado, _lastSentTimestamp = 0, el DOM Scanner
+   152→    // re-lee el número viejo visible. La secuencia sobrevive porque se pobló
+   153→    // via sync o ya estaba en memoria antes de la recarga del hook.
+   154→    if (typeof _checkSequenceDup === 'function' && _checkSequenceDup(n)) {
+   155→      console.log('[RollerWin] DEDUP-SEQ: ' + n + ' bloqueado (en secuencia reciente) — ' + source);
+   156→      return;
+   157→    }
+   158→
+   159→    _markSent(n);
+   160→    // v7.4: Agregar a la secuencia para dedup post-recovery
+   161→    if (typeof _addSequence === 'function') _addSequence(n);
+   162→    lastNum = n;
+   163→    lastTime = now;
+   164→    sentCount++;
+   165→
+   166→    console.log('[RollerWin] RESULTADO #' + sentCount + ': ' + n + ' (' + getColor(n) + ') — ' + source +
+   167→      ' ' + (isInIframe ? '[IFRAME ' + hostname + ']' : '[PARENT]'));
+   168→
+   169→    // Enviar al servidor RollerWin (con reintento)
+   170→    try {
+   171→      var doSend = function(attempt) {
+   172→        fetch(SERVER + '/api/capture/receive', {
+   173→          method: 'POST',
+   174→          headers: { 'Content-Type': 'application/json' },
+   175→          body: JSON.stringify({ number: n })
+   176→        }).then(function(r) {
+   177→          if (r.ok) {
+   178→            console.log('[RollerWin] Servidor OK:', n, '(intentos:', attempt + ')');
+   179→          } else if (attempt < 2) {
+   180→            console.log('[RollerWin] Reintentando (' + (attempt+1) + ') HTTP', r.status);
+   181→            setTimeout(function() { doSend(attempt + 1); }, 2000);
+   182→          } else {
+   183→            console.log('[RollerWin] Error HTTP tras reintentos:', r.status);
+   184→          }
+   185→        }).catch(function(e) {
+   186→          if (attempt < 2) {
+   187→            console.log('[RollerWin] Reintentando (' + (attempt+1) + ') error:', e.message);
+   188→            setTimeout(function() { doSend(attempt + 1); }, 2000);
+   189→          } else {
+   190→            console.log('[RollerWin] Error red tras reintentos:', e.message);
+   191→          }
+   192→        });
+   193→      };
+   194→      doSend(0);
+   195→    } catch(e) { console.log('[RollerWin] Error fetch:', e.message); }
+   196→
+   197→    // Notificar al parent (si estamos en iframe)
+   198→    if (isInIframe) {
+   199→      try {
+   200→        window.parent.postMessage({
+   201→          source: 'rollerwin-capture',
+   202→          number: n,
+   203→          color: getColor(n),
+   204→          hostname: hostname
+   205→        }, '*');
+   206→      } catch(e) {}
+   207→    } else {
+   208→      // CustomEvent para content.js (ISOLATED world)
+   209→      try {
+   210→        document.dispatchEvent(new CustomEvent('rw-number', {
+   211→          detail: { number: n, color: getColor(n) }
+   212→        }));
+   213→      } catch(e) {}
+   214→    }
+   215→  }
+   216→
+   217→  // ══════════════════════════════════════
+   218→  // ============ PARENT PAGE =============
+   219→  // NO detecta numeros directamente.
+   220→  // Solo retransmite lo que llega de los iframes via postMessage.
+   221→  // ══════════════════════════════════════
+   222→  if (!isInIframe) {
+   223→    console.log('[RollerWin] PARENT page — esperando numeros de iframes via postMessage');
+   224→
+   225→    // v6.4: Guardar el último número recibido para sincronizar con iframes recargados
+   226→    var _parentLastNumber = -1;
+   227→
+   228→    window.addEventListener('message', function(event) {
+   229→      try {
+   230→        var data = event.data;
+   231→        if (data && data.source === 'rollerwin-capture' && typeof data.number === 'number') {
+   232→          console.log('[RollerWin] Recibido de iframe:', data.number, '(' + data.hostname + ')');
+   233→          _parentLastNumber = data.number; // Guardar para sincronizar iframes recargados
+   234→          // El iframe ya envio al servidor, no reenviar
+   235→          // Solo actualizar la UI del widget
+   236→          try {
+   237→            document.dispatchEvent(new CustomEvent('rw-number', {
+   238→              detail: { number: data.number, color: data.color }
+   239→            }));
+   240→          } catch(e) {}
+   241→        }
+   242→        // v6.4: Sincronizar con iframe que se recarga (popula _sentNumbers)
+   243→        if (data && data.source === 'rollerwin-sync' && typeof data.lastNumber === 'number') {
+   244→          // El iframe pide sincronización — enviarle el último número
+   245→          try {
+   246→            window.postMessage({
+   247→              source: 'rollerwin-sync-reply',
+   248→              lastNumber: _parentLastNumber
+   249→            }, '*');
+   250→          } catch(e) {}
+   251→        }
+   252→      } catch(e) {}
+   253→    });
+   254→
+   255→    // ╔══════════════════════════════════════════════════════════════════╗
+   256→    // ║  v6.2: AUTO-RECOVERY ULTRA-RAPIDO                              ║
+   257→    // ║  OBJETIVO: Recovery completo en <8 segundos                     ║
+   258→    // ║  (los giros duran ~18s, necesitamos volver antes del próximo)   ║
+   259→    // ║                                                                ║
+   260→    // ║  Cambios vs v6.1:                                               ║
+   261→    // ║  - Modal detect cada 400ms (era 1s) + MutationObserver          ║
+   262→    // ║  - Boton Jugar cada 400ms (era 1s)                             ║
+   263→    // ║  - Keep-alive 401/403 → navigate en 150ms (era 500ms)          ║
+   264→    // ║  - Post-load check a los 100ms (era 500ms)                     ║
+   265→    // ║  - Keep-alive cada 45s (era 60s)                               ║
+   266→    // ║  - Reload solo si sesion expirada + >90s sin capturas          ║
+   267→    // ║  - ELIMINADO: iframe reconnect (reiniciaba mesa con sesion OK)  ║
+   268→    // ╚══════════════════════════════════════════════════════════════════╝
+   269→
+   270→    var _keepAliveCount = 0;
+   271→    var _lastCaptureTime = Date.now();
+   272→    var _lastKeepAliveResponse = 'pending';
+   273→
+   274→    // v7.6.1: URL dinámica — se lee del servidor (table-config) o localStorage
+   275→    var ROULETTE_URL = 'https://betfury.com/es/casino/games/roulette-live-by-evolution';
+   276→
+   277→    // Detectar casino actual por hostname
+   278→    var _isPinnacle = (location.hostname || '').indexOf('pinnacle') >= 0;
+   279→    if (_isPinnacle) {
+   280→      ROULETTE_URL = 'https://casino.pinnacle.com/es/live-casino/games/european-roulette/';
+   281→    }
+   282→
+   283→    // Poll table-config del servidor para obtener la mesa seleccionada en RollerWin
+   284→    function _loadTableConfig() {
+   285→      try {
+   286→        fetch(SERVER + '/api/capture/table-config', { method: 'GET' }).then(function(r) {
+   287→          return r.json();
+   288→        }).then(function(data) {
+   289→          if (data && data.selectedTable) {
+   290→            ROULETTE_URL = data.selectedTable;
+   291→            console.log('[RollerWin] v7.6.1: Mesa seleccionada: ' + ROULETTE_URL);
+   292→          }
+   293→        }).catch(function() {});
+   294→      } catch(e) {}
+   295→    }
+   296→    setTimeout(_loadTableConfig, 2000);
+   297→    setInterval(_loadTableConfig, 15000);
+   298→
+   299→    // v7.6.1: Detectar página de juego para Pinnacle (/live-casino/games/)
+   300→    function isGamePage(url) {
+   301→      if (!url) url = location.href;
+   302→      return url.indexOf('/casino/games/') !== -1 || url.indexOf('/live-casino/games/') !== -1;
+   303→    }
+   304→
+   305→    // ═══ PERSISTENCIA en localStorage ═══
+   306→    // El estado de recovery sobrevive recargas de pagina
+   307→    var RW_LS_KEY = 'rollerwin_recovery_v6';
+   308→    var _rwState = JSON.parse(localStorage.getItem(RW_LS_KEY) || '{}');
+   309→    var _recoverCount = _rwState.recoverCount || 0;
+   310→    var _isRecovering = !!_rwState.isRecovering;
+   311→    var _sessionExpired = !!_rwState.sessionExpired;
+   312→    var _lastCapturePersisted = _rwState.lastCaptureTime || Date.now();
+   313→
+   314→    function _saveState() {
+   315→      try {
+   316→        localStorage.setItem(RW_LS_KEY, JSON.stringify({
+   317→          recoverCount: _recoverCount,
+   318→          isRecovering: _isRecovering,
+   319→          sessionExpired: _sessionExpired,
+   320→          lastCaptureTime: _lastCapturePersisted,
+   321→          gameUrl: _gameUrl,
+   322→          recoveryTimestamp: _recoveryTimestamp,
+   323→          recoveryInProgress: _recoveryInProgress,
+   324→          timestamp: Date.now()
+   325→        }));
+   326→      } catch(e) {}
+   327→    }
+   328→    _saveState();
+   329→
+   330→    // Guardar la URL de la mesa actual
+   331→    var _gameUrl = _rwState.gameUrl || location.href;
+   332→    var _pushStateOrig = history.pushState;
+   333→    var _replaceStateOrig = history.replaceState;
+   334→    if (history.pushState) {
+   335→      history.pushState = function() {
+   336→        var result = _pushStateOrig.apply(this, arguments);
+   337→        if (isGamePage()) { _gameUrl = location.href; _saveState(); }
+   338→        return result;
+   339→      };
+   340→    }
+   341→    if (history.replaceState) {
+   342→      history.replaceState = function() {
+   343→        var result = _replaceStateOrig.apply(this, arguments);
+   344→        if (isGamePage()) { _gameUrl = location.href; _saveState(); }
+   345→        return result;
+   346→      };
+   347→    }
+   348→    setInterval(function() {
+   349→      if (isGamePage() && _gameUrl !== location.href) {
+   350→        _gameUrl = location.href;
+   351→        _saveState();
+   352→      }
+   353→    }, 10000);
+   354→
+   355→    // Recibir timestamp de última captura
+   356→    // v6.3 FIX: NO resetear estado de recovery durante una recuperación activa
+   357→    // Si el iframe envía un número mientras estamos recuperando, no debemos
+   358→    // cancelar la recuperación porque el número puede ser viejo (del iframe anterior)
+   359→    document.addEventListener('rw-number', function() {
+   360→      _lastCaptureTime = Date.now();
+   361→      _lastCapturePersisted = _lastCaptureTime;
+   362→      // Solo resetear recovery si NO estamos en recovery activo
+   363→      if (!_recoveryInProgress) {
+   364→        _isRecovering = false;
+   365→        _sessionExpired = false;
+   366→      }
+   367→      _saveState();
+   368→    });
+   369→
+   370→    // v6.6 FIX: Escuchar postMessage del iframe para sesion expirada
+   371→    // El iframe NO puede ver el DOM del parent y viceversa.
+   372→    // Si el iframe detecta "SESIÓN FINALIZADA" o pierde conexion,
+   373→    // envia postMessage al parent para activar recovery.
+   374→    window.addEventListener('message', function(e) {
+   375→      try {
+   376→        if (e.data && e.data.source === 'rollerwin-session-expired') {
+   377→          console.log('[RollerWin] IFRAME notifico sesion expirada: ' + e.data.reason);
+   378→          _sessionExpired = true;
+   379→          _saveState();
+   380→          handleSessionExpired(e.data.reason);
+   381→        }
+   382→      } catch(err) {}
+   383→    });
+   384→
+   385→    // ════════════════════════════════════════════════════════
+   386→    // 1. KEEP-ALIVE + DETECCION DE SESION
+   387→    //    v6.3 FIX: Detectar redirect a login (response.redirected + URL check)
+   388→    //    Betfury NO devuelve 401/403 — redirige a /login con status 200.
+   389→    //    La API fetch sigue redirects por defecto, así que response.redirected=true
+   390→    //    y response.url cambia a la URL de login.
+   391→    // ════════════════════════════════════════════════════════
+   392→    
+   393→    // Interceptar TODOS los fetch de la pagina principal para detectar sesion expirada
+   394→    var _origFetch = window.fetch;
+   395→    if (_origFetch && !_origFetch._rwKeepAlive) {
+   396→      _origFetch._rwKeepAlive = true;
+   397→      window.fetch = function(input, init) {
+   398→        var url = '';
+   399→        try { url = typeof input === 'string' ? input : (input && input.url ? input.url : ''); } catch(e) {}
+   400→        var promise = _origFetch.apply(this, arguments);
+   401→        if (promise && url) {
+   402→          promise.then(function(r) {
+   403→            // v6.3 FIX: Detectar redirect a login (Betfury redirige, no 401/403)
+   404→            if (r.redirected) {
+   405→              var respUrl = (r.url || '').toLowerCase();
+   406→              if (respUrl.indexOf('login') !== -1 || respUrl.indexOf('signin') !== -1 || respUrl.indexOf('auth') !== -1) {
+   407→                console.log('[RollerWin] Fetch REDIRIGIDO a login — SESION EXPIRADA!');
+   408→                _sessionExpired = true;
+   409→                _saveState();
+   410→                handleSessionExpired('fetch-redirect-' + respUrl);
+   411→                return;
+   412→              }
+   413→            }
+   414→            if (r.status === 401 || r.status === 403) {
+   415→              console.log('[RollerWin] Fetch interceptado ' + r.status + ' — SESION EXPIRADA!');
+   416→              _sessionExpired = true;
+   417→              _saveState();
+   418→              handleSessionExpired('fetch-intercept-' + r.status);
+   419→            }
+   420→          }).catch(function() {});
+   421→        }
+   422→        return promise;
+   423→      };
+   424→    }
+   425→    
+   426→    // Interceptar XHR tambien
+   427→    var _origXHROpen = XMLHttpRequest.prototype.open;
+   428→    var _origXHRSend = XMLHttpRequest.prototype.send;
+   429→    if (!_origXHRSend._rwKeepAlive) {
+   430→      _origXHRSend._rwKeepAlive = true;
+   431→      XMLHttpRequest.prototype.open = function(m, u) {
+   432→        this._rwUrl = String(u || '');
+   433→        return _origXHROpen.apply(this, arguments);
+   434→      };
+   435→      XMLHttpRequest.prototype.send = function() {
+   436→        var self = this;
+   437→        this.addEventListener('load', function() {
+   438→          // v6.3 FIX: Detectar redirect via responseURL
+   439→          var respUrl = (self.responseURL || '').toLowerCase();
+   440→          if (respUrl.indexOf('login') !== -1 || respUrl.indexOf('signin') !== -1) {
+   441→            console.log('[RollerWin] XHR REDIRIGIDO a login — SESION EXPIRADA!');
+   442→            _sessionExpired = true;
+   443→            _saveState();
+   444→            handleSessionExpired('xhr-redirect-login');
+   445→            return;
+   446→          }
+   447→          if (self.status === 401 || self.status === 403) {
+   448→            console.log('[RollerWin] XHR interceptado ' + self.status + ' — SESION EXPIRADA!');
+   449→            _sessionExpired = true;
+   450→            _saveState();
+   451→            handleSessionExpired('xhr-intercept-' + self.status);
+   452→          }
+   453→        });
+   454→        return _origXHRSend.apply(this, arguments);
+   455→      };
+   456→    }
+   457→
+   458→    // Keep-alive: fetch a la pagina actual para mantener la cookie activa
+   459→    // v6.3 FIX: Usar GET (no HEAD) para poder detectar redirect + contenido HTML de login
+   460→    function betfuryKeepAlive() {
+   461→      _keepAliveCount++;
+   462→      fetch(location.pathname || '/', {
+   463→        method: 'GET',
+   464→        credentials: 'include',
+   465→        redirect: 'follow'
+   466→      }).then(function(r) {
+   467→        _lastKeepAliveResponse = r.status;
+   468→        if (_keepAliveCount % 3 === 0) {
+   469→          console.log('[RollerWin] Keep-alive #' + _keepAliveCount + ' HTTP ' + r.status + (r.redirected ? ' (REDIRIGIDO a ' + r.url + ')' : ''));
+   470→        }
+   471→        // v6.3 FIX: Detectar redirect a login
+   472→        if (r.redirected) {
+   473→          var respUrl = (r.url || '').toLowerCase();
+   474→          if (respUrl.indexOf('login') !== -1 || respUrl.indexOf('signin') !== -1) {
+   475→            console.log('[RollerWin] Keep-alive REDIRIGIDO a login — SESION EXPIRADA!');
+   476→            _sessionExpired = true;
+   477→            _saveState();
+   478→            handleSessionExpired('keepalive-redirect');
+   479→            return;
+   480→          }
+   481→        }
+   482→        // v6.3 FIX: Detectar si la respuesta es HTML de login (sin redirect)
+   483→        // Algunas APIs retornan 200 con HTML de login embebido
+   484→        r.clone().text().then(function(text) {
+   485→          if (text && text.length < 5000 && text.indexOf('<') !== -1) {
+   486→            var textLow = text.toLowerCase();
+   487→            if ((textLow.indexOf('login') !== -1 || textLow.indexOf('sign in') !== -1) &&
+   488→                textLow.indexOf('password') !== -1) {
+   489→              console.log('[RollerWin] Keep-alive devolvió HTML de login — SESION EXPIRADA!');
+   490→              _sessionExpired = true;
+   491→              _saveState();
+   492→              handleSessionExpired('keepalive-html-login');
+   493→              return;
+   494→            }
+   495→          }
+   496→        }).catch(function() {});
+   497→        if (r.status === 401 || r.status === 403) {
+   498→          console.log('[RollerWin] Keep-alive ' + r.status + ' — SESION EXPIRADA!');
+   499→          _sessionExpired = true;
+   500→          _saveState();
+   501→          handleSessionExpired('keepalive-' + r.status);
+   502→        }
+   503→      }).catch(function(e) {
+   504→        console.log('[RollerWin] Keep-alive error:', e.message);
+   505→      });
+   506→    }
+   507→    setTimeout(betfuryKeepAlive, 1500);
+   508→    setInterval(betfuryKeepAlive, 30000); // cada 30s
+   509→
+   510→    // ════════════════════════════════════════════════════════
+   511→    // 2. BUSQUEDA AMPLIA de botones (button/div/span/a)
+   512→    // ════════════════════════════════════════════════════════
+   513→    function clickAnyButtonByText(texts) {
+   514→      // Buscar en TODOS los elementos clicables, no solo <button>
+   515→      var selectors = 'button, a, [role="button"], div[onclick], span[onclick], [class*="btn"], [class*="button"]';
+   516→      var allBtns = document.querySelectorAll(selectors);
+   517→      for (var i = 0; i < allBtns.length; i++) {
+   518→        var el = allBtns[i];
+   519→        var bt = (el.textContent || '').trim();
+   520→        for (var j = 0; j < texts.length; j++) {
+   521→          if (bt === texts[j]) {
+   522→            console.log('[RollerWin] Click boton [' + el.tagName.toLowerCase() + ']: "' + bt + '"');
+   523→            el.click();
+   524→            return true;
+   525→          }
+   526→        }
+   527→      }
+   528→      // Fallback: buscar elementos con texto exacto que tengan cursor pointer
+   529→      var allEls = document.querySelectorAll('div, span, a');
+   530→      for (var i = 0; i < allEls.length; i++) {
+   531→        var el = allEls[i];
+   532→        var bt = (el.textContent || '').trim();
+   533→        if (bt.length > 0 && bt.length <= 20) {
+   534→          var style = window.getComputedStyle(el);
+   535→          if (style.cursor === 'pointer' || el.getAttribute('role') === 'button') {
+   536→            for (var j = 0; j < texts.length; j++) {
+   537→              if (bt === texts[j]) {
+   538→                console.log('[RollerWin] Click fallback [' + el.tagName.toLowerCase() + ']: "' + bt + '"');
+   539→                el.click();
+   540→                return true;
+   541→              }
+   542→            }
+   543→          }
+   544→        }
+   545→      }
+   546→      return false;
+   547→    }
+   548→
+   549→    // ════════════════════════════════════════════════════════
+   550→    // 3. HANDLE SESSION EXPIRED — Flujo centralizado
+   551→    //    1) Click OK en el modal
+   552→    //    2) Esperar 500ms
+   553→    //    3) Navegar a la mesa de ruleta
+   554→    // ════════════════════════════════════════════════════════
+   555→    // v6.5 FIX: _recoveryInProgress PERSISTIDO en localStorage.
+   556→    // Antes era solo `var _recoveryInProgress = false` que se reseteaba al recargar.
+   557→    // Esto causaba que al volver de una navegacion, el cooldown no funcionara
+   558→    // y se iniciara un loop infinito de recoveries.
+   559→    var _recoveryInProgress = !!_rwState.recoveryInProgress;
+   560→    // v6.3 FIX: Persistir recoveryTimestamp en localStorage para evitar loop infinito
+   561→    var _recoveryTimestamp = _rwState.recoveryTimestamp || 0;
+   562→    // v6.5: Safety reset — si recovery lleva >60s activo, forzar reset
+   563→    // Esto previene que un recovery fallido quede bloqueado permanentemente
+   564→    if (_recoveryInProgress && Date.now() - _recoveryTimestamp > 60000) {
+   565→      console.log('[RollerWin] Reset recovery bloqueado >60s');
+   566→      _recoveryInProgress = false;
+   567→    }
+   568→
+   569→    function handleSessionExpired(reason) {
+   570→      if (_recoveryInProgress) return;
+   571→      var now = Date.now();
+   572→      // v6.5 FIX: Cooldown 12s (era 15s) — respuesta mas rapida
+   573→      if (now - _recoveryTimestamp < 12000) return; // 12s cooldown (persistido en localStorage)
+   574→      
+   575→      _recoveryInProgress = true;
+   576→      _recoveryTimestamp = now;
+   577→      _isRecovering = true;
+   578→      _sessionExpired = true;
+   579→      _recoverCount++;
+   580→      _saveState();
+   581→
+   582→      console.log('[RollerWin] RECOVERY #' + _recoverCount + ' iniciado (' + reason + ')');
+   583→
+   584→      // PASO 1: Click OK en el modal si existe
+   585→      var clicked = clickAnyButtonByText(['OK', 'Ok', 'ok', 'ACEPTAR', 'Aceptar', 'aceptar', 'VOLVER', 'Volver', 'volver', 'VUELVA', 'Vuelva', 'volvera', 'INICIAR', 'Iniciar', 'iniciar', 'CONTINUAR', 'Continuar', 'continuar']);
+   586→      if (clicked) {
+   587→        console.log('[RollerWin] Click OK en modal — esperando 500ms...');
+   588→      }
+   589→
+   590→      // PASO 2: Esperar 500ms y navegar
+   591→      // v6.7 FIX: Usar location.replace() en vez de location.href para
+   592→      // forzar navegacion en la MISMA pestaña (no abre nueva pestaña)
+   593→      setTimeout(function() {
+   594→        var targetUrl = ROULETTE_URL;
+   595→        if (_gameUrl && _gameUrl.indexOf('/casino/games/') !== -1 && _gameUrl.indexOf('roulette') !== -1) {
+   596→          targetUrl = _gameUrl;
+   597→        }
+   598→        console.log('[RollerWin] Navegando a mesa (same tab): ' + targetUrl);
+   599→        location.replace(targetUrl);
+   600→      }, clicked ? 500 : 100);
+   601→
+   602→      // PASO 3: Safety timeout — resetear despues de 20s
+   603→      // v6.5: Reducido a 20s. El estado se persiste para sobreviver recargas.
+   604→      setTimeout(function() {
+   605→        console.log('[RollerWin] Reset recovery (safety timeout 20s)');
+   606→        _recoveryInProgress = false;
+   607→        _saveState();
+   608→      }, 20000);
+   609→    }
+   610→
+   611→    // ════════════════════════════════════════════════════════
+   612→    // 4. DETECT AND CLOSE ANY MODAL (sesion + saldo bajo)
+   613→    // ════════════════════════════════════════════════════════
+   614→    function detectAndCloseAnyModal() {
+   615→      // v6.3 FIX: NO bloquear si _recoveryInProgress —
+   616→      // necesitamos poder cerrar modales en CUALQUIER momento
+   617→      // v6.3 FIX: Selectores ampliados (dialog, section, article, etc.)
+   618→      var allEls = document.querySelectorAll('div, p, span, h1, h2, h3, dialog, section, article, main, li, label, td, th');
+   619→
+   620→      for (var i = 0; i < allEls.length; i++) {
+   621→        var txt = (allEls[i].textContent || '');
+   622→        var txtLow = txt.toLowerCase();
+   623→
+   624→        // v6.3 FIX: SESIÓN FINALIZADA — case-insensitive para español también
+   625→        // Antes: txt.indexOf('SESI') fallaba si Betfury usaba "Sesión finalizada"
+   626→        var isExpired = (txtLow.indexOf('sesi') !== -1 && txtLow.indexOf('finalizada') !== -1) ||
+   627→                        (txtLow.indexOf('session') !== -1 && (txtLow.indexOf('expired') !== -1 || txtLow.indexOf('ended') !== -1)) ||
+   628→                        (txtLow.indexOf('sesión') !== -1 && txtLow.indexOf('finalizada') !== -1);
+   629→        if (isExpired) {
+   630→          console.log('[RollerWin] SESION FINALIZADA detectada → handleSessionExpired');
+   631→          handleSessionExpired('modal-sesion');
+   632→          return true;
+   633→        }
+   634→
+   635→        // SALDO BAJO → solo cerrar modal, no navegar
+   636→        var isLowBalance = (txtLow.indexOf('saldo') !== -1 && txtLow.indexOf('bajo') !== -1) ||
+   637→                           (txtLow.indexOf('balance') !== -1 && txtLow.indexOf('low') !== -1) ||
+   638→                           (txtLow.indexOf('insufficient') !== -1 && txtLow.indexOf('balance') !== -1);
+   639→        if (isLowBalance) {
+   640→          if (clickAnyButtonByText(['CERRAR', 'Cerrar', 'cerrar', 'CLOSE', 'Close', 'OK', 'Ok', 'ok'])) {
+   641→            console.log('[RollerWin] Modal SALDO BAJO → CERRAR');
+   642→            return true;
+   643→          }
+   644→        }
+   645→      }
+   646→      return false;
+   647→    }
+   648→
+   649→    setInterval(detectAndCloseAnyModal, 400); // v6.2: cada 400ms (era 1s)
+   650→    try {
+   651→      new MutationObserver(function() { detectAndCloseAnyModal(); }).observe(document.body, { childList: true, subtree: true });
+   652→    } catch(e) {}
+   653→
+   654→    // ════════════════════════════════════════════════════════
+   655→    // 5. CLICK AUTOMÁTICO en botón "Jugar" — SIEMPRE ACTIVO
+   656→    // Ya NO depende de _isRecovering. Siempre busca el boton
+   657→    // "Jugar" cuando estamos en la pagina del juego (preview)
+   658→    // ════════════════════════════════════════════════════════
+   659→    var _playButtonCooldown = 0;
+   660→
+   661→    // v6.7 FIX: checkPlayButton NUNCA clickea elementos con target="_blank"
+   662→    // Eso causaba que se abriera una nueva pestaña al recuperar la sesion.
+   663→    function checkPlayButton() {
+   664→      if (_playButtonCooldown > Date.now()) return false;
+   665→      var onGamePage = isGamePage();
+   666→      if (!onGamePage) return false;
+   667→
+   668→      // Buscar boton Jugar/Play en TODOS los elementos clicables
+   669→      var btns = document.querySelectorAll('button, a, [role="button"], div[onclick], [class*="btn"], [class*="button"]');
+   670→      for (var i = 0; i < btns.length; i++) {
+   671→        var bt = (btns[i].textContent || '').trim().toLowerCase();
+   672→        if (bt === 'jugar' || bt === 'play' || bt === 'play now' || bt === 'spin' || bt === 'start') {
+   673→          // v6.7: NUNCA clickear si tiene target="_blank" (abriria nueva pestaña)
+   674→          if (btns[i].getAttribute('target') === '_blank') {
+   675→            console.log('[RollerWin] Boton JUGAR IGNORADO (target=_blank) [' + btns[i].tagName.toLowerCase() + ']');
+   676→            continue;
+   677→          }
+   678→          // v6.7: Si es un <a href> con target diferente, ignorar
+   679→          if (btns[i].tagName.toLowerCase() === 'a' && btns[i].getAttribute('target')) {
+   680→            console.log('[RollerWin] Boton JUGAR IGNORADO (es link con target) [' + btns[i].tagName.toLowerCase() + ']');
+   681→            continue;
+   682→          }
+   683→          console.log('[RollerWin] Boton JUGAR encontrado [' + btns[i].tagName.toLowerCase() + '] — click!');
+   684→          btns[i].click();
+   685→          _playButtonCooldown = Date.now() + 5000; // Cooldown 5s (era 10s)
+   686→          _isRecovering = true;
+   687→          _saveState();
+   688→          return true;
+   689→        }
+   690→      }
+   691→      return false;
+   692→    }
+   693→
+   694→    setInterval(checkPlayButton, 400); // v6.2: cada 400ms (era 1s)
+   695→
+   696→    // ════════════════════════════════════════════════════════
+   697→    // 6. IFRAME MUERTO: sin capturas >60s → reload COMPLETO
+   698→    //    v6.2 FIX: 90s (era 35s que reiniciaba con sesion activa)
+   699→    //    v6.6 FIX: Relajada la condicion — si no hay capturas >120s,
+   700→    //    el iframe esta claramente muerto sin importar si la sesion
+   701→    //    del parent esta activa (keep-alive chekea parent, no iframe).
+   702→    //    v7.6 FIX: Reducido a 60s (era 120s). 120s = 6-7 números perdidos.
+   703→    //    60s = máximo 3-4 perdidos, pero con Gap Recovery en el iframe,
+   704→    //    muchos de esos números ya deberían haber sido capturados.
+   705→    // ════════════════════════════════════════════════════════
+   706→    setInterval(function() {
+   707→      var noCap = Date.now() - _lastCaptureTime;
+   708→      var onGame = isGamePage();
+   709→
+   710→      // v7.6: Reload si estamos en juego Y sin capturas >60s
+   711→      if (onGame && noCap > 60000 && !_recoveryInProgress) {
+   712→        console.log('[RollerWin] Sin capturas ' + Math.round(noCap/1000) + 's — iframe muerto, reload completo...');
+   713→        _isRecovering = true;
+   714→        _sessionExpired = true;
+   715→        _saveState();
+   716→        location.reload(); // reload en la misma pestaña
+   717→      }
+   718→    }, 10000); // check cada 10s
+   719→
+   720→    // ════════════════════════════════════════════════════════
+   721→    // 6b. DETECCIÓN AL CARGAR: ya venimos de un recovery?
+   722→    //     v6.2: Ejecutar a los 100ms (era 500ms)
+   723→    // ════════════════════════════════════════════════════════
+   724→    setTimeout(function() {
+   725→      if (_isRecovering || _sessionExpired || _recoverCount > 0) {
+   726→        console.log('[RollerWin] Post-load: recovering=' + _isRecovering +
+   727→          ' expired=' + _sessionExpired + ' count=' + _recoverCount);
+   728→
+   729→        if (!isGamePage()) {
+   730→          console.log('[RollerWin] No en pagina de juego — navegando...');
+   731→          handleSessionExpired('post-load-redirect');
+   732→          return;
+   733→        }
+   734→
+   735→        // Click Jugar inmediato + cerrar modales
+   736→        console.log('[RollerWin] En pagina de juego — click Jugar + cerrar modales...');
+   737→        checkPlayButton();
+   738→        detectAndCloseAnyModal();
+   739→        
+   740→        // Segundo intento mas rapido (v6.2: 600ms era 1500ms)
+   741→        setTimeout(function() {
+   742→          checkPlayButton();
+   743→          detectAndCloseAnyModal();
+   744→        }, 600);
+   745→        
+   746→        // Tercer intento (v6.2: nuevo)
+   747→        setTimeout(function() {
+   748→          checkPlayButton();
+   749→          detectAndCloseAnyModal();
+   750→        }, 1200);
+   751→      }
+   752→    }, 100); // v6.2: ejecutar a los 100ms (era 500ms)
+   753→
+   754→    // ════════════════════════════════════════════════════════
+   755→    // 7. VISIBILITY + FOCUS
+   756→    // ════════════════════════════════════════════════════════
+   757→    document.addEventListener('visibilitychange', function() {
+   758→      if (!document.hidden) {
+   759→        betfuryKeepAlive();
+   760→        if (!isGamePage() && _recoverCount > 0) {
+   761→          handleSessionExpired('visibility');
+   762→        }
+   763→        if (isGamePage()) {
+   764→          checkPlayButton();
+   765→          detectAndCloseAnyModal();
+   766→        }
+   767→      }
+   768→    });
+   769→
+   770→    window.addEventListener('focus', function() {
+   771→      betfuryKeepAlive();
+   772→      if (isGamePage()) {
+   773→        checkPlayButton();
+   774→        detectAndCloseAnyModal();
+   775→      }
+   776→    });
+   777→
+   778→    // ════════════════════════════════════════════════════════
+   779→    // 8. REPORTAR estado al content script
+   780→    // ════════════════════════════════════════════════════════
+   781→    setInterval(function() {
+   782→      try {
+   783→        document.dispatchEvent(new CustomEvent('rw-status', {
+   784→          detail: {
+   785→            status: _isRecovering ? 'recovering' : 'alive',
+   786→            keepAliveCount: _keepAliveCount,
+   787→            lastResponse: _lastKeepAliveResponse,
+   788→            noCaptureSec: Math.round((Date.now() - _lastCaptureTime) / 1000),
+   789→            recoverCount: _recoverCount,
+   790→            sessionExpired: _sessionExpired,
+   791→            gameUrl: _gameUrl
+   792→          }
+   793→        }));
+   794→      } catch(e) {}
+   795→    }, 10000);
+   796→
+   797→    console.log('[RollerWin] v7.6 GAP-RECOVERY+DEDUP-SEQ-10s+PER-NUMBER | Mesa:', ROULETTE_URL, '| Count:', _recoverCount);
+   798→
+   799→  }
+   800→
+   801→  // ══════════════════════════════════════
+   802→  // ============ IFRAME (Evolution) ======
+   803→  // AQUI es donde se detectan los numeros
+   804→  // ══════════════════════════════════════
+   805→  console.log('[RollerWin] IFRAME detectado:', hostname, '— activando deteccion');
+   806→
+   807→  // v6.6 FIX: Detectar modal "SESIÓN FINALIZADA" dentro del iframe
+   808→  // El parent NO puede ver el DOM del iframe, asi que el iframe debe
+   809→  // detectar el modal y notificar al parent via postMessage
+   810→  var _iframeModalNotified = false;
+   811→  function detectIframeModal() {
+   812→    var allEls = document.querySelectorAll('div, p, span, h1, h2, h3, dialog, section, article, main, li, label, td, th');
+   813→    for (var i = 0; i < allEls.length; i++) {
+   814→      var txt = (allEls[i].textContent || '');
+   815→      var txtLow = txt.toLowerCase();
+   816→      // "SESIÓN FINALIZADA" / "session ended" / "session expired"
+   817→      if ((txtLow.indexOf('sesi') !== -1 && txtLow.indexOf('finalizada') !== -1) ||
+   818→          (txtLow.indexOf('sesión') !== -1 && txtLow.indexOf('finalizada') !== -1) ||
+   819→          (txtLow.indexOf('session') !== -1 && (txtLow.indexOf('ended') !== -1 || txtLow.indexOf('expired') !== -1))) {
+   820→        if (!_iframeModalNotified) {
+   821→          _iframeModalNotified = true;
+   822→          console.log('[RollerWin] IFRAME: SESION FINALIZADA detectada → notificando parent');
+   823→          try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-modal-detected' }, '*'); } catch(e) {}
+   824→        }
+   825→        // Intentar click OK dentro del iframe tambien
+   826→        var okBtns = allEls[i].closest('div, dialog') ? allEls[i].closest('div, dialog').querySelectorAll('button, a, [role="button"], div[onclick], span[onclick]') : [];
+   827→        for (var j = 0; j < okBtns.length; j++) {
+   828→          var bt = (okBtns[j].textContent || '').trim();
+   829→          if (bt === 'OK' || bt === 'Ok' || bt === 'ok' || bt === 'ACEPTAR' || bt === 'Aceptar') {
+   830→            console.log('[RollerWin] IFRAME: Click OK en modal sesion');
+   831→            okBtns[j].click();
+   832→          }
+   833→        }
+   834→        return true;
+   835→      }
+   836→    }
+   837→    return false;
+   838→  }
+   839→  setInterval(detectIframeModal, 500);
+   840→  try { new MutationObserver(function() { detectIframeModal(); }).observe(document.body, { childList: true, subtree: true }); } catch(e) {}
+   841→
+   842→  // v6.6 FIX: Detectar si el iframe pierde conexion (no hay eventos WS por >60s)
+   843→  var _iframeLastActivity = Date.now();
+   844→  var _iframeDeadNotified = false;
+   845→
+   846→  // Hook fetch/XHR dentro del iframe para detectar sesion expirada
+   847→  var _ifOrigFetch = window.fetch;
+   848→  if (_ifOrigFetch && !_ifOrigFetch._rwIframeSess) {
+   849→    _ifOrigFetch._rwIframeSess = true;
+   850→    window.fetch = function(input, init) {
+   851→      _iframeLastActivity = Date.now();
+   852→      var promise = _ifOrigFetch.apply(this, arguments);
+   853→      if (promise) {
+   854→        promise.then(function(r) {
+   855→          if (r.status === 401 || r.status === 403 || r.redirected) {
+   856→            var respUrl = (r.url || '').toLowerCase();
+   857→            if (r.status === 401 || r.status === 403 || respUrl.indexOf('login') !== -1) {
+   858→              console.log('[RollerWin] IFRAME: Fetch sesion expirada ' + r.status);
+   859→              try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-fetch-' + r.status }, '*'); } catch(e) {}
+   860→            }
+   861→          }
+   862→        }).catch(function() {});
+   863→      }
+   864→      return promise;
+   865→    };
+   866→  }
+   867→
+   868→  // v7.6 FIX: Notificar parent si el iframe esta muerto (sin actividad >45s, era 90s)
+   869→  // Con giros de 18s, 90s = 5 números perdidos. 45s = máximo 2-3 perdidos.
+   870→  setInterval(function() {
+   871→    if (!_iframeDeadNotified && Date.now() - _iframeLastActivity > 45000) {
+   872→      _iframeDeadNotified = true;
+   873→      console.log('[RollerWin] IFRAME: Sin actividad >45s → notificando parent + Gap Recovery');
+   874→      try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-dead-45s' }, '*'); } catch(e) {}
+   875→      // v7.6: También activar Gap Recovery localmente
+   876→      startGapRecovery();
+   877→    }
+   878→  }, 10000); // Check cada 10s (era 15s)
+   879→
+   880→  // v7.6 FIX: GAP RECOVERY SCANNER
+   881→  // Cuando hay un gap >22s sin capturas (mas de un giro de 18s), significa que
+   882→  // se perdió al menos un número. El Gap Recovery Scanner escanea el DOM de
+   883→  // forma agresiva cada 3s hasta capturar el número perdido.
+   884→  // También se activa cuando el WebSocket se reconecta.
+   885→  var _iframeLastCaptureTime = Date.now();
+   886→  var _gapRecoveryActive = false;
+   887→  var _gapRecoveryTimer = null;
+   888→  var _GAP_THRESHOLD = 22000; // 22s — mas de un giro (18s)
+   889→  var _GAP_SCAN_INTERVAL = 3000; // 3s entre escaneos de gap
+   890→
+   891→  // v7.6 FIX: WS Reconnect Detection
+   892→  // Trackea cuando un WebSocket se cierra y otro se abre.
+   893→  // Al reconectar, escanea el DOM inmediatamente para capturar el resultado perdido.
+   894→  var _wsWasClosed = false;
+   895→  var _wsReconnectCount = 0;
+   896→
+   897→  // v7.5 FIX: Dedup por SECUENCIA — previene re-envío post-recovery
+   898→  // La dedup por tiempo (9s) no basta cuando el iframe se recarga: _lastSentTimestamp
+   899→  // se resetea a 0, y el DOM Scanner re-lee el número viejo visible en la mesa.
+   900→  // Secuencia guarda los últimos 5 números enviados con timestamp.
+   901→  // v7.6: Ventana de 10s — los giros duran ~18s, así que 10s NUNCA
+   902→  // bloquea repeticiones legítimas (15,15 consecutivos = 18s > 10s → permitido).
+   903→  // Pero SI bloquea re-envíos post-recovery que ocurren en 1-5s.
+   904→  // Solo bloquea si el MISMO número está en la secuencia dentro de 10s.
+   905→  var _sentSequence = []; // Array de {number, timestamp}
+   906→  var _SEQUENCE_MAX = 5;
+   907→  var _SEQUENCE_WINDOW = 10000; // 10s — mucho MENOR que duración de giro (18s)
+   908→
+   909→  function _checkSequenceDup(n) {
+   910→    for (var i = 0; i < _sentSequence.length; i++) {
+   911→      if (_sentSequence[i].number === n) {
+   912→        if (Date.now() - _sentSequence[i].timestamp < _SEQUENCE_WINDOW) {
+   913→          return true; // Mismo número dentro de 10s → duplicado post-recovery
+   914→        }
+   915→      }
+   916→    }
+   917→    return false;
+   918→  }
+   919→
+   920→  function _addSequence(n) {
+   921→    _sentSequence.push({ number: n, timestamp: Date.now() });
+   922→    if (_sentSequence.length > _SEQUENCE_MAX) _sentSequence.shift();
+   923→    _iframeLastCaptureTime = Date.now(); // v7.6: Actualizar timestamp de captura
+   924→    // v7.6: Si habia un gap recovery activo, desactivarlo (se capturó un número)
+   925→    if (_gapRecoveryActive) {
+   926→      _gapRecoveryActive = false;
+   927→      console.log('[RollerWin] GAP RECOVERY: número capturado, desactivando scanner');
+   928→    }
+   929→  }
+   930→
+   931→  // v7.6: Función de Gap Recovery — escaneo agresivo del DOM
+   932→  // Busca el número visible en el DOM usando selectores más amplios.
+   933→  // Se usa cuando hay un gap >22s sin capturas o al reconectar WS.
+   934→  function _gapRecoveryScan() {
+   935→    var gapSelectors = [
+   936→      '[class*="winning-number"]',
+   937→      '[class*="winning-pocket"]',
+   938→      '[class*="result-display"]',
+   939→      '[class*="result-value"]',
+   940→      '[class*="current-result"]',
+   941→      '[class*="game-number-display"]',
+   942→      '[class*="number-display"]',
+   943→      '[data-result-number]',
+   944→      '[data-winning-number]',
+   945→      '[data-game-result]',
+   946→      '[class*="overlay"] [class*="result"]',
+   947→      '[class*="announced"]',
+   948→      '[class*="round-result"]',
+   949→      '[class*="roulette-result"]',
+   950→      '[class*="live-result"]',
+   951→      '[class*="last-number"]',
+   952→      '[class*="lastnumber"]',
+   953→      '[class*="game-result"]'
+   954→    ];
+   955→
+   956→    for (var i = 0; i < gapSelectors.length; i++) {
+   957→      try {
+   958→        var els = document.querySelectorAll(gapSelectors[i]);
+   959→        for (var j = 0; j < els.length; j++) {
+   960→          var text = (els[j].textContent || '').trim();
+   961→          var num = parseInt(text, 10);
+   962→          if (!isNaN(num) && num >= 0 && num <= 36 && String(num) === text) {
+   963→            console.log('[RollerWin] GAP RECOVERY: número ' + num + ' encontrado en DOM (' + gapSelectors[i] + ')');
+   964→            sendToServer(num, 'GAP-RECOVERY:' + gapSelectors[i]);
+   965→            return true;
+   966→          }
+   967→        }
+   968→      } catch(e) {}
+   969→    }
+   970→    return false;
+   971→  }
+   972→
+   973→  // v7.6: Iniciar Gap Recovery Scanner
+   974→  function startGapRecovery() {
+   975→    if (_gapRecoveryActive) return;
+   976→    _gapRecoveryActive = true;
+   977→    console.log('[RollerWin] GAP RECOVERY: activado (sin capturas >' + Math.round(_GAP_THRESHOLD/1000) + 's)');
+   978→    // Escanear inmediatamente
+   979→    _gapRecoveryScan();
+   980→    // Escanear cada 3s
+   981→    _gapRecoveryTimer = setInterval(function() {
+   982→      if (!_gapRecoveryActive) {
+   983→        clearInterval(_gapRecoveryTimer);
+   984→        return;
+   985→      }
+   986→      _gapRecoveryScan();
+   987→    }, _GAP_SCAN_INTERVAL);
+   988→  }
+   989→
+   990→  // v7.6: Checker periódico para activar Gap Recovery
+   991→  setInterval(function() {
+   992→    if (!_gapRecoveryActive && Date.now() - _iframeLastCaptureTime > _GAP_THRESHOLD) {
+   993→      startGapRecovery();
+   994→    }
+   995→  }, 5000); // Check cada 5s
+   996→
+   997→  // v6.4: Solicitar sincronización del último número al parent
+   998→  // Esto previene que cualquier hook re-envíe el último resultado
+   999→  // después de una recarga del iframe (popula _sentNumbers)
+  1000→  try {
+  1001→    var _syncHandler = function(e) {
+  1002→      try {
+  1003→        if (e.data && e.data.source === 'rollerwin-sync-reply' && typeof e.data.lastNumber === 'number') {
+  1004→          syncLastNumber(e.data.lastNumber);
+  1005→          // v7.4: Tambien poblar la secuencia para prevenir re-envío post-recarga
+  1006→          _addSequence(e.data.lastNumber);
+  1007→          window.removeEventListener('message', _syncHandler);
+  1008→        }
+  1009→      } catch(err) {}
+  1010→    };
+  1011→    window.parent.postMessage({ source: 'rollerwin-sync' }, '*');
+  1012→    window.addEventListener('message', _syncHandler);
+  1013→    // Timeout: si no hay respuesta en 2s, continuar sin sync
+  1014→    setTimeout(function() {
+  1015→      window.removeEventListener('message', _syncHandler);
+  1016→    }, 2000);
+  1017→  } catch(e) {}
+  1018→  // Re-solicitar sync cada 30s (por si el parent también recarga)
+  1019→  setInterval(function() {
+  1020→    try {
+  1021→      window.parent.postMessage({ source: 'rollerwin-sync' }, '*');
+  1022→    } catch(e) {}
+  1023→  }, 30000);
+  1024→
+  1025→  // Campos de resultado de ruleta (alta confianza)
+  1026→  var RESULT_FIELDS = [
+  1027→    'number', 'result', 'resultnumber', 'winningnumber', 'win_number',
+  1028→    'game_number', 'roulette_number', 'ball_number', 'pocket', 'pocket_number',
+  1029→    'winningpocket', 'pocketid', 'resultid', 'displaynumber',
+  1030→    'roundresult', 'gameoutcome', 'finalnumber', 'outcome',
+  1031→    'winningnumberdisplay', 'resultnumber', 'final_number', 'game_result',
+  1032→    'round_result', 'game_outcome', 'numberstr', 'numberstring'
+  1033→  ];
+  1034→
+  1035→  function isResultField(key) {
+  1036→    var k = key.replace(/[_\-\s]/g, '').toLowerCase();
+  1037→    for (var i = 0; i < RESULT_FIELDS.length; i++) {
+  1038→      if (k === RESULT_FIELDS[i].replace(/[_\-\s]/g, '')) return true;
+  1039→    }
+  1040→    return false;
+  1041→  }
+  1042→
+  1043→  function tryNum(val) {
+  1044→    if (typeof val === 'number' && val >= 0 && val <= 36 && val === Math.floor(val)) return val;
+  1045→    if (typeof val === 'string') {
+  1046→      var s = val.trim();
+  1047→      if ((s.length === 1 || s.length === 2) && s === String(parseInt(s, 10))) {
+  1048→        var n = parseInt(s, 10);
+  1049→        if (n >= 0 && n <= 36) return n;
+  1050→      }
+  1051→    }
+  1052→    return null;
+  1053→  }
+  1054→
+  1055→  function extractObj(obj, depth, path) {
+  1056→    if (!obj || typeof obj !== 'object' || depth > 4) return;
+  1057→
+  1058→    if (Array.isArray(obj)) {
+  1059→      // FIX v5.0.1: Solo procesar arrays que representen UN resultado (length 1)
+  1060→      // o tomar el ULTIMO elemento (mas reciente, no el mas viejo como antes).
+  1061→      // Ignorar arrays largos que son claramente historial (length > 5).
+  1062→      if (obj.length === 0) return;
+  1063→      if (obj.length > 5) return; // Historial = mas de 5 resultados, ignorar
+  1064→
+  1065→      var pathLow = path.toLowerCase();
+  1066→      if (pathLow.indexOf('result') >= 0 || pathLow.indexOf('winning') >= 0 ||
+  1067→          pathLow.indexOf('outcome') >= 0 || pathLow.indexOf('pocket') >= 0) {
+  1068→        // Tomar el ULTIMO elemento (resultado mas reciente)
+  1069→        var last = obj[obj.length - 1];
+  1070→        var n = tryNum(last);
+  1071→        if (n !== null) { sendToServer(n, 'array@' + path); return; }
+  1072→        if (typeof last === 'object') extractObj(last, depth + 1, path + '[' + (obj.length-1) + ']');
+  1073→      }
+  1074→      return;
+  1075→    }
+  1076→
+  1077→    var keys = Object.keys(obj);
+  1078→    for (var i = 0; i < keys.length; i++) {
+  1079→      var key = keys[i];
+  1080→      var val = obj[key];
+  1081→
+  1082→      if (isResultField(key)) {
+  1083→        var n = tryNum(val);
+  1084→        if (n !== null) { sendToServer(n, key + '@' + path); return; }
+  1085→      }
+  1086→
+  1087→      if (typeof val === 'object' && val !== null) {
+  1088→        extractObj(val, depth + 1, path + '.' + key);
+  1089→      }
+  1090→    }
+  1091→  }
+  1092→
+  1093→  // Regex selectivo para texto de red
+  1094→  // FIX v5.0.1: Solo tomar el ULTIMO match (resultado mas reciente, no historial)
+  1095→  function extractFromText(text, source) {
+  1096→    if (!text || typeof text !== 'string' || text.length > 200000) return;
+  1097→    var patterns = [
+  1098→      /"resultNumber"\s*:\s*(\d{1,2})\b/gi,
+  1099→      /"winningNumber"\s*:\s*(\d{1,2})\b/gi,
+  1100→      /"winning_number"\s*:\s*(\d{1,2})\b/gi,
+  1101→      /"ball_number"\s*:\s*(\d{1,2})\b/gi,
+  1102→      /"pocket_number"\s*:\s*(\d{1,2})\b/gi,
+  1103→      /"roulette_number"\s*:\s*(\d{1,2})\b/gi,
+  1104→      /"finalNumber"\s*:\s*(\d{1,2})\b/gi,
+  1105→      /"game_number"\s*:\s*(\d{1,2})\b/gi,
+  1106→      /"displayNumber"\s*:\s*(\d{1,2})\b/gi,
+  1107→      /"winningPocket"\s*:\s*(\d{1,2})\b/gi
+  1108→    ];
+  1109→    var lastMatch = null;
+  1110→    for (var i = 0; i < patterns.length; i++) {
+  1111→      var m; patterns[i].lastIndex = 0;
+  1112→      while ((m = patterns[i].exec(text)) !== null) {
+  1113→        var n = parseInt(m[1], 10);
+  1114→        if (n >= 0 && n <= 36) lastMatch = n;
+  1115→      }
+  1116→    }
+  1117→    // Solo enviar el ULTIMO match encontrado (resultado mas reciente)
+  1118→    if (lastMatch !== null) sendToServer(lastMatch, 'regex-last@' + source);
+  1119→  }
+  1120→
+  1121→  // ══════════════════════════════════════
+  1122→  // HOOK WEBSOCKET (solo en iframes)
+  1123→  // ══════════════════════════════════════
+  1124→  (function() {
+  1125→    var OrigWS = window.WebSocket;
+  1126→    if (!OrigWS || OrigWS.__rwV42) return;
+  1127→    OrigWS.__rwV42 = true;
+  1128→
+  1129→    var ProxyWS = function(url, protocols) {
+  1130→      console.log('[RollerWin] WS en iframe:', (url || '').substring(0, 80));
+  1131→      var ws = protocols ? new OrigWS(url, protocols) : new OrigWS(url);
+  1132→
+  1133→      // v7.6: WS Reconnect Detection — trackea closes y opens
+  1134→      if (_wsWasClosed) {
+  1135→        _wsReconnectCount++;
+  1136→        console.log('[RollerWin] WS RECONNECT #' + _wsReconnectCount + ' detectado — activando Gap Recovery');
+  1137→        _wsWasClosed = false;
+  1138→        // Activar Gap Recovery inmediatamente para capturar el número perdido
+  1139→        setTimeout(function() {
+  1140→          startGapRecovery();
+  1141→        }, 1000); // Esperar 1s a que el WS envie estado actual
+  1142→      }
+  1143→
+  1144→      ws.addEventListener('message', function(e) {
+  1145→        try {
+  1146→          var data = e.data;
+  1147→          // v7.6: Marcar actividad (para iframe dead detection)
+  1148→          _iframeLastActivity = Date.now();
+  1149→          if (typeof data !== 'string') {
+  1150→            if (data instanceof ArrayBuffer) {
+  1151→              try { data = String.fromCharCode.apply(null, new Uint8Array(data)); } catch(er) { return; }
+  1152→            } else return;
+  1153→          }
+  1154→
+  1155→          // Socket.io: 42["event",{...}]
+  1156→          if (data.charAt(0) === '4' && (data.charAt(1) === '2' || data.charAt(1) === '3')) {
+  1157→            try {
+  1158→              var p = JSON.parse(data.substring(2));
+  1159→              if (Array.isArray(p) && p.length >= 2 && typeof p[1] === 'object') {
+  1160→                var evt = String(p[0] || '');
+  1161→                // v6.5 FIX: Procesar TODOS los eventos socket.io, no solo los que
+  1162→                // contienen 'result/complete/win/round/spin'. Evolution puede cambiar
+  1163→                // los nombres de eventos. extractObj solo extrae si encuentra campos
+  1164→                // de resultado (isResultField), y extractFromText busca patterns
+  1165→                // especificos de ruleta. No hay falsos positivos.
+  1166→                // FIX: Primero intentar con eventos conocidos (prioridad alta)
+  1167→                if (evt.indexOf('result') >= 0 || evt.indexOf('complete') >= 0 ||
+  1168→                    evt.indexOf('win') >= 0 ||
+  1169→                    evt.indexOf('round') >= 0 || evt.indexOf('spin') >= 0 ||
+  1170→                    evt.indexOf('game') >= 0 || evt.indexOf('end') >= 0 ||
+  1171→                    evt.indexOf('finish') >= 0 || evt.indexOf('update') >= 0 ||
+  1172→                    evt.indexOf('new') >= 0 || evt.indexOf('bet') >= 0) {
+  1173→                  extractObj(p[1], 0, 'sio.' + evt);
+  1174→                  extractFromText(data, 'sio.' + evt);
+  1175→                } else {
+  1176→                  // v6.5: Fallback — intentar regex en TODOS los demas eventos.
+  1177→                  // Solo extractFromText (no extractObj) para evitar falsos positivos.
+  1178→                  // Esto cubre cualquier evento que contenga "resultNumber", etc.
+  1179→                  extractFromText(data, 'sio-fallback.' + evt);
+  1180→                }
+  1181→              }
+  1182→            } catch(err) {}
+  1183→          }
+  1184→
+  1185→          // JSON
+  1186→          if (data.charAt(0) === '{' || data.charAt(0) === '[') {
+  1187→            try { extractObj(JSON.parse(data), 0, 'ws'); extractFromText(data, 'ws'); } catch(err) {}
+  1188→          }
+  1189→        } catch(err) {}
+  1190→      });
+  1191→
+  1192→      // v7.6: Trackear cuando el WS se cierra para detectar reconnects
+  1193→      ws.addEventListener('close', function(e) {
+  1194→        console.log('[RollerWin] WS CERRADO (code:' + e.code + ' reason:' + (e.reason || 'none') + ')');
+  1195→        _wsWasClosed = true;
+  1196→        _iframeDeadNotified = false; // Reset para permitir nueva notificación si se reconecta
+  1197→      });
+  1198→
+  1199→      return ws;
+  1200→    };
+  1201→
+  1202→    ProxyWS.prototype = OrigWS.prototype;
+  1203→    ProxyWS.CONNECTING = OrigWS.CONNECTING;
+  1204→    ProxyWS.OPEN = OrigWS.OPEN;
+  1205→    ProxyWS.CLOSING = OrigWS.CLOSING;
+  1206→    ProxyWS.CLOSED = OrigWS.CLOSED;
+  1207→    window.WebSocket = ProxyWS;
+  1208→  })();
+  1209→
+  1210→  // ══════════════════════════════════════
+  1211→  // HOOK FETCH (solo en iframes)
+  1212→  // ══════════════════════════════════════
+  1213→  (function() {
+  1214→    var origFetch = window.fetch;
+  1215→    if (!origFetch || origFetch.__rwV42) return;
+  1216→    origFetch.__rwV42 = true;
+  1217→
+  1218→    window.fetch = function(input, init) {
+  1219→      var url = '';
+  1220→      try {
+  1221→        url = typeof input === 'string' ? input :
+  1222→              (input instanceof Request) ? (input.url || '') :
+  1223→              (input && input.url) ? input.url : '';
+  1224→      } catch(e) {}
+  1225→
+  1226→      var promise = origFetch.apply(this, arguments);
+  1227→
+  1228→      var urlLow = url.toLowerCase();
+  1229→      // FIX v5.0.1: Excluir URLs de historial y estado — solo procesar resultados
+  1230→      if (urlLow.indexOf('result') >= 0 ||
+  1231→          urlLow.indexOf('roulette') >= 0 || urlLow.indexOf('evolution') >= 0 ||
+  1232→          urlLow.indexOf('round') >= 0 || urlLow.indexOf('wheel') >= 0) {
+  1233→        // EXCLUIR: URLs que contienen history o state (son datos historicos, no resultado actual)
+  1234→        if (urlLow.indexOf('history') >= 0 || urlLow.indexOf('state') >= 0 || urlLow.indexOf('stats') >= 0) {
+  1235→          return promise; // No procesar — es historial
+  1236→        }
+  1237→
+  1238→        promise.then(function(r) {
+  1239→          try {
+  1240→            r.clone().text().then(function(text) {
+  1241→              if (text) { try { extractObj(JSON.parse(text), 0, 'fetch'); } catch(e) {} extractFromText(text, 'fetch'); }
+  1242→            }).catch(function() {});
+  1243→          } catch(e) {}
+  1244→        }).catch(function() {});
+  1245→      }
+  1246→
+  1247→      return promise;
+  1248→    };
+  1249→  })();
+  1250→
+  1251→  // ══════════════════════════════════════
+  1252→  // HOOK XHR (solo en iframes)
+  1253→  // ══════════════════════════════════════
+  1254→  (function() {
+  1255→    var origOpen = XMLHttpRequest.prototype.open;
+  1256→    var origSend = XMLHttpRequest.prototype.send;
+  1257→    if (origSend.__rwV42) return;
+  1258→    origSend.__rwV42 = true;
+  1259→
+  1260→    XMLHttpRequest.prototype.open = function(m, u) { this._rwUrl = String(u || ''); return origOpen.apply(this, arguments); };
+  1261→    XMLHttpRequest.prototype.send = function() {
+  1262→      var self = this;
+  1263→      this.addEventListener('load', function() {
+  1264→        var u = (self._rwUrl || '').toLowerCase();
+  1265→        // FIX v5.0.1: Excluir historial y estado
+  1266→        if (u.indexOf('result') >= 0 ||
+  1267→            u.indexOf('roulette') >= 0 || u.indexOf('evolution') >= 0 ||
+  1268→            u.indexOf('round') >= 0 || u.indexOf('wheel') >= 0) {
+  1269→          if (u.indexOf('history') >= 0 || u.indexOf('state') >= 0 || u.indexOf('stats') >= 0) return;
+  1270→          try {
+  1271→            var t = self.responseText;
+  1272→            if (t) { try { extractObj(JSON.parse(t), 0, 'xhr'); } catch(e) {} extractFromText(t, 'xhr'); }
+  1273→          } catch(e) {}
+  1274→        }
+  1275→      });
+  1276→      return origSend.apply(this, arguments);
+  1277→    };
+  1278→  })();
+  1279→
+  1280→  // ══════════════════════════════════════════════════════
+  1281→  // DOM SCANNER v5.0 — ULTRA ESTRICTO
+  1282→  // ════════════════════════════════════════════════════════
+  1283→  // PROBLEMA V4.9: Los selectores de history/past/track/circle capturaban
+  1284→  // numeros VIEJOS del display de Evolution, no el resultado actual.
+  1285→  // SOLUCION: Solo buscar el resultado ACTUAL mostrado en pantalla,
+  1286→  // nunca historial. + buffer de ultimos 15 numeros para rechazar repetidos.
+  1287→  // ════════════════════════════════════════════════════════
+  1288→  (function() {
+  1289→    // Palabras clave que indican HISTORIAL — NUNCA capturar de estos elementos
+  1290→    var HISTORY_KEYWORDS = ['history','past','track','sequence','previous','older','last-result',
+  1291→      'lastresults','gamehistory','result-history','historyitem','resultshistory',
+  1292→      'bng','stats','statistics','roadmap','bigroad','beadroad','marker'];
+  1293→
+  1294→    // Palabras clave que indican el RESULTADO ACTUAL — SOLO capturar de estos
+  1295→    var CURRENT_KEYWORDS = ['winning-number','winningnumber','winning-pocket','winningpocket',
+  1296→      'result-display','resultdisplay','result-value','resultvalue','current-result',
+  1297→      'game-number-display','number-display','overlay-result','announced','lastnumber',
+  1298→      'round-result','roulette-result','live-result','detailed-result'];
+  1299→
+  1300→    function isHistoryElement(el) {
+  1301→      if (!el) return false;
+  1302→      var c = ((el.className || '') + ' ' + (el.id || '') + ' ' + (el.getAttribute('data-test') || '')).toLowerCase();
+  1303→      for (var i = 0; i < HISTORY_KEYWORDS.length; i++) {
+  1304→        if (c.indexOf(HISTORY_KEYWORDS[i]) >= 0) return true;
+  1305→      }
+  1306→      // Tambien excluir elementos dentro de un contenedor de historial
+  1307→      var parent = el.parentElement;
+  1308→      var depth = 0;
+  1309→      while (parent && depth < 5) {
+  1310→        var pc = ((parent.className || '') + ' ' + (parent.id || '')).toLowerCase();
+  1311→        for (var i = 0; i < HISTORY_KEYWORDS.length; i++) {
+  1312→          if (pc.indexOf(HISTORY_KEYWORDS[i]) >= 0) return true;
+  1313→        }
+  1314→        parent = parent.parentElement;
+  1315→        depth++;
+  1316→      }
+  1317→      return false;
+  1318→    }
+  1319→
+  1320→    function isCurrentElement(el) {
+  1321→      if (!el) return false;
+  1322→      var c = ((el.className || '') + ' ' + (el.id || '') + ' ' + (el.getAttribute('data-test') || '')).toLowerCase();
+  1323→      for (var i = 0; i < CURRENT_KEYWORDS.length; i++) {
+  1324→        if (c.indexOf(CURRENT_KEYWORDS[i]) >= 0) return true;
+  1325→      }
+  1326→      // data attributes especificos de resultado actual
+  1327→      if (el.hasAttribute('data-result-number') || el.hasAttribute('data-winning-number') ||
+  1328→          el.hasAttribute('data-game-result')) return true;
+  1329→      return false;
+  1330→    }
+  1331→
+  1332→    // Solo selectores que apuntan al RESULTADO ACTUAL, nunca historial
+  1333→    var STRICT_SELECTORS = [
+  1334→      '[class*="winning-number"]',
+  1335→      '[class*="winning-pocket"]',
+  1336→      '[class*="result-display"]',
+  1337→      '[class*="result-value"]',
+  1338→      '[class*="current-result"]',
+  1339→      '[class*="game-number-display"]',
+  1340→      '[class*="number-display"]',
+  1341→      '[data-result-number]',
+  1342→      '[data-winning-number]',
+  1343→      '[data-game-result]',
+  1344→      '[class*="overlay"] [class*="result"]',
+  1345→      '[class*="announced"]',
+  1346→      '[class*="round-result"]',
+  1347→      '[class*="roulette-result"]',
+  1348→      '[class*="live-result"]'
+  1349→    ];
+  1350→
+  1351→    // v6.4 FIX: Change-detect con limite de tiempo para DOM Scanner
+  1352→    // El DOM muestra el mismo numero hasta el proximo giro (~18s).
+  1353→    // Sin esto, el scan cada 8s re-enviaria el mismo numero.
+  1354→    // REGLA: Si el numero CAMBIO → enviar. Si es el MISMO numero pero lleva
+  1355→    // >15s visible → es un NUEVO giro → tambien enviar.
+  1356→    // Esto permite capturar repeticiones legitimas (ej: 15, 15 consecutivos)
+  1357→    // mientras bloquea re-envios del mismo giro.
+  1358→    var _lastDomNumber = -1;
+  1359→    var _lastDomNumberTime = 0;
+  1360→    var _DOM_REPEAT_LIMIT = 15000; // 15s — si el mismo numero lleva >15s, es nuevo giro
+  1361→
+  1362→    function scanDOM() {
+  1363→      for (var i = 0; i < STRICT_SELECTORS.length; i++) {
+  1364→        try {
+  1365→          var els = document.querySelectorAll(STRICT_SELECTORS[i]);
+  1366→          for (var j = 0; j < els.length; j++) {
+  1367→            // DOBLE FILTRO: debe ser un elemento de resultado actual Y no estar en historial
+  1368→            if (isHistoryElement(els[j])) continue;
+  1369→            if (!isCurrentElement(els[j]) && !els[j].hasAttribute('data-result-number') &&
+  1370→                !els[j].hasAttribute('data-winning-number')) continue;
+  1371→
+  1372→            var text = (els[j].textContent || '').trim();
+  1373→            var num = parseInt(text, 10);
+  1374→            if (!isNaN(num) && num >= 0 && num <= 36 && String(num) === text) {
+  1375→              var now = Date.now();
+  1376→              // Enviar si: numero CAMBIO, o mismo numero visible >15s (nuevo giro)
+  1377→              if (num === _lastDomNumber && now - _lastDomNumberTime < _DOM_REPEAT_LIMIT) return;
+  1378→              _lastDomNumber = num;
+  1379→              _lastDomNumberTime = now;
+  1380→              sendToServer(num, 'DOM-v6.4:' + STRICT_SELECTORS[i]);
+  1381→              return; // Solo capturar el primer match valido
+  1382→            }
+  1383→          }
+  1384→        } catch(e) {}
+  1385→      }
+  1386→    }
+  1387→
+  1388→    function setup() {
+  1389→      if (!document.body) return;
+  1390→      // v7.6: Escaneo inicial rapido (500ms en vez de 3s)
+  1391→      // Esto es critico post-recovery: el número del gap puede estar visible
+  1392→      // inmediatamente al cargar el iframe.
+  1393→      setTimeout(scanDOM, 500);
+  1394→      // Segundo escaneo a los 2s (por si el DOM tarda en renderizar)
+  1395→      setTimeout(scanDOM, 2000);
+  1396→
+  1397→      // v7.6: MutationObserver con debounce de 500ms (era 2s)
+  1398→      // 2s era muy lento: si un número aparece y cambia en <2s (common durante
+  1399→      // restart de mesa), se pierde. 500ms captura cambios rápidos.
+  1400→      var timer = null;
+  1401→      new MutationObserver(function() {
+  1402→        if (timer) return;
+  1403→        timer = setTimeout(function() { timer = null; scanDOM(); }, 500);
+  1404→      }).observe(document.body, { childList: true, subtree: true, characterData: true });
+  1405→
+  1406→      // Scan periodico cada 6s (era 8s)
+  1407→      setInterval(scanDOM, 6000);
+  1408→    }
+  1409→
+  1410→    if (document.readyState === 'loading') {
+  1411→      document.addEventListener('DOMContentLoaded', function() { setTimeout(setup, 100); });
+  1412→    } else {
+  1413→      setTimeout(setup, 100);
+  1414→    }
+  1415→  })();
+  1416→
+  1417→  // ══════════════════════════════════════
+  1418→  // HOOK postMessage (solo en iframes)
+  1419→  // ══════════════════════════════════════
+  1420→  (function() {
+  1421→    var orig = window.postMessage;
+  1422→    if (orig.__rwV42) return;
+  1423→    orig.__rwV42 = true;
+  1424→
+  1425→    window.postMessage = function(data, origin, transfer) {
+  1426→      try { if (typeof data === 'object' && data !== null) extractObj(data, 0, 'postMsg-out'); } catch(e) {}
+  1427→      return orig.call(window, data, origin, transfer);
+  1428→    };
+  1429→
+  1430→    window.addEventListener('message', function(event) {
+  1431→      try {
+  1432→        var data = event.data;
+  1433→        if (typeof data === 'object' && data !== null) extractObj(data, 0, 'postMsg-in');
+  1434→      } catch(e) {}
+  1435→    });
+  1436→  })();
+  1437→
+  1438→  // ══════════════════════════════════════
+  1439→  // HOOK EventSource (solo en iframes)
+  1440→  // ══════════════════════════════════════
+  1441→  (function() {
+  1442→    if (typeof window.EventSource === 'undefined') return;
+  1443→    var Orig = window.EventSource;
+  1444→    if (Orig.__rwV42) return;
+  1445→    Orig.__rwV42 = true;
+  1446→
+  1447→    var Proxy = function(url, opts) {
+  1448→      var es = opts ? new Orig(url, opts) : new Orig(url);
+  1449→      var add = es.addEventListener.bind(es);
+  1450→      ['result','game','update','roulette','number','outcome','round'].forEach(function(t) {
+  1451→        add(t, function(e) {
+  1452→          try {
+  1453→            if (typeof e.data === 'string') {
+  1454→              extractFromText(e.data, 'sse.' + t);
+  1455→              try { extractObj(JSON.parse(e.data), 0, 'sse.' + t); } catch(err) {}
+  1456→            }
+  1457→          } catch(err) {}
+  1458→        });
+  1459→      });
+  1460→      return es;
+  1461→    };
+  1462→
+  1463→    Proxy.prototype = Orig.prototype;
+  1464→    Proxy.CONNECTING = Orig.CONNECTING;
+  1465→    Proxy.OPEN = Orig.OPEN;
+  1466→    Proxy.CLOSED = Orig.CLOSED;
+  1467→    window.EventSource = Proxy;
+  1468→  })();
+  1469→
+  1470→  console.log('[RollerWin] v7.6 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup 9s + SEQ 10s + Per-Number + GapRecovery');
+  1471→})();
+  1472→

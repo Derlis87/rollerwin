@@ -1,0 +1,672 @@
+   801→   801→   801→  // ══════════════════════════════════════
+   802→   802→   802→  // ============ IFRAME (Evolution) ======
+   803→   803→   803→  // AQUI es donde se detectan los numeros
+   804→   804→   804→  // ══════════════════════════════════════
+   805→   805→   805→  console.log('[RollerWin] IFRAME detectado:', hostname, '— activando deteccion');
+   806→   806→   806→
+   807→   807→   807→  // v6.6 FIX: Detectar modal "SESIÓN FINALIZADA" dentro del iframe
+   808→   808→   808→  // El parent NO puede ver el DOM del iframe, asi que el iframe debe
+   809→   809→   809→  // detectar el modal y notificar al parent via postMessage
+   810→   810→   810→  var _iframeModalNotified = false;
+   811→   811→   811→  function detectIframeModal() {
+   812→   812→   812→    var allEls = document.querySelectorAll('div, p, span, h1, h2, h3, dialog, section, article, main, li, label, td, th');
+   813→   813→   813→    for (var i = 0; i < allEls.length; i++) {
+   814→   814→   814→      var txt = (allEls[i].textContent || '');
+   815→   815→   815→      var txtLow = txt.toLowerCase();
+   816→   816→   816→      // "SESIÓN FINALIZADA" / "session ended" / "session expired"
+   817→   817→   817→      if ((txtLow.indexOf('sesi') !== -1 && txtLow.indexOf('finalizada') !== -1) ||
+   818→   818→   818→          (txtLow.indexOf('sesión') !== -1 && txtLow.indexOf('finalizada') !== -1) ||
+   819→   819→   819→          (txtLow.indexOf('session') !== -1 && (txtLow.indexOf('ended') !== -1 || txtLow.indexOf('expired') !== -1))) {
+   820→   820→   820→        if (!_iframeModalNotified) {
+   821→   821→   821→          _iframeModalNotified = true;
+   822→   822→   822→          console.log('[RollerWin] IFRAME: SESION FINALIZADA detectada → notificando parent');
+   823→   823→   823→          try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-modal-detected' }, '*'); } catch(e) {}
+   824→   824→   824→        }
+   825→   825→   825→        // Intentar click OK dentro del iframe tambien
+   826→   826→   826→        var okBtns = allEls[i].closest('div, dialog') ? allEls[i].closest('div, dialog').querySelectorAll('button, a, [role="button"], div[onclick], span[onclick]') : [];
+   827→   827→   827→        for (var j = 0; j < okBtns.length; j++) {
+   828→   828→   828→          var bt = (okBtns[j].textContent || '').trim();
+   829→   829→   829→          if (bt === 'OK' || bt === 'Ok' || bt === 'ok' || bt === 'ACEPTAR' || bt === 'Aceptar') {
+   830→   830→   830→            console.log('[RollerWin] IFRAME: Click OK en modal sesion');
+   831→   831→   831→            okBtns[j].click();
+   832→   832→   832→          }
+   833→   833→   833→        }
+   834→   834→   834→        return true;
+   835→   835→   835→      }
+   836→   836→   836→    }
+   837→   837→   837→    return false;
+   838→   838→   838→  }
+   839→   839→   839→  setInterval(detectIframeModal, 500);
+   840→   840→   840→  try { new MutationObserver(function() { detectIframeModal(); }).observe(document.body, { childList: true, subtree: true }); } catch(e) {}
+   841→   841→   841→
+   842→   842→   842→  // v6.6 FIX: Detectar si el iframe pierde conexion (no hay eventos WS por >60s)
+   843→   843→   843→  var _iframeLastActivity = Date.now();
+   844→   844→   844→  var _iframeDeadNotified = false;
+   845→   845→   845→
+   846→   846→   846→  // Hook fetch/XHR dentro del iframe para detectar sesion expirada
+   847→   847→   847→  var _ifOrigFetch = window.fetch;
+   848→   848→   848→  if (_ifOrigFetch && !_ifOrigFetch._rwIframeSess) {
+   849→   849→   849→    _ifOrigFetch._rwIframeSess = true;
+   850→   850→   850→    window.fetch = function(input, init) {
+   851→   851→   851→      _iframeLastActivity = Date.now();
+   852→   852→   852→      var promise = _ifOrigFetch.apply(this, arguments);
+   853→   853→   853→      if (promise) {
+   854→   854→   854→        promise.then(function(r) {
+   855→   855→   855→          if (r.status === 401 || r.status === 403 || r.redirected) {
+   856→   856→   856→            var respUrl = (r.url || '').toLowerCase();
+   857→   857→   857→            if (r.status === 401 || r.status === 403 || respUrl.indexOf('login') !== -1) {
+   858→   858→   858→              console.log('[RollerWin] IFRAME: Fetch sesion expirada ' + r.status);
+   859→   859→   859→              try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-fetch-' + r.status }, '*'); } catch(e) {}
+   860→   860→   860→            }
+   861→   861→   861→          }
+   862→   862→   862→        }).catch(function() {});
+   863→   863→   863→      }
+   864→   864→   864→      return promise;
+   865→   865→   865→    };
+   866→   866→   866→  }
+   867→   867→   867→
+   868→   868→   868→  // v7.6 FIX: Notificar parent si el iframe esta muerto (sin actividad >45s, era 90s)
+   869→   869→   869→  // Con giros de 18s, 90s = 5 números perdidos. 45s = máximo 2-3 perdidos.
+   870→   870→   870→  setInterval(function() {
+   871→   871→   871→    if (!_iframeDeadNotified && Date.now() - _iframeLastActivity > 45000) {
+   872→   872→   872→      _iframeDeadNotified = true;
+   873→   873→   873→      console.log('[RollerWin] IFRAME: Sin actividad >45s → notificando parent + Gap Recovery');
+   874→   874→   874→      try { window.parent.postMessage({ source: 'rollerwin-session-expired', reason: 'iframe-dead-45s' }, '*'); } catch(e) {}
+   875→   875→   875→      // v7.6: También activar Gap Recovery localmente
+   876→   876→   876→      startGapRecovery();
+   877→   877→   877→    }
+   878→   878→   878→  }, 10000); // Check cada 10s (era 15s)
+   879→   879→   879→
+   880→   880→   880→  // v7.6 FIX: GAP RECOVERY SCANNER
+   881→   881→   881→  // Cuando hay un gap >22s sin capturas (mas de un giro de 18s), significa que
+   882→   882→   882→  // se perdió al menos un número. El Gap Recovery Scanner escanea el DOM de
+   883→   883→   883→  // forma agresiva cada 3s hasta capturar el número perdido.
+   884→   884→   884→  // También se activa cuando el WebSocket se reconecta.
+   885→   885→   885→  var _iframeLastCaptureTime = Date.now();
+   886→   886→   886→  var _gapRecoveryActive = false;
+   887→   887→   887→  var _gapRecoveryTimer = null;
+   888→   888→   888→  var _GAP_THRESHOLD = 22000; // 22s — mas de un giro (18s)
+   889→   889→   889→  var _GAP_SCAN_INTERVAL = 3000; // 3s entre escaneos de gap
+   890→   890→   890→
+   891→   891→   891→  // v7.6 FIX: WS Reconnect Detection
+   892→   892→   892→  // Trackea cuando un WebSocket se cierra y otro se abre.
+   893→   893→   893→  // Al reconectar, escanea el DOM inmediatamente para capturar el resultado perdido.
+   894→   894→   894→  var _wsWasClosed = false;
+   895→   895→   895→  var _wsReconnectCount = 0;
+   896→   896→   896→
+   897→   897→   897→  // v7.5 FIX: Dedup por SECUENCIA — previene re-envío post-recovery
+   898→   898→   898→  // La dedup por tiempo (9s) no basta cuando el iframe se recarga: _lastSentTimestamp
+   899→   899→   899→  // se resetea a 0, y el DOM Scanner re-lee el número viejo visible en la mesa.
+   900→   900→   900→  // Secuencia guarda los últimos 5 números enviados con timestamp.
+   901→   901→   901→  // v7.6: Ventana de 10s — los giros duran ~18s, así que 10s NUNCA
+   902→   902→   902→  // bloquea repeticiones legítimas (15,15 consecutivos = 18s > 10s → permitido).
+   903→   903→   903→  // Pero SI bloquea re-envíos post-recovery que ocurren en 1-5s.
+   904→   904→   904→  // Solo bloquea si el MISMO número está en la secuencia dentro de 10s.
+   905→   905→   905→  var _sentSequence = []; // Array de {number, timestamp}
+   906→   906→   906→  var _SEQUENCE_MAX = 5;
+   907→   907→   907→  var _SEQUENCE_WINDOW = 10000; // 10s — mucho MENOR que duración de giro (18s)
+   908→   908→   908→
+   909→   909→   909→  function _checkSequenceDup(n) {
+   910→   910→   910→    for (var i = 0; i < _sentSequence.length; i++) {
+   911→   911→   911→      if (_sentSequence[i].number === n) {
+   912→   912→   912→        if (Date.now() - _sentSequence[i].timestamp < _SEQUENCE_WINDOW) {
+   913→   913→   913→          return true; // Mismo número dentro de 10s → duplicado post-recovery
+   914→   914→   914→        }
+   915→   915→   915→      }
+   916→   916→   916→    }
+   917→   917→   917→    return false;
+   918→   918→   918→  }
+   919→   919→   919→
+   920→   920→   920→  function _addSequence(n) {
+   921→   921→   921→    _sentSequence.push({ number: n, timestamp: Date.now() });
+   922→   922→   922→    if (_sentSequence.length > _SEQUENCE_MAX) _sentSequence.shift();
+   923→   923→   923→    _iframeLastCaptureTime = Date.now(); // v7.6: Actualizar timestamp de captura
+   924→   924→   924→    // v7.6: Si habia un gap recovery activo, desactivarlo (se capturó un número)
+   925→   925→   925→    if (_gapRecoveryActive) {
+   926→   926→   926→      _gapRecoveryActive = false;
+   927→   927→   927→      console.log('[RollerWin] GAP RECOVERY: número capturado, desactivando scanner');
+   928→   928→   928→    }
+   929→   929→   929→  }
+   930→   930→   930→
+   931→   931→   931→  // v7.6: Función de Gap Recovery — escaneo agresivo del DOM
+   932→   932→   932→  // Busca el número visible en el DOM usando selectores más amplios.
+   933→   933→   933→  // Se usa cuando hay un gap >22s sin capturas o al reconectar WS.
+   934→   934→   934→  function _gapRecoveryScan() {
+   935→   935→   935→    var gapSelectors = [
+   936→   936→   936→      '[class*="winning-number"]',
+   937→   937→   937→      '[class*="winning-pocket"]',
+   938→   938→   938→      '[class*="result-display"]',
+   939→   939→   939→      '[class*="result-value"]',
+   940→   940→   940→      '[class*="current-result"]',
+   941→   941→   941→      '[class*="game-number-display"]',
+   942→   942→   942→      '[class*="number-display"]',
+   943→   943→   943→      '[data-result-number]',
+   944→   944→   944→      '[data-winning-number]',
+   945→   945→   945→      '[data-game-result]',
+   946→   946→   946→      '[class*="overlay"] [class*="result"]',
+   947→   947→   947→      '[class*="announced"]',
+   948→   948→   948→      '[class*="round-result"]',
+   949→   949→   949→      '[class*="roulette-result"]',
+   950→   950→   950→      '[class*="live-result"]',
+   951→   951→   951→      '[class*="last-number"]',
+   952→   952→   952→      '[class*="lastnumber"]',
+   953→   953→   953→      '[class*="game-result"]'
+   954→   954→   954→    ];
+   955→   955→   955→
+   956→   956→   956→    for (var i = 0; i < gapSelectors.length; i++) {
+   957→   957→   957→      try {
+   958→   958→   958→        var els = document.querySelectorAll(gapSelectors[i]);
+   959→   959→   959→        for (var j = 0; j < els.length; j++) {
+   960→   960→   960→          var text = (els[j].textContent || '').trim();
+   961→   961→   961→          var num = parseInt(text, 10);
+   962→   962→   962→          if (!isNaN(num) && num >= 0 && num <= 36 && String(num) === text) {
+   963→   963→   963→            console.log('[RollerWin] GAP RECOVERY: número ' + num + ' encontrado en DOM (' + gapSelectors[i] + ')');
+   964→   964→   964→            sendToServer(num, 'GAP-RECOVERY:' + gapSelectors[i]);
+   965→   965→   965→            return true;
+   966→   966→   966→          }
+   967→   967→   967→        }
+   968→   968→   968→      } catch(e) {}
+   969→   969→   969→    }
+   970→   970→   970→    return false;
+   971→   971→   971→  }
+   972→   972→   972→
+   973→   973→   973→  // v7.6: Iniciar Gap Recovery Scanner
+   974→   974→   974→  function startGapRecovery() {
+   975→   975→   975→    if (_gapRecoveryActive) return;
+   976→   976→   976→    _gapRecoveryActive = true;
+   977→   977→   977→    console.log('[RollerWin] GAP RECOVERY: activado (sin capturas >' + Math.round(_GAP_THRESHOLD/1000) + 's)');
+   978→   978→   978→    // Escanear inmediatamente
+   979→   979→   979→    _gapRecoveryScan();
+   980→   980→   980→    // Escanear cada 3s
+   981→   981→   981→    _gapRecoveryTimer = setInterval(function() {
+   982→   982→   982→      if (!_gapRecoveryActive) {
+   983→   983→   983→        clearInterval(_gapRecoveryTimer);
+   984→   984→   984→        return;
+   985→   985→   985→      }
+   986→   986→   986→      _gapRecoveryScan();
+   987→   987→   987→    }, _GAP_SCAN_INTERVAL);
+   988→   988→   988→  }
+   989→   989→   989→
+   990→   990→   990→  // v7.6: Checker periódico para activar Gap Recovery
+   991→   991→   991→  setInterval(function() {
+   992→   992→   992→    if (!_gapRecoveryActive && Date.now() - _iframeLastCaptureTime > _GAP_THRESHOLD) {
+   993→   993→   993→      startGapRecovery();
+   994→   994→   994→    }
+   995→   995→   995→  }, 5000); // Check cada 5s
+   996→   996→   996→
+   997→   997→   997→  // v6.4: Solicitar sincronización del último número al parent
+   998→   998→   998→  // Esto previene que cualquier hook re-envíe el último resultado
+   999→   999→   999→  // después de una recarga del iframe (popula _sentNumbers)
+  1000→  1000→  1000→  try {
+  1001→  1001→  1001→    var _syncHandler = function(e) {
+  1002→  1002→  1002→      try {
+  1003→  1003→  1003→        if (e.data && e.data.source === 'rollerwin-sync-reply' && typeof e.data.lastNumber === 'number') {
+  1004→  1004→  1004→          syncLastNumber(e.data.lastNumber);
+  1005→  1005→  1005→          // v7.4: Tambien poblar la secuencia para prevenir re-envío post-recarga
+  1006→  1006→  1006→          _addSequence(e.data.lastNumber);
+  1007→  1007→  1007→          window.removeEventListener('message', _syncHandler);
+  1008→  1008→  1008→        }
+  1009→  1009→  1009→      } catch(err) {}
+  1010→  1010→  1010→    };
+  1011→  1011→  1011→    window.parent.postMessage({ source: 'rollerwin-sync' }, '*');
+  1012→  1012→  1012→    window.addEventListener('message', _syncHandler);
+  1013→  1013→  1013→    // Timeout: si no hay respuesta en 2s, continuar sin sync
+  1014→  1014→  1014→    setTimeout(function() {
+  1015→  1015→  1015→      window.removeEventListener('message', _syncHandler);
+  1016→  1016→  1016→    }, 2000);
+  1017→  1017→  1017→  } catch(e) {}
+  1018→  1018→  1018→  // Re-solicitar sync cada 30s (por si el parent también recarga)
+  1019→  1019→  1019→  setInterval(function() {
+  1020→  1020→  1020→    try {
+  1021→  1021→  1021→      window.parent.postMessage({ source: 'rollerwin-sync' }, '*');
+  1022→  1022→  1022→    } catch(e) {}
+  1023→  1023→  1023→  }, 30000);
+  1024→  1024→  1024→
+  1025→  1025→  1025→  // Campos de resultado de ruleta (alta confianza)
+  1026→  1026→  1026→  var RESULT_FIELDS = [
+  1027→  1027→  1027→    'number', 'result', 'resultnumber', 'winningnumber', 'win_number',
+  1028→  1028→  1028→    'game_number', 'roulette_number', 'ball_number', 'pocket', 'pocket_number',
+  1029→  1029→  1029→    'winningpocket', 'pocketid', 'resultid', 'displaynumber',
+  1030→  1030→  1030→    'roundresult', 'gameoutcome', 'finalnumber', 'outcome',
+  1031→  1031→  1031→    'winningnumberdisplay', 'resultnumber', 'final_number', 'game_result',
+  1032→  1032→  1032→    'round_result', 'game_outcome', 'numberstr', 'numberstring'
+  1033→  1033→  1033→  ];
+  1034→  1034→  1034→
+  1035→  1035→  1035→  function isResultField(key) {
+  1036→  1036→  1036→    var k = key.replace(/[_\-\s]/g, '').toLowerCase();
+  1037→  1037→  1037→    for (var i = 0; i < RESULT_FIELDS.length; i++) {
+  1038→  1038→  1038→      if (k === RESULT_FIELDS[i].replace(/[_\-\s]/g, '')) return true;
+  1039→  1039→  1039→    }
+  1040→  1040→  1040→    return false;
+  1041→  1041→  1041→  }
+  1042→  1042→  1042→
+  1043→  1043→  1043→  function tryNum(val) {
+  1044→  1044→  1044→    if (typeof val === 'number' && val >= 0 && val <= 36 && val === Math.floor(val)) return val;
+  1045→  1045→  1045→    if (typeof val === 'string') {
+  1046→  1046→  1046→      var s = val.trim();
+  1047→  1047→  1047→      if ((s.length === 1 || s.length === 2) && s === String(parseInt(s, 10))) {
+  1048→  1048→  1048→        var n = parseInt(s, 10);
+  1049→  1049→  1049→        if (n >= 0 && n <= 36) return n;
+  1050→  1050→  1050→      }
+  1051→  1051→  1051→    }
+  1052→  1052→  1052→    return null;
+  1053→  1053→  1053→  }
+  1054→  1054→  1054→
+  1055→  1055→  1055→  function extractObj(obj, depth, path) {
+  1056→  1056→  1056→    if (!obj || typeof obj !== 'object' || depth > 4) return;
+  1057→  1057→  1057→
+  1058→  1058→  1058→    if (Array.isArray(obj)) {
+  1059→  1059→  1059→      // FIX v5.0.1: Solo procesar arrays que representen UN resultado (length 1)
+  1060→  1060→  1060→      // o tomar el ULTIMO elemento (mas reciente, no el mas viejo como antes).
+  1061→  1061→  1061→      // Ignorar arrays largos que son claramente historial (length > 5).
+  1062→  1062→  1062→      if (obj.length === 0) return;
+  1063→  1063→  1063→      if (obj.length > 5) return; // Historial = mas de 5 resultados, ignorar
+  1064→  1064→  1064→
+  1065→  1065→  1065→      var pathLow = path.toLowerCase();
+  1066→  1066→  1066→      if (pathLow.indexOf('result') >= 0 || pathLow.indexOf('winning') >= 0 ||
+  1067→  1067→  1067→          pathLow.indexOf('outcome') >= 0 || pathLow.indexOf('pocket') >= 0) {
+  1068→  1068→  1068→        // Tomar el ULTIMO elemento (resultado mas reciente)
+  1069→  1069→  1069→        var last = obj[obj.length - 1];
+  1070→  1070→  1070→        var n = tryNum(last);
+  1071→  1071→  1071→        if (n !== null) { sendToServer(n, 'array@' + path); return; }
+  1072→  1072→  1072→        if (typeof last === 'object') extractObj(last, depth + 1, path + '[' + (obj.length-1) + ']');
+  1073→  1073→  1073→      }
+  1074→  1074→  1074→      return;
+  1075→  1075→  1075→    }
+  1076→  1076→  1076→
+  1077→  1077→  1077→    var keys = Object.keys(obj);
+  1078→  1078→  1078→    for (var i = 0; i < keys.length; i++) {
+  1079→  1079→  1079→      var key = keys[i];
+  1080→  1080→  1080→      var val = obj[key];
+  1081→  1081→  1081→
+  1082→  1082→  1082→      if (isResultField(key)) {
+  1083→  1083→  1083→        var n = tryNum(val);
+  1084→  1084→  1084→        if (n !== null) { sendToServer(n, key + '@' + path); return; }
+  1085→  1085→  1085→      }
+  1086→  1086→  1086→
+  1087→  1087→  1087→      if (typeof val === 'object' && val !== null) {
+  1088→  1088→  1088→        extractObj(val, depth + 1, path + '.' + key);
+  1089→  1089→  1089→      }
+  1090→  1090→  1090→    }
+  1091→  1091→  1091→  }
+  1092→  1092→  1092→
+  1093→  1093→  1093→  // Regex selectivo para texto de red
+  1094→  1094→  1094→  // FIX v5.0.1: Solo tomar el ULTIMO match (resultado mas reciente, no historial)
+  1095→  1095→  1095→  function extractFromText(text, source) {
+  1096→  1096→  1096→    if (!text || typeof text !== 'string' || text.length > 200000) return;
+  1097→  1097→  1097→    var patterns = [
+  1098→  1098→  1098→      /"resultNumber"\s*:\s*(\d{1,2})\b/gi,
+  1099→  1099→  1099→      /"winningNumber"\s*:\s*(\d{1,2})\b/gi,
+  1100→  1100→  1100→      /"winning_number"\s*:\s*(\d{1,2})\b/gi,
+  1101→  1101→  1101→      /"ball_number"\s*:\s*(\d{1,2})\b/gi,
+  1102→  1102→  1102→      /"pocket_number"\s*:\s*(\d{1,2})\b/gi,
+  1103→  1103→  1103→      /"roulette_number"\s*:\s*(\d{1,2})\b/gi,
+  1104→  1104→  1104→      /"finalNumber"\s*:\s*(\d{1,2})\b/gi,
+  1105→  1105→  1105→      /"game_number"\s*:\s*(\d{1,2})\b/gi,
+  1106→  1106→  1106→      /"displayNumber"\s*:\s*(\d{1,2})\b/gi,
+  1107→  1107→  1107→      /"winningPocket"\s*:\s*(\d{1,2})\b/gi
+  1108→  1108→  1108→    ];
+  1109→  1109→  1109→    var lastMatch = null;
+  1110→  1110→  1110→    for (var i = 0; i < patterns.length; i++) {
+  1111→  1111→  1111→      var m; patterns[i].lastIndex = 0;
+  1112→  1112→  1112→      while ((m = patterns[i].exec(text)) !== null) {
+  1113→  1113→  1113→        var n = parseInt(m[1], 10);
+  1114→  1114→  1114→        if (n >= 0 && n <= 36) lastMatch = n;
+  1115→  1115→  1115→      }
+  1116→  1116→  1116→    }
+  1117→  1117→  1117→    // Solo enviar el ULTIMO match encontrado (resultado mas reciente)
+  1118→  1118→  1118→    if (lastMatch !== null) sendToServer(lastMatch, 'regex-last@' + source);
+  1119→  1119→  1119→  }
+  1120→  1120→  1120→
+  1121→  1121→  1121→  // ══════════════════════════════════════
+  1122→  1122→  1122→  // HOOK WEBSOCKET (solo en iframes)
+  1123→  1123→  1123→  // ══════════════════════════════════════
+  1124→  1124→  1124→  (function() {
+  1125→  1125→  1125→    var OrigWS = window.WebSocket;
+  1126→  1126→  1126→    if (!OrigWS || OrigWS.__rwV42) return;
+  1127→  1127→  1127→    OrigWS.__rwV42 = true;
+  1128→  1128→  1128→
+  1129→  1129→  1129→    var ProxyWS = function(url, protocols) {
+  1130→  1130→  1130→      console.log('[RollerWin] WS en iframe:', (url || '').substring(0, 80));
+  1131→  1131→  1131→      var ws = protocols ? new OrigWS(url, protocols) : new OrigWS(url);
+  1132→  1132→  1132→
+  1133→  1133→  1133→      // v7.6: WS Reconnect Detection — trackea closes y opens
+  1134→  1134→  1134→      if (_wsWasClosed) {
+  1135→  1135→  1135→        _wsReconnectCount++;
+  1136→  1136→  1136→        console.log('[RollerWin] WS RECONNECT #' + _wsReconnectCount + ' detectado — activando Gap Recovery');
+  1137→  1137→  1137→        _wsWasClosed = false;
+  1138→  1138→  1138→        // Activar Gap Recovery inmediatamente para capturar el número perdido
+  1139→  1139→  1139→        setTimeout(function() {
+  1140→  1140→  1140→          startGapRecovery();
+  1141→  1141→  1141→        }, 1000); // Esperar 1s a que el WS envie estado actual
+  1142→  1142→  1142→      }
+  1143→  1143→  1143→
+  1144→  1144→  1144→      ws.addEventListener('message', function(e) {
+  1145→  1145→  1145→        try {
+  1146→  1146→  1146→          var data = e.data;
+  1147→  1147→  1147→          // v7.6: Marcar actividad (para iframe dead detection)
+  1148→  1148→  1148→          _iframeLastActivity = Date.now();
+  1149→  1149→  1149→          if (typeof data !== 'string') {
+  1150→  1150→  1150→            if (data instanceof ArrayBuffer) {
+  1151→  1151→  1151→              try { data = String.fromCharCode.apply(null, new Uint8Array(data)); } catch(er) { return; }
+  1152→  1152→  1152→            } else return;
+  1153→  1153→  1153→          }
+  1154→  1154→  1154→
+  1155→  1155→  1155→          // Socket.io: 42["event",{...}]
+  1156→  1156→  1156→          if (data.charAt(0) === '4' && (data.charAt(1) === '2' || data.charAt(1) === '3')) {
+  1157→  1157→  1157→            try {
+  1158→  1158→  1158→              var p = JSON.parse(data.substring(2));
+  1159→  1159→  1159→              if (Array.isArray(p) && p.length >= 2 && typeof p[1] === 'object') {
+  1160→  1160→  1160→                var evt = String(p[0] || '');
+  1161→  1161→  1161→                // v6.5 FIX: Procesar TODOS los eventos socket.io, no solo los que
+  1162→  1162→  1162→                // contienen 'result/complete/win/round/spin'. Evolution puede cambiar
+  1163→  1163→  1163→                // los nombres de eventos. extractObj solo extrae si encuentra campos
+  1164→  1164→  1164→                // de resultado (isResultField), y extractFromText busca patterns
+  1165→  1165→  1165→                // especificos de ruleta. No hay falsos positivos.
+  1166→  1166→  1166→                // FIX: Primero intentar con eventos conocidos (prioridad alta)
+  1167→  1167→  1167→                if (evt.indexOf('result') >= 0 || evt.indexOf('complete') >= 0 ||
+  1168→  1168→  1168→                    evt.indexOf('win') >= 0 ||
+  1169→  1169→  1169→                    evt.indexOf('round') >= 0 || evt.indexOf('spin') >= 0 ||
+  1170→  1170→  1170→                    evt.indexOf('game') >= 0 || evt.indexOf('end') >= 0 ||
+  1171→  1171→  1171→                    evt.indexOf('finish') >= 0 || evt.indexOf('update') >= 0 ||
+  1172→  1172→  1172→                    evt.indexOf('new') >= 0 || evt.indexOf('bet') >= 0) {
+  1173→  1173→  1173→                  extractObj(p[1], 0, 'sio.' + evt);
+  1174→  1174→  1174→                  extractFromText(data, 'sio.' + evt);
+  1175→  1175→  1175→                } else {
+  1176→  1176→  1176→                  // v6.5: Fallback — intentar regex en TODOS los demas eventos.
+  1177→  1177→  1177→                  // Solo extractFromText (no extractObj) para evitar falsos positivos.
+  1178→  1178→  1178→                  // Esto cubre cualquier evento que contenga "resultNumber", etc.
+  1179→  1179→  1179→                  extractFromText(data, 'sio-fallback.' + evt);
+  1180→  1180→  1180→                }
+  1181→  1181→  1181→              }
+  1182→  1182→  1182→            } catch(err) {}
+  1183→  1183→  1183→          }
+  1184→  1184→  1184→
+  1185→  1185→  1185→          // JSON
+  1186→  1186→  1186→          if (data.charAt(0) === '{' || data.charAt(0) === '[') {
+  1187→  1187→  1187→            try { extractObj(JSON.parse(data), 0, 'ws'); extractFromText(data, 'ws'); } catch(err) {}
+  1188→  1188→  1188→          }
+  1189→  1189→  1189→        } catch(err) {}
+  1190→  1190→  1190→      });
+  1191→  1191→  1191→
+  1192→  1192→  1192→      // v7.6: Trackear cuando el WS se cierra para detectar reconnects
+  1193→  1193→  1193→      ws.addEventListener('close', function(e) {
+  1194→  1194→  1194→        console.log('[RollerWin] WS CERRADO (code:' + e.code + ' reason:' + (e.reason || 'none') + ')');
+  1195→  1195→  1195→        _wsWasClosed = true;
+  1196→  1196→  1196→        _iframeDeadNotified = false; // Reset para permitir nueva notificación si se reconecta
+  1197→  1197→  1197→      });
+  1198→  1198→  1198→
+  1199→  1199→  1199→      return ws;
+  1200→  1200→  1200→    };
+  1201→  1201→  1201→
+  1202→  1202→  1202→    ProxyWS.prototype = OrigWS.prototype;
+  1203→  1203→  1203→    ProxyWS.CONNECTING = OrigWS.CONNECTING;
+  1204→  1204→  1204→    ProxyWS.OPEN = OrigWS.OPEN;
+  1205→  1205→  1205→    ProxyWS.CLOSING = OrigWS.CLOSING;
+  1206→  1206→  1206→    ProxyWS.CLOSED = OrigWS.CLOSED;
+  1207→  1207→  1207→    window.WebSocket = ProxyWS;
+  1208→  1208→  1208→  })();
+  1209→  1209→  1209→
+  1210→  1210→  1210→  // ══════════════════════════════════════
+  1211→  1211→  1211→  // HOOK FETCH (solo en iframes)
+  1212→  1212→  1212→  // ══════════════════════════════════════
+  1213→  1213→  1213→  (function() {
+  1214→  1214→  1214→    var origFetch = window.fetch;
+  1215→  1215→  1215→    if (!origFetch || origFetch.__rwV42) return;
+  1216→  1216→  1216→    origFetch.__rwV42 = true;
+  1217→  1217→  1217→
+  1218→  1218→  1218→    window.fetch = function(input, init) {
+  1219→  1219→  1219→      var url = '';
+  1220→  1220→  1220→      try {
+  1221→  1221→  1221→        url = typeof input === 'string' ? input :
+  1222→  1222→  1222→              (input instanceof Request) ? (input.url || '') :
+  1223→  1223→  1223→              (input && input.url) ? input.url : '';
+  1224→  1224→  1224→      } catch(e) {}
+  1225→  1225→  1225→
+  1226→  1226→  1226→      var promise = origFetch.apply(this, arguments);
+  1227→  1227→  1227→
+  1228→  1228→  1228→      var urlLow = url.toLowerCase();
+  1229→  1229→  1229→      // FIX v5.0.1: Excluir URLs de historial y estado — solo procesar resultados
+  1230→  1230→  1230→      if (urlLow.indexOf('result') >= 0 ||
+  1231→  1231→  1231→          urlLow.indexOf('roulette') >= 0 || urlLow.indexOf('evolution') >= 0 ||
+  1232→  1232→  1232→          urlLow.indexOf('round') >= 0 || urlLow.indexOf('wheel') >= 0) {
+  1233→  1233→  1233→        // EXCLUIR: URLs que contienen history o state (son datos historicos, no resultado actual)
+  1234→  1234→  1234→        if (urlLow.indexOf('history') >= 0 || urlLow.indexOf('state') >= 0 || urlLow.indexOf('stats') >= 0) {
+  1235→  1235→  1235→          return promise; // No procesar — es historial
+  1236→  1236→  1236→        }
+  1237→  1237→  1237→
+  1238→  1238→  1238→        promise.then(function(r) {
+  1239→  1239→  1239→          try {
+  1240→  1240→  1240→            r.clone().text().then(function(text) {
+  1241→  1241→  1241→              if (text) { try { extractObj(JSON.parse(text), 0, 'fetch'); } catch(e) {} extractFromText(text, 'fetch'); }
+  1242→  1242→  1242→            }).catch(function() {});
+  1243→  1243→  1243→          } catch(e) {}
+  1244→  1244→  1244→        }).catch(function() {});
+  1245→  1245→  1245→      }
+  1246→  1246→  1246→
+  1247→  1247→  1247→      return promise;
+  1248→  1248→  1248→    };
+  1249→  1249→  1249→  })();
+  1250→  1250→  1250→
+  1251→  1251→  1251→  // ══════════════════════════════════════
+  1252→  1252→  1252→  // HOOK XHR (solo en iframes)
+  1253→  1253→  1253→  // ══════════════════════════════════════
+  1254→  1254→  1254→  (function() {
+  1255→  1255→  1255→    var origOpen = XMLHttpRequest.prototype.open;
+  1256→  1256→  1256→    var origSend = XMLHttpRequest.prototype.send;
+  1257→  1257→  1257→    if (origSend.__rwV42) return;
+  1258→  1258→  1258→    origSend.__rwV42 = true;
+  1259→  1259→  1259→
+  1260→  1260→  1260→    XMLHttpRequest.prototype.open = function(m, u) { this._rwUrl = String(u || ''); return origOpen.apply(this, arguments); };
+  1261→  1261→  1261→    XMLHttpRequest.prototype.send = function() {
+  1262→  1262→  1262→      var self = this;
+  1263→  1263→  1263→      this.addEventListener('load', function() {
+  1264→  1264→  1264→        var u = (self._rwUrl || '').toLowerCase();
+  1265→  1265→  1265→        // FIX v5.0.1: Excluir historial y estado
+  1266→  1266→  1266→        if (u.indexOf('result') >= 0 ||
+  1267→  1267→  1267→            u.indexOf('roulette') >= 0 || u.indexOf('evolution') >= 0 ||
+  1268→  1268→  1268→            u.indexOf('round') >= 0 || u.indexOf('wheel') >= 0) {
+  1269→  1269→  1269→          if (u.indexOf('history') >= 0 || u.indexOf('state') >= 0 || u.indexOf('stats') >= 0) return;
+  1270→  1270→  1270→          try {
+  1271→  1271→  1271→            var t = self.responseText;
+  1272→  1272→  1272→            if (t) { try { extractObj(JSON.parse(t), 0, 'xhr'); } catch(e) {} extractFromText(t, 'xhr'); }
+  1273→  1273→  1273→          } catch(e) {}
+  1274→  1274→  1274→        }
+  1275→  1275→  1275→      });
+  1276→  1276→  1276→      return origSend.apply(this, arguments);
+  1277→  1277→  1277→    };
+  1278→  1278→  1278→  })();
+  1279→  1279→  1279→
+  1280→  1280→  1280→  // ══════════════════════════════════════════════════════
+  1281→  1281→  1281→  // DOM SCANNER v5.0 — ULTRA ESTRICTO
+  1282→  1282→  1282→  // ════════════════════════════════════════════════════════
+  1283→  1283→  1283→  // PROBLEMA V4.9: Los selectores de history/past/track/circle capturaban
+  1284→  1284→  1284→  // numeros VIEJOS del display de Evolution, no el resultado actual.
+  1285→  1285→  1285→  // SOLUCION: Solo buscar el resultado ACTUAL mostrado en pantalla,
+  1286→  1286→  1286→  // nunca historial. + buffer de ultimos 15 numeros para rechazar repetidos.
+  1287→  1287→  1287→  // ════════════════════════════════════════════════════════
+  1288→  1288→  1288→  (function() {
+  1289→  1289→  1289→    // Palabras clave que indican HISTORIAL — NUNCA capturar de estos elementos
+  1290→  1290→  1290→    var HISTORY_KEYWORDS = ['history','past','track','sequence','previous','older','last-result',
+  1291→  1291→  1291→      'lastresults','gamehistory','result-history','historyitem','resultshistory',
+  1292→  1292→  1292→      'bng','stats','statistics','roadmap','bigroad','beadroad','marker'];
+  1293→  1293→  1293→
+  1294→  1294→  1294→    // Palabras clave que indican el RESULTADO ACTUAL — SOLO capturar de estos
+  1295→  1295→  1295→    var CURRENT_KEYWORDS = ['winning-number','winningnumber','winning-pocket','winningpocket',
+  1296→  1296→  1296→      'result-display','resultdisplay','result-value','resultvalue','current-result',
+  1297→  1297→  1297→      'game-number-display','number-display','overlay-result','announced','lastnumber',
+  1298→  1298→  1298→      'round-result','roulette-result','live-result','detailed-result'];
+  1299→  1299→  1299→
+  1300→  1300→  1300→    function isHistoryElement(el) {
+  1301→  1301→  1301→      if (!el) return false;
+  1302→  1302→  1302→      var c = ((el.className || '') + ' ' + (el.id || '') + ' ' + (el.getAttribute('data-test') || '')).toLowerCase();
+  1303→  1303→  1303→      for (var i = 0; i < HISTORY_KEYWORDS.length; i++) {
+  1304→  1304→  1304→        if (c.indexOf(HISTORY_KEYWORDS[i]) >= 0) return true;
+  1305→  1305→  1305→      }
+  1306→  1306→  1306→      // Tambien excluir elementos dentro de un contenedor de historial
+  1307→  1307→  1307→      var parent = el.parentElement;
+  1308→  1308→  1308→      var depth = 0;
+  1309→  1309→  1309→      while (parent && depth < 5) {
+  1310→  1310→  1310→        var pc = ((parent.className || '') + ' ' + (parent.id || '')).toLowerCase();
+  1311→  1311→  1311→        for (var i = 0; i < HISTORY_KEYWORDS.length; i++) {
+  1312→  1312→  1312→          if (pc.indexOf(HISTORY_KEYWORDS[i]) >= 0) return true;
+  1313→  1313→  1313→        }
+  1314→  1314→  1314→        parent = parent.parentElement;
+  1315→  1315→  1315→        depth++;
+  1316→  1316→  1316→      }
+  1317→  1317→  1317→      return false;
+  1318→  1318→  1318→    }
+  1319→  1319→  1319→
+  1320→  1320→  1320→    function isCurrentElement(el) {
+  1321→  1321→  1321→      if (!el) return false;
+  1322→  1322→  1322→      var c = ((el.className || '') + ' ' + (el.id || '') + ' ' + (el.getAttribute('data-test') || '')).toLowerCase();
+  1323→  1323→  1323→      for (var i = 0; i < CURRENT_KEYWORDS.length; i++) {
+  1324→  1324→  1324→        if (c.indexOf(CURRENT_KEYWORDS[i]) >= 0) return true;
+  1325→  1325→  1325→      }
+  1326→  1326→  1326→      // data attributes especificos de resultado actual
+  1327→  1327→  1327→      if (el.hasAttribute('data-result-number') || el.hasAttribute('data-winning-number') ||
+  1328→  1328→  1328→          el.hasAttribute('data-game-result')) return true;
+  1329→  1329→  1329→      return false;
+  1330→  1330→  1330→    }
+  1331→  1331→  1331→
+  1332→  1332→  1332→    // Solo selectores que apuntan al RESULTADO ACTUAL, nunca historial
+  1333→  1333→  1333→    var STRICT_SELECTORS = [
+  1334→  1334→  1334→      '[class*="winning-number"]',
+  1335→  1335→  1335→      '[class*="winning-pocket"]',
+  1336→  1336→  1336→      '[class*="result-display"]',
+  1337→  1337→  1337→      '[class*="result-value"]',
+  1338→  1338→  1338→      '[class*="current-result"]',
+  1339→  1339→  1339→      '[class*="game-number-display"]',
+  1340→  1340→  1340→      '[class*="number-display"]',
+  1341→  1341→  1341→      '[data-result-number]',
+  1342→  1342→  1342→      '[data-winning-number]',
+  1343→  1343→  1343→      '[data-game-result]',
+  1344→  1344→  1344→      '[class*="overlay"] [class*="result"]',
+  1345→  1345→  1345→      '[class*="announced"]',
+  1346→  1346→  1346→      '[class*="round-result"]',
+  1347→  1347→  1347→      '[class*="roulette-result"]',
+  1348→  1348→  1348→      '[class*="live-result"]'
+  1349→  1349→  1349→    ];
+  1350→  1350→  1350→
+  1351→  1351→  1351→    // v6.4 FIX: Change-detect con limite de tiempo para DOM Scanner
+  1352→  1352→  1352→    // El DOM muestra el mismo numero hasta el proximo giro (~18s).
+  1353→  1353→  1353→    // Sin esto, el scan cada 8s re-enviaria el mismo numero.
+  1354→  1354→  1354→    // REGLA: Si el numero CAMBIO → enviar. Si es el MISMO numero pero lleva
+  1355→  1355→  1355→    // >15s visible → es un NUEVO giro → tambien enviar.
+  1356→  1356→  1356→    // Esto permite capturar repeticiones legitimas (ej: 15, 15 consecutivos)
+  1357→  1357→  1357→    // mientras bloquea re-envios del mismo giro.
+  1358→  1358→  1358→    var _lastDomNumber = -1;
+  1359→  1359→  1359→    var _lastDomNumberTime = 0;
+  1360→  1360→  1360→    var _DOM_REPEAT_LIMIT = 15000; // 15s — si el mismo numero lleva >15s, es nuevo giro
+  1361→  1361→  1361→
+  1362→  1362→  1362→    function scanDOM() {
+  1363→  1363→  1363→      for (var i = 0; i < STRICT_SELECTORS.length; i++) {
+  1364→  1364→  1364→        try {
+  1365→  1365→  1365→          var els = document.querySelectorAll(STRICT_SELECTORS[i]);
+  1366→  1366→  1366→          for (var j = 0; j < els.length; j++) {
+  1367→  1367→  1367→            // DOBLE FILTRO: debe ser un elemento de resultado actual Y no estar en historial
+  1368→  1368→  1368→            if (isHistoryElement(els[j])) continue;
+  1369→  1369→  1369→            if (!isCurrentElement(els[j]) && !els[j].hasAttribute('data-result-number') &&
+  1370→  1370→  1370→                !els[j].hasAttribute('data-winning-number')) continue;
+  1371→  1371→  1371→
+  1372→  1372→  1372→            var text = (els[j].textContent || '').trim();
+  1373→  1373→  1373→            var num = parseInt(text, 10);
+  1374→  1374→  1374→            if (!isNaN(num) && num >= 0 && num <= 36 && String(num) === text) {
+  1375→  1375→  1375→              var now = Date.now();
+  1376→  1376→  1376→              // Enviar si: numero CAMBIO, o mismo numero visible >15s (nuevo giro)
+  1377→  1377→  1377→              if (num === _lastDomNumber && now - _lastDomNumberTime < _DOM_REPEAT_LIMIT) return;
+  1378→  1378→  1378→              _lastDomNumber = num;
+  1379→  1379→  1379→              _lastDomNumberTime = now;
+  1380→  1380→  1380→              sendToServer(num, 'DOM-v6.4:' + STRICT_SELECTORS[i]);
+  1381→  1381→  1381→              return; // Solo capturar el primer match valido
+  1382→  1382→  1382→            }
+  1383→  1383→  1383→          }
+  1384→  1384→  1384→        } catch(e) {}
+  1385→  1385→  1385→      }
+  1386→  1386→  1386→    }
+  1387→  1387→  1387→
+  1388→  1388→  1388→    function setup() {
+  1389→  1389→  1389→      if (!document.body) return;
+  1390→  1390→  1390→      // v7.6: Escaneo inicial rapido (500ms en vez de 3s)
+  1391→  1391→  1391→      // Esto es critico post-recovery: el número del gap puede estar visible
+  1392→  1392→  1392→      // inmediatamente al cargar el iframe.
+  1393→  1393→  1393→      setTimeout(scanDOM, 500);
+  1394→  1394→  1394→      // Segundo escaneo a los 2s (por si el DOM tarda en renderizar)
+  1395→  1395→  1395→      setTimeout(scanDOM, 2000);
+  1396→  1396→  1396→
+  1397→  1397→  1397→      // v7.6: MutationObserver con debounce de 500ms (era 2s)
+  1398→  1398→  1398→      // 2s era muy lento: si un número aparece y cambia en <2s (common durante
+  1399→  1399→  1399→      // restart de mesa), se pierde. 500ms captura cambios rápidos.
+  1400→  1400→  1400→      var timer = null;
+  1401→  1401→  1401→      new MutationObserver(function() {
+  1402→  1402→  1402→        if (timer) return;
+  1403→  1403→  1403→        timer = setTimeout(function() { timer = null; scanDOM(); }, 500);
+  1404→  1404→  1404→      }).observe(document.body, { childList: true, subtree: true, characterData: true });
+  1405→  1405→  1405→
+  1406→  1406→  1406→      // Scan periodico cada 6s (era 8s)
+  1407→  1407→  1407→      setInterval(scanDOM, 6000);
+  1408→  1408→  1408→    }
+  1409→  1409→  1409→
+  1410→  1410→  1410→    if (document.readyState === 'loading') {
+  1411→  1411→  1411→      document.addEventListener('DOMContentLoaded', function() { setTimeout(setup, 100); });
+  1412→  1412→  1412→    } else {
+  1413→  1413→  1413→      setTimeout(setup, 100);
+  1414→  1414→  1414→    }
+  1415→  1415→  1415→  })();
+  1416→  1416→  1416→
+  1417→  1417→  1417→  // ══════════════════════════════════════
+  1418→  1418→  1418→  // HOOK postMessage (solo en iframes)
+  1419→  1419→  1419→  // ══════════════════════════════════════
+  1420→  1420→  1420→  (function() {
+  1421→  1421→  1421→    var orig = window.postMessage;
+  1422→  1422→  1422→    if (orig.__rwV42) return;
+  1423→  1423→  1423→    orig.__rwV42 = true;
+  1424→  1424→  1424→
+  1425→  1425→  1425→    window.postMessage = function(data, origin, transfer) {
+  1426→  1426→  1426→      try { if (typeof data === 'object' && data !== null) extractObj(data, 0, 'postMsg-out'); } catch(e) {}
+  1427→  1427→  1427→      return orig.call(window, data, origin, transfer);
+  1428→  1428→  1428→    };
+  1429→  1429→  1429→
+  1430→  1430→  1430→    window.addEventListener('message', function(event) {
+  1431→  1431→  1431→      try {
+  1432→  1432→  1432→        var data = event.data;
+  1433→  1433→  1433→        if (typeof data === 'object' && data !== null) extractObj(data, 0, 'postMsg-in');
+  1434→  1434→  1434→      } catch(e) {}
+  1435→  1435→  1435→    });
+  1436→  1436→  1436→  })();
+  1437→  1437→  1437→
+  1438→  1438→  1438→  // ══════════════════════════════════════
+  1439→  1439→  1439→  // HOOK EventSource (solo en iframes)
+  1440→  1440→  1440→  // ══════════════════════════════════════
+  1441→  1441→  1441→  (function() {
+  1442→  1442→  1442→    if (typeof window.EventSource === 'undefined') return;
+  1443→  1443→  1443→    var Orig = window.EventSource;
+  1444→  1444→  1444→    if (Orig.__rwV42) return;
+  1445→  1445→  1445→    Orig.__rwV42 = true;
+  1446→  1446→  1446→
+  1447→  1447→  1447→    var Proxy = function(url, opts) {
+  1448→  1448→  1448→      var es = opts ? new Orig(url, opts) : new Orig(url);
+  1449→  1449→  1449→      var add = es.addEventListener.bind(es);
+  1450→  1450→  1450→      ['result','game','update','roulette','number','outcome','round'].forEach(function(t) {
+  1451→  1451→  1451→        add(t, function(e) {
+  1452→  1452→  1452→          try {
+  1453→  1453→  1453→            if (typeof e.data === 'string') {
+  1454→  1454→  1454→              extractFromText(e.data, 'sse.' + t);
+  1455→  1455→  1455→              try { extractObj(JSON.parse(e.data), 0, 'sse.' + t); } catch(err) {}
+  1456→  1456→  1456→            }
+  1457→  1457→  1457→          } catch(err) {}
+  1458→  1458→  1458→        });
+  1459→  1459→  1459→      });
+  1460→  1460→  1460→      return es;
+  1461→  1461→  1461→    };
+  1462→  1462→  1462→
+  1463→  1463→  1463→    Proxy.prototype = Orig.prototype;
+  1464→  1464→  1464→    Proxy.CONNECTING = Orig.CONNECTING;
+  1465→  1465→  1465→    Proxy.OPEN = Orig.OPEN;
+  1466→  1466→  1466→    Proxy.CLOSED = Orig.CLOSED;
+  1467→  1467→  1467→    window.EventSource = Proxy;
+  1468→  1468→  1468→  })();
+  1469→  1469→  1469→
+  1470→  1470→  1470→  console.log('[RollerWin] v7.6 MOTOR ACTIVO en IFRAME ' + hostname + ' | Dedup 9s + SEQ 10s + Per-Number + GapRecovery');
+  1471→  1471→  1471→})();
+  1472→  1472→  1472→
