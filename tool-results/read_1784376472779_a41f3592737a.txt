@@ -1,0 +1,1729 @@
+     1→/**
+     2→ * Smart Prediction Engine v6.0 — Ultra-Selective + Streak-Aware Filtering
+     3→ * 
+     4→ * HISTORIAL DE CORRECCIONES:
+     5→ *
+     6→ * v4.5 BUG: Activaba anti-racha a streak 3-4, empujando opuesto con 44-64 pts.
+     7→ * v4.6 FIX (parcial): Eliminados MEDIUM/STRONG, unificado streaks 2-4 en SOFT.
+     8→ * v4.7 FIX: Eliminado saturation en SOFT, cap Markov-3, corregido rango SOFT.
+     9→ * v4.8 FIX: Streak 5 movido a SOFT, ULTRA arranca a streak 6.
+    10→ *
+    11→ * v4.9 FIX: Streak-Context Dampening (push mismo color en streaks 3-5)
+    12→ *
+    13→ * v5.0 — Corrección de Picos Medios (Pico: 4-6):
+    14→ *   PROBLEMA v4.9: El dampening empujaba MISMO COLOR en rachas 3-5, pero los
+    15→ *   datos validados (3,920 spins reales) demuestran que en rachas 3-5,
+    16→ *   el OPUESTO es más probable:
+    17→ *     Streak 3: 51.8% rompen → OPUESTO tiene 1.8% edge
+    18→ *     Streak 4: 51.4% rompen → OPUESTO tiene 1.4% edge
+    19→ *     Streak 5: 54.9% rompen → OPUESTO tiene 4.9% edge (MEJOR EDGE!)
+    20→ *
+    21→ *   v4.9 empujaba mismo color en streaks 3-5, prediciendo la dirección
+    22→ *   MENOS probable. Esto causaba picos de 4-5 errores consecutivos.
+    23→ *
+    24→ *   v5.1 FIX — NORMAL Mode Overhaul:
+    25→ *   PROBLEMA: NORMAL mode (streak 0-1) tenía 49.6% accuracy en 2,215 predicciones.
+    26→ *   Era prácticamente random. El 50% de todas las jugadas caen en este modo.
+    27→ *   Causas: streakAnalysis empujaba opuesto a streak=1, saturation empujaba
+    28→ *   opuesto con 50+ pts, frequency raw count era ruido. Simulación en 4,551
+    29→ *   números mostró que 82% de picos >=7 empezaban con error en NORMAL.
+    30→ *
+    31→ *   v5.1 FIX — Markov-Primary NORMAL:
+    32→ *   1. ELIMINADO streakAnalysis, saturation, frequency raw count en NORMAL
+    33→ *   2. Recency Markov (últimos 300 spins) como señal primaria
+    34→ *   3. Markov-3 (últimos 300 spins) como señal secundaria
+    35→ *   4. Wheel alineado con Markov (solo aceptar si coinciden)
+    36→ *   5. Last-5 pattern: si los últimos 5 tienen patrón claro, seguirlo
+    37→ *
+    38→ * v5.2 — Corrección de Rachas Malas (Pico: hasta 15!)
+    39→ *   PROBLEMA v5.1: Simulación en 4,619 spins reales mostró:
+    40→ *     - Streak 3: 46.2% accuracy (SOFT nudge hacia opuesto falla)
+    41→ *     - Streak 5: 45.8% accuracy (EL PEOR — nudge opuesto contraproducente)
+    42→ *     - Pico máximo: 15 errores consecutivos
+    43→ *     - Patrones alternantes R-N-R-N no detectados
+    44→ *   CAUSA RAÍZ: Break-probabilities HARDCODEADAS (datos viejos de 3,920 spins)
+    45→ *   no reflejan las tendencias de la sesión actual. En el dataset nuevo,
+    46→ *   las rachas 3-5 TIENDEN A CONTINUAR, no a romper.
+    47→ *
+    48→ *   v5.2 FIX — 3 cambios principales:
+    49→ *   1. ADAPTIVE BREAK-PROBABILITY: Calcula probabilidades de ruptura en
+    50→ *      tiempo real desde los datos actuales (últimos 300 spins) en vez de
+    51→ *      valores hardcoded. Si la sesión actual muestra que las rachas
+    52→ *      continúan, el nudge va en esa dirección.
+    53→ *   2. ALTERNATING PATTERN DETECTOR (todos los modos): Detecta patrones
+    54→ *      R-N-R-N o N-R-N-R en los últimos 4-6 resultados. Si detecta
+    55→ *      alternación, predice el opuesto del último. Resuelve varios de
+    56→ *      los peores picos que mostraban alternación.
+    57→ *   3. SHORT-TERM REGENCY (modo NORMAL): Analiza los últimos 5 resultados
+    58→ *      y si están sesgados hacia un color (4+ de 5), da un pequeño boost.
+    59→ *      Detecta rachas emergentes antes de que SOFT mode active.
+    60→ *
+    61→ *   ⚠️ v5.2 BUG CRÍTICO: Las 3 funciones (computeAdaptiveBreakProb,
+    62→ *      detectAlternatingPattern, shouldRecoveryFlip) estaban DEFINIDAS
+    63→ *      pero NUNCA CONECTADAS al flujo de predicción. Simulación en 4,781
+    64→ *      spins mostró que v5.2 se comportaba idéntico a v5.1.
+    65→ *
+    66→ * v5.3 — Wiring Fix + Enhanced Recovery:
+    67→ *   PROBLEMA v5.2: 3 funciones definidas pero nunca llamadas:
+    68→ *     1. computeAdaptiveBreakProb → nunca usada en SOFT mode
+    69→ *     2. detectAlternatingPattern → nunca usada en ningún modo
+    70→ *     3. shouldRecoveryFlip → nunca usada en ningún modo
+    71→ *   RESULTADO: Pico máximo 15, ratio 8.12:1, streak 3 a 45.0%
+    72→ *
+    73→ *   v5.3 FIX:
+    74→ *   1. CONECTADO computeAdaptiveBreakProb en SOFT mode:
+    75→ *      - Streak 3-5: Usa adaptive break-prob de últimos 300 spins
+    76→ *      - Si la sesión muestra que rachas continúan, nudge va MISMO COLOR
+    77→ *      - Si la sesión muestra que rachas rompen, nudge va OPUESTO
+    78→ *      - Fallback a hardcoded SOLO si no hay suficientes datos
+    79→ *   2. CONECTADO detectAlternatingPattern en TODOS los modos:
+    80→ *      - Detecta R-N-R-N o N-R-N-R en últimos 4-6 resultados
+    81→ *      - Aplica override FUERTE (30 pts) cuando se detecta
+    82→ *      - Resuelve picos de 9-15 causados por alternación
+    83→ *   3. CONECTADO shouldRecoveryFlip como LAST RESORT:
+    84→ *      - Después de calcular predicción normal, verificar si recovery flip
+    85→ *      - Solo flip si engine repite MISMO color erróneo 2+ veces seguidas
+    86→ *      - Previene rachas de 5-15 errores del mismo color
+    87→ *   4. MEJORADO Recovery: Trigger a 2 errores consecutivos (no 3)
+    88→ *      - Más agresivo para cortar rachas malas temprano
+    89→ *      - Máximo 3 flips consecutivos para evitar flip loops
+    90→ *
+    91→ * LÓGICA v5.3:
+    92→ *   Streak 0-1:  NORMAL — Markov + Alternation + Recency + Recovery
+    93→ *   Streak 2-5:  SOFT   — Markov + Adaptive Break-Prob + Alternation + Recovery
+    94→ *   Streak 6+:   ULTRA  — Push MISMO COLOR + Alternation (reducido) + Recovery
+    95→ *
+    96→ * v5.4 — Selective Prediction + Aggressive Recovery:
+    97→ *   PROBLEMA v5.3: 49.6% accuracy = random. Martingala pierde -4,141 unidades.
+    98→ *   Rachas ≥4 son estadísticamente inevitables al ~50% accuracy.
+    99→ *   157 rachas fatales generan 336 busts × -7 = -2,352 unidades.
+   100→ *
+   101→ *   v5.4 FILOSOFÍA: No predecir TODOS los spins. Solo predecir cuando hay
+   102→ *   señal FUERTE. Los spins inciertos se SKIPEAN (no se apuesta).
+   103→ *   Esto sacrifica ~25-35% de predicciones pero las restantes tienen
+   104→ *   mayor accuracy porque solo se activa con señales claras.
+   105→ *
+   106→ *   v5.4 CAMBIOS:
+   107→ *   1. MICRO-MARKOV (50 spins): Señal primaria con ventana corta.
+   108→ *      Patrones recientes son más relevantes que histórico global.
+   109→ *      Markov-300 se mantiene como secundaria con peso reducido.
+   110→ *   2. SKIP THRESHOLD: Si la diferencia de scores entre colores es
+   111→ *      < SKIP_THRESHOLD, retorna shouldSkip=true. El simulador
+   112→ *      NO avanza martingala en skips. Esto rompe cadenas de pérdidas.
+   113→ *   3. RECOVERY A 2 ERRORES: Trigger recovery después de 2 errores
+   114→ *      consecutivos (no 3). Cada error que se previene del 3er spin
+   115→ *      ahorra las 7 unidades del bust martingala.
+   116→ *   4. ALTERNATION en TODOS los modos: Como tiebreaker cuando
+   117→ *      micro-Markov no tiene señal clara (scores < 55%).
+   118→ *   5. MAX_CONSECUTIVE_FLIPS = 3 (de 2): Permitir más recovery flips
+   119→ *      para manejar rachas más largas.
+   120→ *
+   121→ * LÓGICA v5.4:
+   122→ *   Streak 0-1:  NORMAL — Micro-Markov(50) + Markov(300) + Recency + Recovery + SKIP
+   123→ *   Streak 2-5:  SOFT   — Micro-Markov(50) + Markov(300) + Break-Prob + Recovery + SKIP
+   124→ *   Streak 6+:   ULTRA  — Push MISMO COLOR + Micro-Markov + Recovery + SKIP
+   125→ *
+   126→ * v6.0 — Ultra-Selective + Streak-Aware Filtering:
+   127→ *   PROBLEMA v5.5: Ratio 9.65:1 ✅ pero neto -758 unidades ❌.
+   128→ *   31 rachas fatales ≥4, max streak 9, 18 busts.
+   129→ *   SOFT mode (streak 2-5) tiene 49.6% accuracy = RANDOM.
+   130→ *   Streak 3: 36.5% accuracy, Streak 5: 30.0% — PEOR que random!
+   131→ *   El motor apuesta en situaciones sin edge, perdiendo unidades.
+   132→ *
+   133→ *   v6.0 FILOSOFÍA: NO apostar cuando NO hay edge demostrado.
+   134→ *   Calidad sobre cantidad. Mejor perder oportunidades que unidades.
+   135→ *
+   136→ *   v6.0 CAMBIOS:
+   137→ *   1. SOFT SKIP ZONE (streaks 3-5): Datos demuestran que NO hay edge.
+   138→ *      Streak 3: 36.5% accuracy, Streak 5: 30.0% — activamente dañino.
+   139→ *      → SKIP TOTAL en streaks 3-5. Solo apostar streak 2 (54.4%).
+   140→ *   2. ULTRA FILTER: Streak 6 tiene ~48.5% break = sin edge real.
+   141→ *      → SKIP streak 6. Solo apostar streak 7+ (edge demostrado 51-55%).
+   142→ *   3. NORMAL STRICT: Threshold 28→38. Solo apostar señales FUERTES.
+   143→ *      Requerir consensus agreement >= 2 para no skipear.
+   144→ *   4. ALTERNATION STRICT: Solo activar con strength >= 60 (de 40-50).
+   145→ *      Reduce falsos positivos de alternación.
+   146→ *   5. MIN BET SIGNAL: Señal mínima para apostar (score diff) más alta.
+   147→ *
+   148→ * LÓGICA v6.0:
+   149→ *   Streak 0-1:  NORMAL — Consensus(3w) + Markov + SKIP(strength<38 or consensus<2)
+   150→ *   Streak 2:    SOFT   — Markov + Consensus + SKIP(strength<30 or consensus<2)
+   151→ *   Streak 3-5:  SKIP   — No hay edge demostrado → SKIP TOTAL
+   152→ *   Streak 6:    SKIP   — Sin edge suficiente → SKIP
+   153→ *   Streak 7+:   ULTRA  — Push MISMO COLOR + Alternation (solo strength≥60)
+   154→ */
+   155→
+   156→// European roulette wheel layout (clockwise from 0)
+   157→const WHEEL_LAYOUT = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
+   158→
+   159→// Pre-computed wheel index lookup: number → position on wheel
+   160→const WHEEL_INDEX: Record<number, number> = {}
+   161→WHEEL_LAYOUT.forEach((n, i) => { WHEEL_INDEX[n] = i })
+   162→
+   163→const RED_SET = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36])
+   164→
+   165→export type BetType = 'color' | 'parity' | 'dozen' | 'column'
+   166→
+   167→export interface PredictionOption {
+   168→  value: string
+   169→  label: string
+   170→  confidence: number
+   171→}
+   172→
+   173→export interface SmartPrediction {
+   174→  type: BetType
+   175→  options: PredictionOption[]
+   176→  bestValue: string
+   177→  bestConfidence: number
+   178→  dealerSignal?: { targetNumber: number; reliability: number }
+   179→  shouldSkip?: boolean // v5.4: true when signal is too weak to bet
+   180→  signalStrength?: number // v5.4: raw score difference (debug)
+   181→}
+   182→
+   183→// ── Adaptive weight tracking ──
+   184→interface ModuleAccuracy {
+   185→  hits: number
+   186→  attempts: number
+   187→  weight: number
+   188→}
+   189→
+   190→type ModuleName = 'freq' | 'markov' | 'streak' | 'momentum' | 'gap' | 'sector' | 'chisq' | 'hotcold' | 'wheel' | 'saturation' | 'triplet' | 'markov3'
+   191→
+   192→const DEFAULT_WEIGHTS: Record<ModuleName, number> = {
+   193→  freq: 1.0,
+   194→  markov: 2.5,
+   195→  markov3: 1.8,
+   196→  streak: 2.0,
+   197→  momentum: 1.2,
+   198→  gap: 1.5,
+   199→  sector: 1.0,
+   200→  chisq: 1.2,
+   201→  hotcold: 1.2,
+   202→  wheel: 3.0,
+   203→  saturation: 2.5,
+   204→  triplet: 1.3,
+   205→}
+   206→
+   207→// Global adaptive state (persists across calls)
+   208→let accuracyTracker: Record<ModuleName, ModuleAccuracy> = {} as any
+   209→function initTracker() {
+   210→  for (const key of Object.keys(DEFAULT_WEIGHTS) as ModuleName[]) {
+   211→    if (!accuracyTracker[key]) {
+   212→      accuracyTracker[key] = { hits: 0, attempts: 0, weight: DEFAULT_WEIGHTS[key] }
+   213→    }
+   214→  }
+   215→}
+   216→initTracker()
+   217→
+   218→// ═══ v5.2 NEW: RECOVERY BAILOUT STATE ═══
+   219→// Tracks recent predictions and their correctness.
+   220→// When the engine makes 2+ consecutive wrong predictions of the SAME color,
+   221→// the next prediction is FLIPPED to break the bad streak.
+   222→interface RecoveryEntry {
+   223→  predicted: string
+   224→  correct: boolean
+   225→}
+   226→
+   227→const recoveryHistory: RecoveryEntry[] = []
+   228→const MAX_RECOVERY_HISTORY = 6
+   229→
+   230→/** Update recovery state with the result of the last prediction */
+   231→export function recordPredictionFeedback(correct: boolean, contributingModules: ModuleName[], predictedValue?: string) {
+   232→  // Update recovery history
+   233→  if (predictedValue) {
+   234→    recoveryHistory.push({ predicted: predictedValue, correct })
+   235→    if (recoveryHistory.length > MAX_RECOVERY_HISTORY) {
+   236→      recoveryHistory.shift()
+   237→    }
+   238→    // v5.3: Reset consecutive flip counter on correct prediction
+   239→    if (correct) {
+   240→      consecutiveFlips = 0
+   241→    }
+   242→  }
+   243→
+   244→  // Update module accuracy (original logic)
+   245→  for (const mod of contributingModules) {
+   246→    if (!accuracyTracker[mod]) {
+   247→      accuracyTracker[mod] = { hits: 0, attempts: 0, weight: DEFAULT_WEIGHTS[mod] }
+   248→    }
+   249→    accuracyTracker[mod].attempts++
+   250→    if (correct) accuracyTracker[mod].hits++
+   251→    const acc = accuracyTracker[mod]
+   252→    const hitRate = acc.attempts > 5 ? acc.hits / acc.attempts : 0.5
+   253→    const baseWeight = DEFAULT_WEIGHTS[mod]
+   254→    acc.weight = baseWeight * Math.max(0.3, Math.min(2.0, hitRate * 2))
+   255→  }
+   256→}
+   257→
+   258→/** Count consecutive recovery flips to avoid flip loops */
+   259→let consecutiveFlips = 0
+   260→const MAX_CONSECUTIVE_FLIPS = 3 // v5.4: increased from 2 to allow more recovery
+   261→
+   262→/** Get the opposite color for recovery flip */
+   263→function getOppositeColor(color: string): string {
+   264→  return color === 'red' ? 'black' : 'red'
+   265→}
+   266→
+   267→/** Count consecutive wrong predictions from recovery history */
+   268→function getConsecutiveWrong(): RecoveryEntry[] {
+   269→  const recentWrong: RecoveryEntry[] = []
+   270→  for (let i = recoveryHistory.length - 1; i >= 0; i--) {
+   271→    if (!recoveryHistory[i].correct) {
+   272→      recentWrong.unshift(recoveryHistory[i])
+   273→    } else {
+   274→      break
+   275→    }
+   276→  }
+   277→  return recentWrong
+   278→}
+   279→
+   280→/**
+   281→ * v5.5 RECOVERY — DISABLED (was actively harmful: 41.8% accuracy)
+   282→ * 
+   283→ * v5.3/v5.4 recovery had 3 strategies, but testing on 4,781 spins showed:
+   284→ *   - Total flips: 304
+   285→ *   - Correct: 127 (41.8%)
+   286→ *   - Incorrect: 170 (55.9%)
+   287→ * 
+   288→ * The recovery system was WORSE than random (50%), actively hurting accuracy.
+   289→ * Every flip that's wrong EXTENDS the loss streak instead of cutting it.
+   290→ * 
+   291→ * v5.5: Recovery is DISABLED. The engine relies on its core prediction
+   292→ * signals + skip mechanism + alternation detection instead.
+   293→ */
+   294→function getRecoveryPrediction(currentPrediction: string): string | null {
+   295→  // v5.5: DISABLED — recovery was counterproductive
+   296→  return null
+   297→}
+   298→
+   299→/** Reset recovery history (call when bet type changes or session resets) */
+   300→export function resetRecoveryHistory() {
+   301→  recoveryHistory.length = 0
+   302→}
+   303→
+   304→/** Full engine reset — clears ALL adaptive state for deterministic backtesting */
+   305→export function resetFullEngine() {
+   306→  recoveryHistory.length = 0
+   307→  consecutiveFlips = 0
+   308→  for (const key of Object.keys(DEFAULT_WEIGHTS) as ModuleName[]) {
+   309→    accuracyTracker[key] = { hits: 0, attempts: 0, weight: DEFAULT_WEIGHTS[key] }
+   310→  }
+   311→}
+   312→
+   313→function getWeight(mod: ModuleName): number {
+   314→  return accuracyTracker[mod]?.weight ?? DEFAULT_WEIGHTS[mod]
+   315→}
+   316→
+   317→function trackContribution(scores: Record<string, number>, baseScores: Record<string, number>, cats: string[], module: ModuleName): ModuleName[] {
+   318→  // Check if this module actually changed the ranking
+   319→  let influenced = false
+   320→  for (const c of cats) {
+   321→    if (Math.abs(scores[c] - baseScores[c]) > 0.01) { influenced = true; break }
+   322→  }
+   323→  return influenced ? [module] : []
+   324→}
+   325→
+   326→// ── Helper: get number color ──
+   327→function getNumberColor(n: number): 'red' | 'black' | 'green' {
+   328→  if (n === 0) return 'green'
+   329→  return RED_SET.has(n) ? 'red' : 'black'
+   330→}
+   331→
+   332→// ═══ v5.5: ADAPTIVE SKIP THRESHOLD ═══
+   333→// v5.4 used fixed 15.0. v5.5 uses context-aware thresholds:
+   334→//   NORMAL: Higher threshold (more selective) — this is where most predictions happen
+   335→//   SOFT:   Medium threshold — streak context provides some signal
+   336→//   ULTRA:  No skip — ULTRA's streak-based push is already a strong signal
+   337→const SKIP_THRESHOLD_NORMAL = 38.0  // v6.0: 28→38 — mucho más selectivo
+   338→const SKIP_THRESHOLD_SOFT = 30.0     // v6.0: 24→30 — solo streak 2
+   339→const SKIP_THRESHOLD = 15.0  // Fallback for parity/dozen
+   340→
+   341→/** v5.5: CONSENSUS MARKOV — multi-window Markov with agreement scoring
+   342→ *  Builds Markov-2 at multiple window sizes and checks if they AGREE.
+   343→ *  Returns { scores, consensus, agreement } where:
+   344→ *    consensus: the color that most windows agree on (or null if tied)
+   345→ *    agreement: 0-3, how many windows agree on the consensus color
+   346→ *    scores: combined scores from all windows
+   347→ *  The key insight: if 3 independent windows all say RED, that's a much
+   348→ *  stronger signal than 1 window saying RED with slightly higher confidence.
+   349→ */
+   350→function buildConsensusMarkov(
+   351→  data: number[],
+   352→  getCat: (n: number) => string | null
+   353→): { scores: Record<string, number>; consensus: string | null; agreement: number; windowResults: Array<{ window: number; color: string; pct: number }> } {
+   354→  const windows = [20, 50, 100]
+   355→  const windowResults: Array<{ window: number; color: string; pct: number }> = []
+   356→  const scores: Record<string, number> = { red: 0, black: 0 }
+   357→
+   358→  for (const windowSize of windows) {
+   359→    const slice = data.length > windowSize ? data.slice(-windowSize) : data
+   360→    const trans: Record<string, Record<string, Record<string, number>>> = {}
+   361→    for (let i = 2; i < slice.length; i++) {
+   362→      const c0 = getCat(slice[i - 2]); const c1 = getCat(slice[i - 1]); const c2 = getCat(slice[i])
+   363→      if (c0 && c1 && c2) {
+   364→        if (!trans[c0]) trans[c0] = {}; if (!trans[c0][c1]) trans[c0][c1] = {}
+   365→        trans[c0][c1][c2] = (trans[c0][c1][c2] || 0) + 1
+   366→      }
+   367→    }
+   368→    if (slice.length >= 2) {
+   369→      const c0 = getCat(slice[slice.length - 2]); const c1 = getCat(slice[slice.length - 1])
+   370→      if (c0 && c1 && trans[c0] && trans[c0][c1]) {
+   371→        const tr = trans[c0][c1]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+   372→        if (total > 0) {
+   373→          const redPct = ((tr['red'] || 0) / total) * 100
+   374→          const blackPct = ((tr['black'] || 0) / total) * 100
+   375→          const leader = redPct > blackPct ? 'red' : 'black'
+   376→          const leaderPct = Math.max(redPct, blackPct)
+   377→          windowResults.push({ window: windowSize, color: leader, pct: leaderPct })
+   378→          // Amplified scoring for consensus
+   379→          const amplification = 1.0 + (leaderPct - 50) * 0.02  // Higher pct = more amplification
+   380→          scores[leader] += leaderPct * amplification
+   381→        }
+   382→      }
+   383→    }
+   384→  }
+   385→
+   386→  // Count agreement
+   387→  const redVotes = windowResults.filter(r => r.color === 'red').length
+   388→  const blackVotes = windowResults.filter(r => r.color === 'black').length
+   389→  let consensus: string | null = null
+   390→  let agreement = 0
+   391→  if (redVotes > blackVotes) { consensus = 'red'; agreement = redVotes }
+   392→  else if (blackVotes > redVotes) { consensus = 'black'; agreement = blackVotes }
+   393→  // If tied, no consensus
+   394→
+   395→  return { scores, consensus, agreement, windowResults }
+   396→}
+   397→
+   398→/** v5.4: Build micro-Markov from short window with amplification */
+   399→function buildMicroMarkov(
+   400→  data: number[],
+   401→  getCat: (n: number) => string | null,
+   402→  windowSize: number
+   403→): Record<string, number> {
+   404→  const micro = data.length > windowSize ? data.slice(-windowSize) : data
+   405→  const trans: Record<string, Record<string, Record<string, number>>> = {}
+   406→  for (let i = 2; i < micro.length; i++) {
+   407→    const c0 = getCat(micro[i - 2]); const c1 = getCat(micro[i - 1]); const c2 = getCat(micro[i])
+   408→    if (c0 && c1 && c2) {
+   409→      if (!trans[c0]) trans[c0] = {}; if (!trans[c0][c1]) trans[c0][c1] = {}
+   410→      trans[c0][c1][c2] = (trans[c0][c1][c2] || 0) + 1
+   411→    }
+   412→  }
+   413→  const scores: Record<string, number> = { red: 0, black: 0 }
+   414→  if (micro.length >= 2) {
+   415→    const c0 = getCat(micro[micro.length - 2]); const c1 = getCat(micro[micro.length - 1])
+   416→    if (c0 && c1 && trans[c0] && trans[c0][c1]) {
+   417→      const tr = trans[c0][c1]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+   418→      if (total > 0) {
+   419→        for (const c of ['red', 'black'] as const) {
+   420→          const pct = ((tr[c] || 0) / total) * 100
+   421→          scores[c] = pct > 50 ? pct + (pct - 50) * 0.5 : pct - (50 - pct) * 0.5
+   422→        }
+   423→      }
+   424→    }
+   425→  }
+   426→  return scores
+   427→}
+   428→
+   429→/** v5.4: Check if should skip based on score difference */
+   430→function shouldSkipPrediction(scores: Record<string, number>, cats: string[]): { skip: boolean; strength: number } {
+   431→  const values = cats.map(c => scores[c])
+   432→  const maxScore = Math.max(...values)
+   433→  const minScore = Math.min(...values)
+   434→  const strength = maxScore - minScore
+   435→  return { skip: strength < SKIP_THRESHOLD, strength }
+   436→}
+   437→
+   438→// ── v5.2 NEW: Compute Adaptive Break Probability ──
+   439→// Counts how many times, in the recent history, a streak of `targetStreak` length
+   440→// broke vs continued. Returns null if not enough data (less than 6 observations).
+   441→function computeAdaptiveBreakProb(
+   442→  history: number[],
+   443→  targetStreak: number,
+   444→  getCat: (n: number) => string | null
+   445→): number | null {
+   446→  let breaks = 0
+   447→  let continues = 0
+   448→  let streakLen = 0
+   449→  let streakColor: string | null = null
+   450→
+   451→  for (let i = 0; i < history.length; i++) {
+   452→    const c = getCat(history[i])
+   453→    if (c === null) {
+   454→      // Green resets streak
+   455→      streakLen = 0
+   456→      streakColor = null
+   457→      continue
+   458→    }
+   459→
+   460→    if (streakColor === null) {
+   461→      streakColor = c
+   462→      streakLen = 1
+   463→    } else if (c === streakColor) {
+   464→      streakLen++
+   465→      // When we reach the target streak length, check the NEXT spin
+   466→      if (streakLen === targetStreak && i + 1 < history.length) {
+   467→        const next = getCat(history[i + 1])
+   468→        if (next !== null) {
+   469→          if (next === streakColor) continues++
+   470→          else breaks++
+   471→        }
+   472→      }
+   473→    } else {
+   474→      streakColor = c
+   475→      streakLen = 1
+   476→    }
+   477→  }
+   478→
+   479→  const total = breaks + continues
+   480→  if (total < 6) return null  // Not enough observations
+   481→  return (breaks / total) * 100
+   482→}
+   483→
+   484→// ── v5.2 NEW: Detect Alternating Pattern ──
+   485→// Checks if the last 4-6 non-green results form an alternating pattern (R-N-R-N...).
+   486→// Returns { detected: true, lastColor: 'red'|'black' } if alternating, or { detected: false }.
+   487→function detectAlternatingPattern(
+   488→  history: number[],
+   489→  getCat: (n: number) => string | null
+   490→): { detected: boolean; lastColor?: string; strength: number } {
+   491→  const recent = history.slice(-8).map(n => getCat(n)).filter((c): c is string => c !== null)
+   492→  if (recent.length < 3) return { detected: false, strength: 0 }
+   493→
+   494→  const last = recent[recent.length - 1]
+   495→
+   496→  // v5.5: Count transitions (color changes) and compute strength
+   497→  let transitions = 0
+   498→  for (let i = 1; i < recent.length; i++) {
+   499→    if (recent[i] !== recent[i - 1]) transitions++
+   500→  }
+   501→  const maxTransitions = recent.length - 1
+   502→  const transitionRate = maxTransitions > 0 ? transitions / maxTransitions : 0
+   503→  // Strength: 100% transitions = perfect alternation, 50% = random
+   504→  const strength = Math.round(Math.max(0, (transitionRate - 0.5) * 200))  // 0-100 scale
+   505→
+   506→  // v6.0: Only detect strict alternation (4+ results) — no false positives from 3-result noise
+   507→  // Removed the weak 3-result detection that was triggering on random noise
+   508→
+   509→  // Original: strict alternation in 4+ results
+   510→  if (recent.length >= 4) {
+   511→    let strictAlt = true
+   512→    for (let i = 1; i < recent.length; i++) {
+   513→      if (recent[i] === recent[i - 1]) { strictAlt = false; break }
+   514→    }
+   515→    if (strictAlt) return { detected: true, lastColor: last, strength: Math.max(strength, 70) }
+   516→  }
+   517→
+   518→  // v6.0: Partial alternation — 80%+ of last 6+ are alternating (stricter)
+   519→  if (recent.length >= 6 && strength >= 60) {
+   520→    return { detected: true, lastColor: last, strength }
+   521→  }
+   522→
+   523→  return { detected: false, strength }
+   524→}
+   525→
+   526→// ── Main prediction function ──
+   527→export function generateSmartPrediction(nums: number[], betType: BetType): SmartPrediction {
+   528→  if (nums.length < 5) return { type: betType, options: [], bestValue: '', bestConfidence: 50 }
+   529→
+   530→  const nonZero = nums.filter(n => n !== 0)
+   531→  const nzTotal = nonZero.length || 1
+   532→
+   533→  // ── MODULE: Multi-window frequency ──
+   534→  const multiWindowFreq = (getCat: (n: number) => string | null, cats: string[]) => {
+   535→    const windows = [5, 10, 20, 37]
+   536→    const scores: Record<string, number> = {}
+   537→    cats.forEach(c => scores[c] = 0)
+   538→    windows.forEach((w, wi) => {
+   539→      const slice = nonZero.slice(-w)
+   540→      const sTotal = slice.length || 1
+   541→      const expected = (1 / cats.length) * 100
+   542→      const weight = [1, 1.5, 2.5, 3][wi]
+   543→      const freqs: Record<string, number> = {}
+   544→      cats.forEach(c => freqs[c] = 0)
+   545→      slice.forEach(n => { const c = getCat(n); if (c) freqs[c]++ })
+   546→      cats.forEach(c => { scores[c] += freqs[c] * weight })
+   547→      cats.forEach(c => {
+   548→        const actual = (freqs[c] / sTotal) * 100
+   549→        const deviation = expected - actual
+   550→        scores[c] += deviation * weight * 0.6
+   551→      })
+   552→    })
+   553→    return scores
+   554→  }
+   555→
+   556→  // ── MODULE: Markov Order-2 ──
+   557→  const markovOrder2 = (getCat: (n: number) => string | null, cats: string[]) => {
+   558→    const trans: Record<string, Record<string, Record<string, number>>> = {}
+   559→    for (let i = 2; i < nonZero.length; i++) {
+   560→      const c0 = getCat(nonZero[i - 2]); const c1 = getCat(nonZero[i - 1]); const c2 = getCat(nonZero[i])
+   561→      if (c0 && c1 && c2) {
+   562→        if (!trans[c0]) trans[c0] = {}; if (!trans[c0][c1]) trans[c0][c1] = {}
+   563→        trans[c0][c1][c2] = (trans[c0][c1][c2] || 0) + 1
+   564→      }
+   565→    }
+   566→    const scores: Record<string, number> = {}
+   567→    cats.forEach(c => scores[c] = 0)
+   568→    if (nonZero.length >= 2) {
+   569→      const c0 = getCat(nonZero[nonZero.length - 2]); const c1 = getCat(nonZero[nonZero.length - 1])
+   570→      if (c0 && c1 && trans[c0] && trans[c0][c1]) {
+   571→        const tr = trans[c0][c1]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+   572→        if (total > 0) cats.forEach(c => { scores[c] = ((tr[c] || 0) / total) * 100 })
+   573→      }
+   574→    }
+   575→    if (Object.values(scores).every(v => v === 0) && nonZero.length >= 1) {
+   576→      const last = getCat(nonZero[nonZero.length - 1])
+   577→      const trans1: Record<string, Record<string, number>> = {}
+   578→      for (let i = 1; i < nonZero.length; i++) {
+   579→        const prev = getCat(nonZero[i - 1]); const curr = getCat(nonZero[i])
+   580→        if (prev && curr) { if (!trans1[prev]) trans1[prev] = {}; trans1[prev][curr] = (trans1[prev][curr] || 0) + 1 }
+   581→      }
+   582→      if (last && trans1[last]) {
+   583→        const tr = trans1[last]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+   584→        if (total > 0) cats.forEach(c => { scores[c] = ((tr[c] || 0) / total) * 100 })
+   585→      }
+   586→    }
+   587→    return scores
+   588→  }
+   589→
+   590→  // ── MODULE: Markov Order-3 (NEW in v4.0) ──
+   591→  const markovOrder3 = (getCat: (n: number) => string | null, cats: string[]) => {
+   592→    if (nonZero.length < 10) { const s: Record<string, number> = {}; cats.forEach(c => s[c] = 0); return s }
+   593→    const trans: Record<string, Record<string, Record<string, Record<string, number>>>> = {}
+   594→    for (let i = 3; i < nonZero.length; i++) {
+   595→      const c0 = getCat(nonZero[i - 3]); const c1 = getCat(nonZero[i - 2])
+   596→      const c2 = getCat(nonZero[i - 1]); const c3 = getCat(nonZero[i])
+   597→      if (c0 && c1 && c2 && c3) {
+   598→        if (!trans[c0]) trans[c0] = {}; if (!trans[c0][c1]) trans[c0][c1] = {}
+   599→        if (!trans[c0][c1][c2]) trans[c0][c1][c2] = {}
+   600→        trans[c0][c1][c2][c3] = (trans[c0][c1][c2][c3] || 0) + 1
+   601→      }
+   602→    }
+   603→    const scores: Record<string, number> = {}
+   604→    cats.forEach(c => scores[c] = 0)
+   605→    if (nonZero.length >= 3) {
+   606→      const c0 = getCat(nonZero[nonZero.length - 3]); const c1 = getCat(nonZero[nonZero.length - 2])
+   607→      const c2 = getCat(nonZero[nonZero.length - 1])
+   608→      if (c0 && c1 && c2 && trans[c0] && trans[c0][c1] && trans[c0][c1][c2]) {
+   609→        const tr = trans[c0][c1][c2]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+   610→        if (total >= 2) { // Only use if we have enough data (min 2 occurrences)
+   611→          cats.forEach(c => { scores[c] = ((tr[c] || 0) / total) * 100 })
+   612→        }
+   613→      }
+   614→    }
+   615→    return scores
+   616→  }
+   617→
+   618→  // ── MODULE: Streak analysis ──
+   619→  const streakAnalysis = (getCat: (n: number) => string | null, cats: string[], streaks: Record<string, number>) => {
+   620→    const scores: Record<string, number> = {}; cats.forEach(c => scores[c] = 0)
+   621→    let maxStreak = 0; let streakCat: string | null = null
+   622→    cats.forEach(c => { if ((streaks[c] || 0) > maxStreak) { maxStreak = streaks[c]; streakCat = c } })
+   623→    if (streakCat && maxStreak >= 3) {
+   624→      const reversionStrength = Math.min(35, maxStreak * 7) // Increased from 30/6 to 35/7
+   625→      cats.forEach(c => { if (c !== streakCat) scores[c] += reversionStrength / (cats.length - 1) })
+   626→      scores[streakCat!] -= reversionStrength
+   627→    } else if (streakCat && maxStreak === 2) {
+   628→      cats.forEach(c => { if (c !== streakCat) scores[c] += 6 }) // Increased from 5
+   629→      scores[streakCat!] -= 6
+   630→    }
+   631→    return scores
+   632→  }
+   633→
+   634→  // ── MODULE: Momentum ──
+   635→  const momentumAnalysis = (getCat: (n: number) => string | null, cats: string[]): string | null => {
+   636→    if (nonZero.length < 8) return null
+   637→    const last8 = nonZero.slice(-8).map(n => getCat(n)).filter(Boolean)
+   638→    if (last8.length < 6) return null
+   639→    const last6 = last8.slice(-6)
+   640→    const counts: Record<string, number> = {}
+   641→    last6.forEach(c => { if (c) counts[c] = (counts[c] || 0) + 1 })
+   642→    let dominant: string | null = null
+   643→    cats.forEach(c => { if ((counts[c] || 0) >= 4) dominant = c })
+   644→    if (dominant && last8[last8.length - 1] === dominant && last8[last8.length - 2] === dominant) return dominant
+   645→    return null
+   646→  }
+   647→
+   648→  // ── MODULE: Gap/absence ──
+   649→  const gapAnalysis = (getCat: (n: number) => string | null, cats: string[]) => {
+   650→    const scores: Record<string, number> = {}; cats.forEach(c => scores[c] = 0)
+   651→    const lastSeen: Record<string, number> = {}; cats.forEach(c => lastSeen[c] = -1)
+   652→    nonZero.forEach((n, i) => { const c = getCat(n); if (c) lastSeen[c] = i })
+   653→    const lastIdx = nonZero.length - 1
+   654→    cats.forEach(c => {
+   655→      const gap = lastIdx - (lastSeen[c] ?? -1)
+   656→      if (gap >= 4) scores[c] += Math.min(25, gap * 4) // Increased from 20/3
+   657→      else if (gap >= 2) scores[c] += gap * 2.5 // Increased from 2
+   658→    })
+   659→    return scores
+   660→  }
+   661→
+   662→  // ── MODULE: Sector/wheel pattern ──
+   663→  const sectorAnalysis = (getCat: (n: number) => string | null, cats: string[]) => {
+   664→    const scores: Record<string, number> = {}; cats.forEach(c => scores[c] = 0)
+   665→    if (nonZero.length >= 4) {
+   666→      const last4raw = nonZero.slice(-4).map(n => getCat(n))
+   667→      const last4 = last4raw.filter((c): c is string => c !== null)
+   668→      if (last4.length >= 4) {
+   669→        let alternating = true
+   670→        for (let i = 1; i < last4.length; i++) { if (last4[i] === last4[i - 1]) { alternating = false; break } }
+   671→        if (alternating) { const lastCat = last4[last4.length - 1]; cats.forEach(c => { if (c !== lastCat) scores[c] += 10 }) } // Increased from 8
+   672→      }
+   673→      if (last4.length >= 4 && last4[0] === last4[1] && last4[2] === last4[3] && last4[0] !== last4[2]) {
+   674→        scores[last4[2]] += 12 // Increased from 10
+   675→      }
+   676→    }
+   677→    return scores
+   678→  }
+   679→
+   680→  // ── MODULE: Chi-square ──
+   681→  const chiSquareTest = (counts: number[], expected: number) => {
+   682→    return counts.reduce((sum, c) => sum + Math.pow(c - expected, 2) / Math.max(1, expected), 0)
+   683→  }
+   684→
+   685→  // ── MODULE: Hot/Cold clustering ──
+   686→  const hotColdAnalysis = (getCat: (n: number) => string | null, cats: string[]) => {
+   687→    const scores: Record<string, number> = {}; cats.forEach(c => scores[c] = 0)
+   688→    const recent15 = nonZero.slice(-15)
+   689→    const counts: Record<string, number> = {}; cats.forEach(c => counts[c] = 0)
+   690→    recent15.forEach(n => { const c = getCat(n); if (c) counts[c]++ })
+   691→    cats.forEach(c => {
+   692→      const pct = (counts[c] / Math.max(1, recent15.length)) * 100
+   693→      if (pct < 20) scores[c] = (20 - pct) * 2.0 // Increased from 1.5
+   694→      else if (pct > 45) scores[c] = -(pct - 45) * 1.5 // Increased from 1.0
+   695→    })
+   696→    return scores
+   697→  }
+   698→
+   699→  // ── MODULE: Dealer Signature / Wheel Displacement (NEW in v4.0) ──
+   700→  const wheelDisplacement = (getCat: (n: number) => string | null, cats: string[]): { scores: Record<string, number>; signal: { targetNumber: number; reliability: number } | null } => {
+   701→    const scores: Record<string, number> = {}; cats.forEach(c => scores[c] = 0)
+   702→    let signal: { targetNumber: number; reliability: number } | null = null
+   703→
+   704→    if (nonZero.length < 6) return { scores, signal }
+   705→
+   706→    // Calculate wheel displacements between consecutive spins
+   707→    const displacements: number[] = []
+   708→    for (let i = 1; i < nonZero.length; i++) {
+   709→      const idxPrev = WHEEL_INDEX[nonZero[i - 1]]
+   710→      const idxCurr = WHEEL_INDEX[nonZero[i]]
+   711→      if (idxPrev !== undefined && idxCurr !== undefined) {
+   712→        let diff = idxCurr - idxPrev
+   713→        if (diff < 0) diff += 37
+   714→        displacements.push(diff)
+   715→      }
+   716→    }
+   717→
+   718→    if (displacements.length < 3) return { scores, signal }
+   719→
+   720→    // Use last 4 displacements (more data = better variance estimate)
+   721→    const lastN = Math.min(5, displacements.length)
+   722→    const recent = displacements.slice(-lastN)
+   723→    const avgDisp = recent.reduce((a, b) => a + b, 0) / recent.length
+   724→    const variance = recent.reduce((a, b) => a + Math.pow(b - avgDisp, 2), 0) / recent.length
+   725→
+   726→    // If variance is low → consistent dealer throw → project next position
+   727→    const threshold = 12 // More generous than PRO-ENGINE's 8
+   728→    if (variance < threshold) {
+   729→      const lastNum = nonZero[nonZero.length - 1]
+   730→      const lastIdx = WHEEL_INDEX[lastNum]
+   731→      if (lastIdx !== undefined) {
+   732→        const projectedIdx = Math.floor((lastIdx + avgDisp) % 37)
+   733→        const targetNumber = WHEEL_LAYOUT[projectedIdx]
+   734→        const reliability = Math.floor(Math.max(50, 100 - variance * 4))
+   735→
+   736→        signal = { targetNumber, reliability }
+   737→
+   738→        // Map the projected number to its category and boost that category
+   739→        const targetCat = getCat(targetNumber)
+   740→        if (targetCat) {
+   741→          const boost = Math.max(10, (threshold - variance) * 3)
+   742→          scores[targetCat] += boost
+   743→        }
+   744→      }
+   745→    }
+   746→    return { scores, signal }
+   747→  }
+   748→
+   749→  // ── MODULE: Color/Parity Saturation (NEW in v4.0, improved threshold) ──
+   750→  const saturationAnalysis = (getCat: (n: number) => string | null, cats: string[]): Record<string, number> => {
+   751→    const scores: Record<string, number> = {}; cats.forEach(c => scores[c] = 0)
+   752→    if (nonZero.length < 8 || cats.length !== 2) return scores
+   753→
+   754→    const last8 = nonZero.slice(-8).map(n => getCat(n)).filter(Boolean)
+   755→    cats.forEach(c => {
+   756→      const count = last8.filter(x => x === c).length
+   757→      // Trigger at 5+ out of 8 (more sensitive than PRO-ENGINE's 6 of 8)
+   758→      if (count >= 5) {
+   759→        const opposite = cats.find(x => x !== c)!
+   760→        scores[opposite] += (count - 4) * 10 // Stronger signal for higher saturation
+   761→        scores[c] -= (count - 4) * 8
+   762→      }
+   763→    })
+   764→    return scores
+   765→  }
+   766→
+   767→  // ── MODULE: Triplet Pattern Analysis (NEW in v4.0) ──
+   768→  // Detects repeating 3-result patterns (e.g., ABA, AAB, ABC)
+   769→  const tripletAnalysis = (getCat: (n: number) => string | null, cats: string[]): Record<string, number> => {
+   770→    const scores: Record<string, number> = {}; cats.forEach(c => scores[c] = 0)
+   771→    if (nonZero.length < 9) return scores
+   772→
+   773→    const TRIPLET_SEARCH_WINDOW = Math.min(9, nonZero.length)
+   774→    const cats_history = nonZero.slice(-TRIPLET_SEARCH_WINDOW).map(n => getCat(n)).filter(Boolean)
+   775→    if (cats_history.length < 6) return scores
+   776→
+   777→    // Look at last 3 results as current triplet
+   778→    const last3 = cats_history.slice(-3)
+   779→    const pattern = last3.join(',')
+   780→
+   781→    // Search for this pattern earlier in the full history
+   782→    for (let i = 0; i <= cats_history.length - 4; i++) {
+   783→      const tri = cats_history.slice(i, i + 3).join(',')
+   784→      if (tri === pattern) {
+   785→        // Found the same pattern before → see what came next
+   786→        const nextCat = cats_history[i + 3]
+   787→        if (nextCat) scores[nextCat] += 15 // Boost the historically-following category
+   788→      }
+   789→    }
+   790→    return scores
+   791→  }
+   792→
+   793→  // ── Normalize scores to confidence percentages ──
+   794→  // Uses a floor-based shift so that small score differences produce small confidence differences
+   795→  // and large score differences produce large confidence differences (proportional, not binary)
+   796→  const toConfidence = (scores: Record<string, number>, cats: string[], expectedPct: number) => {
+   797→    const minScore = Math.min(...Object.values(scores))
+   798→    const FLOOR = 5 // Base floor to prevent extreme amplification of tiny differences
+   799→    const shifted: Record<string, number> = {}
+   800→    cats.forEach(c => { shifted[c] = Math.max(1, scores[c] - minScore + FLOOR) })
+   801→    const totalShifted = cats.reduce((s, c) => s + shifted[c], 0) || 1
+   802→    const confs: Record<string, number> = {}
+   803→    cats.forEach(c => {
+   804→      const weight = shifted[c] / totalShifted
+   805→      const maxSpread = cats.length === 2 ? 30 : 22
+   806→      const conf = expectedPct + (weight * 2 - 1) * maxSpread
+   807→      confs[c] = Math.max(5, Math.min(92, conf))
+   808→    })
+   809→    const sum = Object.values(confs).reduce((s, v) => s + v, 0) || 1
+   810→    cats.forEach(c => { confs[c] = Math.round((confs[c] / sum) * 100) })
+   811→    return confs
+   812→  }
+   813→
+   814→  // ── Track contributing modules for adaptive feedback ──
+   815→  let contributingModules: ModuleName[] = []
+   816→
+   817→  // ═══════════════════════════════════════════
+   818→  // COLOR PREDICTION — v4.3 ANTI-STREAK CORRECTED
+   819→  // ═══════════════════════════════════════════
+   820→  if (betType === 'color') {
+   821→    const cats = ['red', 'black']
+   822→    const getCat = (n: number) => { const c = getNumberColor(n); return c === 'green' ? null : c }
+   823→
+   824→    // ── Calculate current streak ──
+   825→    const streaks: Record<string, number> = {}
+   826→    let maxR = 0, maxB = 0
+   827→    nonZero.forEach(n => {
+   828→      const c = getNumberColor(n)
+   829→      if (c === 'red') { maxR++; maxB = 0 } else if (c === 'black') { maxB++; maxR = 0 } else { maxR = 0; maxB = 0 }
+   830→    })
+   831→    streaks.red = maxR; streaks.black = maxB
+   832→    const currentStreak = Math.max(maxR, maxB)
+   833→    const streakColor = maxR > maxB ? 'red' : 'black'
+   834→    const oppositeColor = maxR > maxB ? 'black' : 'red'
+   835→
+   836→    // ── v4.5: Hardcoded Break Probabilities (VALIDATED against 3,920 real spins) ──
+   837→    // These are the probabilities from the ENGINE'S perspective:
+   838→    // "When the engine observes N consecutive same-color at the end of history,
+   839→    // what % of the time does the NEXT spin break the streak?"
+   840→    //
+   841→    // IMPORTANT: These differ from "what fraction of streaks of exactly N break?"
+   842→    // due to the inspection paradox — observing at a random point within a streak
+   843→    // gives different statistics than observing at the end.
+   844→    //
+   845→    // Validation results (engine perspective, 3,920 spins):
+   846→    // Streak 2: 1,920 cases, 49.7% break  → NEUTRAL (~50/50)
+   847→    // Streak 3:   964 cases, 51.8% break  → OPPOSITE (slight edge)
+   848→    // Streak 4:   465 cases, 51.4% break  → OPPOSITE (slight edge)
+   849→    // Streak 5:   226 cases, 54.9% break  → OPPOSITE (best edge!)
+   850→    // Streak 6:   103 cases, 48.5% break  → SAME COLOR (racha continúa)
+   851→    // Streak 7:    53 cases, 45.3% break  → SAME COLOR
+   852→    // Streak 8:    29 cases, 44.8% break  → SAME COLOR
+   853→    // Streak 9+:   16 cases, 37.5% break  → SAME COLOR (strong)
+   854→    const BREAK_PROBS: Record<number, number> = {
+   855→      2: 49.7,  // After 2 same → basically 50/50, no edge
+   856→      3: 51.8,  // After 3 same → slight edge for opposite
+   857→      4: 51.4,  // After 4 same → slight edge for opposite
+   858→      5: 54.9,  // After 5 same → BEST edge for opposite (54.9%!)
+   859→      6: 48.5,  // After 6 same → edge for CONTINUING (51.5%)
+   860→      7: 45.3,  // After 7 same → good edge for continuing
+   861→      8: 44.8,  // After 8 same → good edge for continuing
+   862→    }
+   863→
+   864→    const getBreakProb = (streakLen: number): number => {
+   865→      if (streakLen >= 9) return 37.5  // Streaks 9+: very likely to continue
+   866→      return BREAK_PROBS[streakLen] ?? 50.0
+   867→    }
+   868→
+   869→    const getStreakAnalysis = (): { breakPct: number; continuePct: number; avgStreakLen: number } => {
+   870→      const colorHistory = nonZero.map(n => getNumberColor(n)).filter((c): c is 'red' | 'black' => c !== 'green')
+   871→
+   872→      // Calculate average streak length
+   873→      const allStreaks: number[] = []
+   874→      let sLen = 1
+   875→      for (let i = 1; i < colorHistory.length; i++) {
+   876→        if (colorHistory[i] === colorHistory[i - 1]) {
+   877→          sLen++
+   878→        } else {
+   879→          allStreaks.push(sLen)
+   880→          sLen = 1
+   881→        }
+   882→      }
+   883→      allStreaks.push(sLen)
+   884→      const avgStreakLen = allStreaks.length > 0
+   885→        ? allStreaks.reduce((a, b) => a + b, 0) / allStreaks.length
+   886→        : 2.0
+   887→
+   888→      const bp = getBreakProb(currentStreak)
+   889→      return {
+   890→        breakPct: bp,
+   891→        continuePct: 100 - bp,
+   892→        avgStreakLen
+   893→      }
+   894→    }
+   895→
+   896→    // ── ANTI-STREAK v4.7: Hardcoded-probability response ──
+   897→    // Streak 2-4 (SOFT): SIN anti-racha. Markov decide libremente.
+   898→    // Streak 5 (ULTRA): 54.9% break → push opposite MODERADO (ventaja real 4.9%)
+   899→    // Streak 6 (ULTRA): 48.5% break → ~50/50 (sin ventaja real)
+   900→    // Streak 7+ (ULTRA): <48% break → push MISMO COLOR (racha continúa)
+   901→
+   902→    const postStreak = getStreakAnalysis()
+   903→
+   904→    const antiWheel = wheelDisplacement(getCat, cats)
+   905→
+   906→    // v4.7: Force calculation — FUERZA PROPORCIONAL a la ventaja real
+   907→    // v4.5 tenía fuerzas exageradas (85+ puntos) para una ventaja de 4.9%
+   908→    // v4.7: Fuerza moderada, proporcional al edge real
+   909→    const computeAntiStreakForce = (streakLen: number): { force: number; pushOpposite: boolean; pushSame: boolean } => {
+   910→      const bp = getBreakProb(streakLen)
+   911→      const pushOpposite = bp >= 50  // Data says more likely to break
+   912→      const pushSame = bp < 50       // Data says more likely to continue!
+   913→
+   914→      if (pushOpposite) {
+   915→        // v4.7: Fuerza proporcional al edge real, NO exagerada
+   916→        const edge = bp - 50  // e.g., 54.9 - 50 = 4.9
+   917→        const baseForce = 20  // v4.7: reducido de 30
+   918→        const edgeBonus = edge * 6  // v4.7: reducido de 8 (4.9*6=29.4 vs 4.9*8=39.2)
+   919→        const lengthBonus = Math.min(10, Math.max(0, streakLen - 3) * 5) // v4.7: reducido
+   920→        const force = baseForce + edgeBonus + lengthBonus
+   921→        // Streak 5: 20 + 29.4 + 10 = ~59 (vs 85+ en v4.5)
+   922→        return { force, pushOpposite: true, pushSame: false }
+   923→      } else {
+   924→        // Streak continúa: push MISMO COLOR
+   925→        const edge = 50 - bp  // e.g., 50 - 45.3 = 4.7
+   926→        const baseForce = 18  // v4.7: ligeramente reducido
+   927→        const edgeBonus = edge * 5
+   928→        const lengthBonus = Math.min(12, (streakLen - 5) * 4)
+   929→        const force = baseForce + edgeBonus + lengthBonus
+   930→        return { force, pushOpposite: false, pushSame: true }
+   931→      }
+   932→    }
+   933→
+   934→    // ── v4.3: Pre-streak multi-window frequency (contamination-free) ──
+   935→    // Use frequency data from BEFORE the streak started (not contaminated by streak)
+   936→    const preStreakFrequency = (streakLen: number): Record<string, number> => {
+   937→      const scores: Record<string, number> = { red: 0, black: 0 }
+   938→      const beforeStreak = nonZero.slice(0, -(streakLen))
+   939→      if (beforeStreak.length < 5) return scores
+   940→
+   941→      const windows = [10, 20]
+   942→      const weights = [1.5, 2.5]
+   943→      windows.forEach((w, wi) => {
+   944→        const slice = beforeStreak.slice(-w)
+   945→        const sTotal = slice.length || 1
+   946→        const expected = 50 // for 2 categories
+   947→        cats.forEach(c => {
+   948→          const freq = slice.filter(n => getCat(n) === c).length
+   949→          let score = freq * weights[wi]
+   950→          const actual = (freq / sTotal) * 100
+   951→          score += (expected - actual) * weights[wi] * 0.5
+   952→          scores[c] += score
+   953→        })
+   954→      })
+   955→      return scores
+   956→    }
+   957→
+   958→    // ═══ v6.0: STREAK-AWARE FILTERING ═══
+   959→    // Skip streaks where data shows NO predictive edge
+   960→    if (currentStreak >= 3 && currentStreak <= 6) {
+   961→      // v6.0: SKIP ZONE — streaks 3-6 have no demonstrated edge
+   962→      // Streak 3: 36.5% accuracy, Streak 4: 58.6% (but tiny sample=58), Streak 5: 30.0%
+   963→      // Streak 6: 53.8% but only 65 samples — marginal
+   964→      // → Skip ALL to protect capital
+   965→      return {
+   966→        type: 'color',
+   967→        options: cats.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: 50 })),
+   968→        bestValue: streakColor,  // Return the current streak color as "prediction" (irrelevant since skipped)
+   969→        bestConfidence: 50,
+   970→        dealerSignal: antiWheel.signal || undefined,
+   971→        shouldSkip: true,
+   972→        signalStrength: 0
+   973→      }
+   974→    }
+   975→
+   976→    if (currentStreak >= 7) {
+   977→      // ═══ v6.0 ULTRA (streak >= 7) — PUSH MISMO COLOR (ONLY streak 7+) ═══
+   978→      // v6.0: Removed streak 6 from ULTRA — data shows insufficient edge
+   979→      // Only streak 7+ has demonstrated continuation edge (51-55%)
+   980→      const bp = getBreakProb(currentStreak)
+   981→      const continuePct = 100 - bp
+   982→      const edge = continuePct - 50  // How much > 50% the continue probability is
+   983→      const baseForce = 22
+   984→      const edgeBonus = edge * 6
+   985→      const lengthBonus = Math.min(15, (currentStreak - 5) * 5)
+   986→      const force = baseForce + edgeBonus + lengthBonus
+   987→
+   988→      const scores: Record<string, number> = { red: 0, black: 0 }
+   989→      contributingModules = ['streak']
+   990→
+   991→      // v4.8: SIEMPRE push MISMO COLOR en ULTRA (streak 6+)
+   992→      scores[streakColor] += force
+   993→      scores[oppositeColor] -= force * 0.25
+   994→
+   995→      // Wheel signal — only accept if it aligns with our direction, or very strong
+   996→      if (antiWheel.signal && antiWheel.signal.targetNumber) {
+   997→        const wheelCat = getCat(antiWheel.signal.targetNumber)
+   998→        if (wheelCat && antiWheel.signal.reliability > 60) {
+   999→          // v4.8: ULTRA always pushes SAME COLOR — only boost if wheel agrees
+  1000→          if (wheelCat === streakColor) {
+  1001→            const wheelBonus = Math.min(20, antiWheel.signal.reliability * 0.3)
+  1002→            scores[wheelCat] += wheelBonus
+  1003→            contributingModules.push('wheel')
+  1004→          }
+  1005→          // If wheel points against our data-driven direction, ignore unless very strong
+  1006→          else if (antiWheel.signal.reliability > 75) {
+  1007→            const wheelBonus = Math.min(10, (antiWheel.signal.reliability - 60) * 0.5)
+  1008→            scores[wheelCat] += wheelBonus
+  1009→          }
+  1010→        }
+  1011→      }
+  1012→
+  1013→      // Pre-streak frequency — very low weight, only as tiebreaker
+  1014→      const preFreq = preStreakFrequency(currentStreak)
+  1015→      if (Math.abs(preFreq.red) + Math.abs(preFreq.black) > 0) {
+  1016→        cats.forEach(c => { scores[c] += preFreq[c] * 0.3 })  // v4.5: minimal weight
+  1017→        contributingModules.push('freq')
+  1018→      }
+  1019→
+  1020→      // ═══ v5.5: ALTERNATING PATTERN DETECTOR (ULTRA mode — strength-aware) ═══
+  1021→      // In ULTRA mode, alternation detection helps break the worst peaks
+  1022→      // but with reduced weight since ULTRA's primary signal is push same color.
+  1023→      const altUltra = detectAlternatingPattern(nonZero, getCat)
+  1024→      if (altUltra.detected && altUltra.lastColor) {
+  1025→        const altOpposite = getOppositeColor(altUltra.lastColor)
+  1026→        // v5.5: Weight proportional to alternation strength
+  1027→        const altWeight = Math.max(15, Math.round(altUltra.strength * 0.35))
+  1028→        scores[altOpposite] += altWeight
+  1029→        scores[altUltra.lastColor!] -= altWeight * 0.5
+  1030→      }
+  1031→
+  1032→      const confs = toConfidence(scores, cats, 48.6)
+  1033→      const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
+  1034→      let bestValue = sorted[0]
+  1035→
+  1036→      // ═══ v5.3: PATTERN-AWARE RECOVERY (ULTRA mode — Last Resort) ═══
+  1037→      const recoveryUltra = getRecoveryPrediction(bestValue)
+  1038→      if (recoveryUltra) {
+  1039→        bestValue = recoveryUltra
+  1040→        consecutiveFlips++
+  1041→      } else if (recoveryHistory.length > 0 && recoveryHistory[recoveryHistory.length - 1].correct) {
+  1042→        consecutiveFlips = 0
+  1043→      }
+  1044→
+  1045→      return {
+  1046→        type: 'color',
+  1047→        options: sorted.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: Math.round(confs[c]) })),
+  1048→        bestValue,
+  1049→        bestConfidence: Math.round(confs[bestValue]),
+  1050→        dealerSignal: antiWheel.signal || undefined
+  1051→      }
+  1052→    }
+  1053→
+  1054→    if (currentStreak === 2) {
+  1055→      // ═══ v6.0 SOFT (streak 2 ONLY) — Markov + Consensus + Strict Skip ═══
+  1056→      // v6.0: Streaks 3-5 moved to SKIP ZONE (no edge demonstrated).
+  1057→      // Only streak 2 retains SOFT status — data shows 54.4% accuracy.
+  1058→
+  1059→      // Recency-Weighted Markov
+  1060→      const MARKOV_WINDOW_SOFT = 300
+  1061→      const recentSlice = nonZero.length > MARKOV_WINDOW_SOFT ? nonZero.slice(-MARKOV_WINDOW_SOFT) : nonZero
+  1062→
+  1063→      // Markov-2 (recency-weighted)
+  1064→      const markov = (() => {
+  1065→        const trans: Record<string, Record<string, Record<string, number>>> = {}
+  1066→        for (let i = 2; i < recentSlice.length; i++) {
+  1067→          const c0 = getCat(recentSlice[i - 2]); const c1 = getCat(recentSlice[i - 1]); const c2 = getCat(recentSlice[i])
+  1068→          if (c0 && c1 && c2) {
+  1069→            if (!trans[c0]) trans[c0] = {}; if (!trans[c0][c1]) trans[c0][c1] = {}
+  1070→            trans[c0][c1][c2] = (trans[c0][c1][c2] || 0) + 1
+  1071→          }
+  1072→        }
+  1073→        const scores: Record<string, number> = { red: 0, black: 0 }
+  1074→        if (recentSlice.length >= 2) {
+  1075→          const c0 = getCat(recentSlice[recentSlice.length - 2]); const c1 = getCat(recentSlice[recentSlice.length - 1])
+  1076→          if (c0 && c1 && trans[c0] && trans[c0][c1]) {
+  1077→            const tr = trans[c0][c1]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+  1078→            if (total > 0) cats.forEach(c => { scores[c] = ((tr[c] || 0) / total) * 100 })
+  1079→          }
+  1080→        }
+  1081→        if (Object.values(scores).every(v => v === 0) && recentSlice.length >= 1) {
+  1082→          const last = getCat(recentSlice[recentSlice.length - 1])
+  1083→          const trans1: Record<string, Record<string, number>> = {}
+  1084→          for (let i = 1; i < recentSlice.length; i++) {
+  1085→            const prev = getCat(recentSlice[i - 1]); const curr = getCat(recentSlice[i])
+  1086→            if (prev && curr) { if (!trans1[prev]) trans1[prev] = {}; trans1[prev][curr] = (trans1[prev][curr] || 0) + 1 }
+  1087→          }
+  1088→          if (last && trans1[last]) {
+  1089→            const tr = trans1[last]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+  1090→            if (total > 0) cats.forEach(c => { scores[c] = ((tr[c] || 0) / total) * 100 })
+  1091→          }
+  1092→        }
+  1093→        return scores
+  1094→      })()
+  1095→
+  1096→      // Markov-3 (recency-weighted)
+  1097→      const markov3 = (() => {
+  1098→        if (recentSlice.length < 10) return { red: 0, black: 0 } as Record<string, number>
+  1099→        const trans: Record<string, Record<string, Record<string, Record<string, number>>>> = {}
+  1100→        for (let i = 3; i < recentSlice.length; i++) {
+  1101→          const c0 = getCat(recentSlice[i - 3]); const c1 = getCat(recentSlice[i - 2])
+  1102→          const c2 = getCat(recentSlice[i - 1]); const c3 = getCat(recentSlice[i])
+  1103→          if (c0 && c1 && c2 && c3) {
+  1104→            if (!trans[c0]) trans[c0] = {}; if (!trans[c0][c1]) trans[c0][c1] = {}
+  1105→            if (!trans[c0][c1][c2]) trans[c0][c1][c2] = {}
+  1106→            trans[c0][c1][c2][c3] = (trans[c0][c1][c2][c3] || 0) + 1
+  1107→          }
+  1108→        }
+  1109→        const scores: Record<string, number> = { red: 0, black: 0 }
+  1110→        if (recentSlice.length >= 3) {
+  1111→          const c0 = getCat(recentSlice[recentSlice.length - 3]); const c1 = getCat(recentSlice[recentSlice.length - 2])
+  1112→          const c2 = getCat(recentSlice[recentSlice.length - 1])
+  1113→          if (c0 && c1 && c2 && trans[c0] && trans[c0][c1] && trans[c0][c1][c2]) {
+  1114→            const tr = trans[c0][c1][c2]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+  1115→            if (total >= 2) cats.forEach(c => { scores[c] = ((tr[c] || 0) / total) * 100 })
+  1116→          }
+  1117→        }
+  1118→        return scores
+  1119→      })()
+  1120→
+  1121→      const scores: Record<string, number> = {}
+  1122→      const baseScores: Record<string, number> = {}
+  1123→      cats.forEach(c => { baseScores[c] = 0; scores[c] = 0 })
+  1124→      contributingModules = []
+  1125→
+  1126→      // Markov-2 — peso completo, SIN cap (Markov decide libremente)
+  1127→      cats.forEach(c => {
+  1128→        const contribution = markov[c] * getWeight('markov') * 0.2
+  1129→        scores[c] += contribution; baseScores[c] += contribution
+  1130→      })
+  1131→      contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov'))
+  1132→
+  1133→      // Markov-3 — peso completo, SIN cap
+  1134→      const m3max2 = Math.max(...Object.values(markov3))
+  1135→      if (m3max2 > 0) {
+  1136→        cats.forEach(c => {
+  1137→          const contribution = markov3[c] * getWeight('markov3') * 0.3
+  1138→          scores[c] += contribution
+  1139→        })
+  1140→        contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov3'))
+  1141→      }
+  1142→
+  1143→      // v5.0: Wheel signal — alineado con break-prob direction
+  1144→      // En streaks 3-5, opuesto es más probable → solo aceptar wheel si
+  1145→      // apunta en esa dirección, o si es extremadamente confiable (>70)
+  1146→      if (antiWheel.signal && antiWheel.signal.targetNumber) {
+  1147→        const wheelCat = getCat(antiWheel.signal.targetNumber)
+  1148→        if (wheelCat && antiWheel.signal.reliability > 55) {
+  1149→          if (currentStreak >= 3) {
+  1150→            const bp = getBreakProb(currentStreak)
+  1151→            if (bp > 50 && wheelCat === oppositeColor) {
+  1152→              // Wheel coincide con dirección del edge → aceptar
+  1153→              scores[wheelCat] += Math.min(15, antiWheel.signal.reliability * 0.3)
+  1154→              contributingModules.push('wheel')
+  1155→            } else if (bp <= 50 && wheelCat === streakColor) {
+  1156→              // Break-prob dice mismo color → aceptar wheel mismo color
+  1157→              scores[wheelCat] += Math.min(15, antiWheel.signal.reliability * 0.3)
+  1158→              contributingModules.push('wheel')
+  1159→            } else if (antiWheel.signal.reliability > 70) {
+  1160→              // Wheel muy confiable → aceptar en cualquier dirección (pero menos peso)
+  1161→              const wheelBonus = Math.min(8, (antiWheel.signal.reliability - 60) * 0.3)
+  1162→              scores[wheelCat] += wheelBonus
+  1163→              contributingModules.push('wheel')
+  1164→            }
+  1165→            // Si wheel va contra la dirección del edge → IGNORAR
+  1166→          } else {
+  1167→            // Streak 2: Markov decide, wheel aceptado libremente
+  1168→            const wheelBonus = Math.min(18, antiWheel.signal.reliability * 0.35)
+  1169→            scores[wheelCat] += wheelBonus
+  1170→            contributingModules.push('wheel')
+  1171→          }
+  1172→        }
+  1173→      }
+  1174→
+  1175→      // ═══ v6.0: REMOVED break-prob nudge (was for streak 5 only, now in SKIP ZONE) ═══
+  1176→
+  1177→      // ═══ v6.0: CONSENSUS QUALITY GATE (SOFT mode — stricter) ═══
+  1178→      const consensusSoft = buildConsensusMarkov(nonZero, getCat)
+  1179→      if (consensusSoft.consensus && consensusSoft.agreement === 3) {
+  1180→        scores[consensusSoft.consensus] += 10
+  1181→      }
+  1182→
+  1183→      // ═══ v6.0: ALTERNATION (SOFT mode — strict strength ≥60) ═══
+  1184→      const altSoft = detectAlternatingPattern(nonZero, getCat)
+  1185→      if (altSoft.detected && altSoft.lastColor) {
+  1186→        const altOpposite = getOppositeColor(altSoft.lastColor)
+  1187→        const altBoost = Math.max(10, Math.round(altSoft.strength * 0.2))
+  1188→        scores[altOpposite] += altBoost
+  1189→        scores[altSoft.lastColor!] -= altBoost * 0.5
+  1190→      }
+  1191→
+  1192→      // ═══ v6.0: ADAPTIVE SKIP (SOFT mode — strict: strength < 30 OR consensus < 2) ═══
+  1193→      const skipSoft = shouldSkipPrediction(scores, cats)
+  1194→      const adaptiveSkipSoft = skipSoft.strength < SKIP_THRESHOLD_SOFT || consensusSoft.agreement <= 1
+  1195→      if (adaptiveSkipSoft) {
+  1196→        return {
+  1197→          type: 'color',
+  1198→          options: cats.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: 50 })),
+  1199→          bestValue: scores.red >= scores.black ? 'red' : 'black',
+  1200→          bestConfidence: 50,
+  1201→          dealerSignal: antiWheel.signal || undefined,
+  1202→          shouldSkip: true,
+  1203→          signalStrength: skipSoft.strength
+  1204→        }
+  1205→      }
+  1206→
+  1207→      const confs = toConfidence(scores, cats, 48.6)
+  1208→      const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
+  1209→      let bestValue = sorted[0]
+  1210→
+  1211→      // ═══ v5.4: PATTERN-AWARE RECOVERY (SOFT mode — triggers at 2 errors) ═══
+  1212→      const recoveryResult = getRecoveryPrediction(bestValue)
+  1213→      if (recoveryResult) {
+  1214→        bestValue = recoveryResult
+  1215→        consecutiveFlips++
+  1216→      } else if (recoveryHistory.length > 0 && recoveryHistory[recoveryHistory.length - 1].correct) {
+  1217→        consecutiveFlips = 0
+  1218→      }
+  1219→
+  1220→      return {
+  1221→        type: 'color',
+  1222→        options: sorted.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: Math.round(confs[c]) })),
+  1223→        bestValue,
+  1224→        bestConfidence: Math.round(confs[bestValue]),
+  1225→        dealerSignal: antiWheel.signal || undefined,
+  1226→        shouldSkip: false,
+  1227→        signalStrength: skipSoft.strength
+  1228→      }
+  1229→    }
+  1230→
+  1231→    // ── NORMAL MODE (streak < 2): v5.3 Markov-Primary + Alternation + Recovery ──
+  1232→    // v5.3: Now actually CONNECTS detectAlternatingPattern and shouldRecoveryFlip.
+  1233→    // v5.2: Added Recovery Bailout to detect when engine is stuck predicting
+  1234→    // one color and flip the prediction. Also added short-term recency.
+  1235→    // Recency-Weighted Markov
+  1236→    const MARKOV_WINDOW_NORM = 300
+  1237→    const recentSlice = nonZero.length > MARKOV_WINDOW_NORM ? nonZero.slice(-MARKOV_WINDOW_NORM) : nonZero
+  1238→
+  1239→    // Markov-2 (recency-weighted, same as SOFT mode)
+  1240→    const markov = (() => {
+  1241→      const trans: Record<string, Record<string, Record<string, number>>> = {}
+  1242→      for (let i = 2; i < recentSlice.length; i++) {
+  1243→        const c0 = getCat(recentSlice[i - 2]); const c1 = getCat(recentSlice[i - 1]); const c2 = getCat(recentSlice[i])
+  1244→        if (c0 && c1 && c2) {
+  1245→          if (!trans[c0]) trans[c0] = {}; if (!trans[c0][c1]) trans[c0][c1] = {}
+  1246→          trans[c0][c1][c2] = (trans[c0][c1][c2] || 0) + 1
+  1247→        }
+  1248→      }
+  1249→      const scores: Record<string, number> = { red: 0, black: 0 }
+  1250→      if (recentSlice.length >= 2) {
+  1251→        const c0 = getCat(recentSlice[recentSlice.length - 2]); const c1 = getCat(recentSlice[recentSlice.length - 1])
+  1252→        if (c0 && c1 && trans[c0] && trans[c0][c1]) {
+  1253→          const tr = trans[c0][c1]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+  1254→          if (total > 0) cats.forEach(c => { scores[c] = ((tr[c] || 0) / total) * 100 })
+  1255→        }
+  1256→      }
+  1257→      if (Object.values(scores).every(v => v === 0) && recentSlice.length >= 1) {
+  1258→        const last = getCat(recentSlice[recentSlice.length - 1])
+  1259→        const trans1: Record<string, Record<string, number>> = {}
+  1260→        for (let i = 1; i < recentSlice.length; i++) {
+  1261→          const prev = getCat(recentSlice[i - 1]); const curr = getCat(recentSlice[i])
+  1262→          if (prev && curr) { if (!trans1[prev]) trans1[prev] = {}; trans1[prev][curr] = (trans1[prev][curr] || 0) + 1 }
+  1263→        }
+  1264→        if (last && trans1[last]) {
+  1265→          const tr = trans1[last]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+  1266→          if (total > 0) cats.forEach(c => { scores[c] = ((tr[c] || 0) / total) * 100 })
+  1267→        }
+  1268→      }
+  1269→      return scores
+  1270→    })()
+  1271→
+  1272→    // Markov-3 (recency-weighted, same as SOFT mode)
+  1273→    const markov3 = (() => {
+  1274→      if (recentSlice.length < 10) return { red: 0, black: 0 } as Record<string, number>
+  1275→      const trans: Record<string, Record<string, Record<string, Record<string, number>>>> = {}
+  1276→      for (let i = 3; i < recentSlice.length; i++) {
+  1277→        const c0 = getCat(recentSlice[i - 3]); const c1 = getCat(recentSlice[i - 2])
+  1278→        const c2 = getCat(recentSlice[i - 1]); const c3 = getCat(recentSlice[i])
+  1279→        if (c0 && c1 && c2 && c3) {
+  1280→          if (!trans[c0]) trans[c0] = {}; if (!trans[c0][c1]) trans[c0][c1] = {}
+  1281→          if (!trans[c0][c1][c2]) trans[c0][c1][c2] = {}
+  1282→          trans[c0][c1][c2][c3] = (trans[c0][c1][c2][c3] || 0) + 1
+  1283→        }
+  1284→      }
+  1285→      const scores: Record<string, number> = { red: 0, black: 0 }
+  1286→      if (recentSlice.length >= 3) {
+  1287→        const c0 = getCat(recentSlice[recentSlice.length - 3]); const c1 = getCat(recentSlice[recentSlice.length - 2])
+  1288→        const c2 = getCat(recentSlice[recentSlice.length - 1])
+  1289→        if (c0 && c1 && c2 && trans[c0] && trans[c0][c1] && trans[c0][c1][c2]) {
+  1290→          const tr = trans[c0][c1][c2]; const total = Object.values(tr).reduce((s, v) => s + v, 0)
+  1291→          if (total >= 2) cats.forEach(c => { scores[c] = ((tr[c] || 0) / total) * 100 })
+  1292→        }
+  1293→      }
+  1294→      return scores
+  1295→    })()
+  1296→
+  1297→    const scores: Record<string, number> = {}
+  1298→    const baseScores: Record<string, number> = {}
+  1299→    cats.forEach(c => { baseScores[c] = 0; scores[c] = 0 })
+  1300→    contributingModules = []
+  1301→
+  1302→    // Markov-2 — PRIMARY signal (same weight as SOFT mode)
+  1303→    cats.forEach(c => {
+  1304→      const contribution = markov[c] * getWeight('markov') * 0.2
+  1305→      scores[c] += contribution; baseScores[c] += contribution
+  1306→    })
+  1307→    contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov'))
+  1308→
+  1309→    // Markov-3 — SECONDARY signal
+  1310→    const m3max = Math.max(...Object.values(markov3))
+  1311→    if (m3max > 0) {
+  1312→      cats.forEach(c => {
+  1313→        const contribution = markov3[c] * getWeight('markov3') * 0.3
+  1314→        scores[c] += contribution
+  1315→      })
+  1316→      contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov3'))
+  1317→    }
+  1318→
+  1319→    // Wheel signal — aligned with Markov direction
+  1320→    const wheelData = wheelDisplacement(getCat, cats)
+  1321→    if (wheelData.signal && wheelData.signal.targetNumber) {
+  1322→      const wheelCat = getCat(wheelData.signal.targetNumber)
+  1323→      if (wheelCat && wheelData.signal.reliability > 60) {
+  1324→        // v5.1: In NORMAL mode, only accept wheel if it AGREES with Markov leader
+  1325→        const markovLeader = scores.red >= scores.black ? 'red' : 'black'
+  1326→        if (wheelCat === markovLeader) {
+  1327→          // Wheel confirms Markov → boost
+  1328→          scores[wheelCat] += Math.min(15, wheelData.signal.reliability * 0.3)
+  1329→          contributingModules.push('wheel')
+  1330→        }
+  1331→        // If wheel disagrees with Markov → ignore (Markov is primary in NORMAL)
+  1332→      }
+  1333→    }
+  1334→
+  1335→    // ═══ v5.2 NEW: SHORT-TERM RECENCY ═══
+  1336→    // Detects emerging streaks: if last 5 non-green results are skewed
+  1337→    // toward one color (4+ out of 5), give a small boost to continue.
+  1338→    const last5raw = nonZero.slice(-5).map(n => getCat(n)).filter((c): c is 'red' | 'black' => c !== null)
+  1339→    if (last5raw.length >= 4) {
+  1340→      const redCount = last5raw.filter(c => c === 'red').length
+  1341→      const blackCount = last5raw.filter(c => c === 'black').length
+  1342→      if (redCount >= 4) {
+  1343→        scores.red += 5
+  1344→      } else if (blackCount >= 4) {
+  1345→        scores.black += 5
+  1346→      }
+  1347→      // v5.3: Also detect 3/3 of last 3 — emerging streak
+  1348→      const last3raw = last5raw.slice(-3)
+  1349→      if (last3raw.length === 3) {
+  1350→        const l3red = last3raw.filter(c => c === 'red').length
+  1351→        const l3black = last3raw.filter(c => c === 'black').length
+  1352→        if (l3red === 3) {
+  1353→          scores.red += 3  // Small boost for 3-same in last 3
+  1354→        } else if (l3black === 3) {
+  1355→          scores.black += 3
+  1356→        }
+  1357→      }
+  1358→    }
+  1359→
+  1360→    // ═══ v5.5: CONSENSUS QUALITY GATE — multi-window agreement as filter ═══
+  1361→    // Instead of adding consensus to scores (which inflates them and kills skip),
+  1362→    // use it as a QUALITY GATE: if windows disagree, signal is unreliable → SKIP
+  1363→    const consensusNorm = buildConsensusMarkov(nonZero, getCat)
+  1364→    // If 0 or 1 windows agree (no consensus or weak), add small bonus
+  1365→    // If all 3 agree, that's a strong signal — DON'T skip even with low score
+  1366→    if (consensusNorm.consensus && consensusNorm.agreement === 3) {
+  1367→      scores[consensusNorm.consensus] += 12
+  1368→    }
+  1369→
+  1370→    // ═══ v6.0: ADAPTIVE SKIP — stricter: strength < 38 OR consensus < 2 ═══
+  1371→    const skipCheck = shouldSkipPrediction(scores, cats)
+  1372→    // v6.0: Skip if signal too weak OR no multi-window consensus
+  1373→    const adaptiveSkip = skipCheck.strength < SKIP_THRESHOLD_NORMAL || consensusNorm.agreement <= 1
+  1374→    if (adaptiveSkip) {
+  1375→      return {
+  1376→        type: 'color',
+  1377→        options: cats.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: 50 })),
+  1378→        bestValue: scores.red >= scores.black ? 'red' : 'black',
+  1379→        bestConfidence: 50,
+  1380→        dealerSignal: wheelData.signal || undefined,
+  1381→        shouldSkip: true,
+  1382→        signalStrength: skipCheck.strength
+  1383→      }
+  1384→    }
+  1385→
+  1386→    // ═══ v6.0: ALTERNATION AS TIEBREAKER (NORMAL mode — strict strength ≥60) ═══
+  1387→    const altNorm = detectAlternatingPattern(nonZero, getCat)
+  1388→    if (altNorm.detected && altNorm.lastColor && altNorm.strength >= 60) {
+  1389→      const altOpposite = getOppositeColor(altNorm.lastColor)
+  1390→      // v5.5: Boost proportional to alternation strength
+  1391→      const altBoost = Math.max(8, Math.round(altNorm.strength * 0.2))
+  1392→      scores[altOpposite] += altBoost
+  1393→      scores[altNorm.lastColor!] -= altBoost * 0.5
+  1394→    }
+  1395→
+  1396→    const confs = toConfidence(scores, cats, 48.6)
+  1397→    const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
+  1398→    let bestValue = sorted[0]
+  1399→
+  1400→    // ═══ v5.4: PATTERN-AWARE RECOVERY (NORMAL mode — triggers at 2 errors) ═══
+  1401→    const recoveryNorm = getRecoveryPrediction(bestValue)
+  1402→    if (recoveryNorm) {
+  1403→      bestValue = recoveryNorm
+  1404→      consecutiveFlips++
+  1405→    } else if (recoveryHistory.length > 0 && recoveryHistory[recoveryHistory.length - 1].correct) {
+  1406→      consecutiveFlips = 0
+  1407→    }
+  1408→
+  1409→    return {
+  1410→      type: 'color',
+  1411→      options: sorted.map(c => ({ value: c, label: c === 'red' ? 'Rojo' : 'Negro', confidence: Math.round(confs[c]) })),
+  1412→      bestValue,
+  1413→      bestConfidence: Math.round(confs[bestValue]),
+  1414→      dealerSignal: wheelData.signal || undefined,
+  1415→      shouldSkip: false,
+  1416→      signalStrength: skipCheck.strength
+  1417→    }
+  1418→  }
+  1419→
+  1420→  // ═══════════════════════════════════════════
+  1421→  // PARITY PREDICTION
+  1422→  // ═══════════════════════════════════════════
+  1423→  if (betType === 'parity') {
+  1424→    const cats = ['odd', 'even']
+  1425→    const getCat = (n: number) => n === 0 ? null : (n % 2 === 0 ? 'even' : 'odd')
+  1426→    const freq = multiWindowFreq(getCat, cats)
+  1427→    const markov = markovOrder2(getCat, cats)
+  1428→    const markov3 = markovOrder3(getCat, cats)
+  1429→    const saturation = saturationAnalysis(getCat, cats)
+  1430→    const wheel = wheelDisplacement(getCat, cats)
+  1431→
+  1432→    const streaks: Record<string, number> = {}
+  1433→    let maxO = 0, maxE = 0
+  1434→    nonZero.forEach(n => {
+  1435→      if (n === 0) { maxO = 0; maxE = 0; return }
+  1436→      if (n % 2 === 1) { maxO++; maxE = 0 } else { maxE++; maxO = 0 }
+  1437→    })
+  1438→    streaks.odd = maxO; streaks.even = maxE
+  1439→    const streak = streakAnalysis(getCat, cats, streaks)
+  1440→    const momentum = momentumAnalysis(getCat, cats)
+  1441→
+  1442→    const scores: Record<string, number> = {}
+  1443→    const baseScores: Record<string, number> = {}
+  1444→    cats.forEach(c => { baseScores[c] = 0; scores[c] = 0 })
+  1445→    contributingModules = []
+  1446→
+  1447→    cats.forEach(c => { scores[c] += freq[c] * getWeight('freq'); baseScores[c] += freq[c] * getWeight('freq') })
+  1448→    contributingModules.push(...trackContribution(scores, baseScores, cats, 'freq'))
+  1449→
+  1450→    cats.forEach(c => { scores[c] += markov[c] * getWeight('markov'); baseScores[c] += markov[c] * getWeight('markov') })
+  1451→    contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov'))
+  1452→
+  1453→    const m3max = Math.max(...Object.values(markov3))
+  1454→    if (m3max > 0) {
+  1455→      cats.forEach(c => { scores[c] += markov3[c] * getWeight('markov3') })
+  1456→      contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov3'))
+  1457→    }
+  1458→
+  1459→    cats.forEach(c => { scores[c] += streak[c] * getWeight('streak') })
+  1460→    contributingModules.push(...trackContribution(scores, baseScores, cats, 'streak'))
+  1461→
+  1462→    if (momentum) { scores[momentum] += 15 * getWeight('momentum'); contributingModules.push('momentum') }
+  1463→
+  1464→    const satMax = Math.max(...Object.values(saturation))
+  1465→    if (satMax > 0) {
+  1466→      cats.forEach(c => { scores[c] += saturation[c] * getWeight('saturation') })
+  1467→      contributingModules.push(...trackContribution(scores, baseScores, cats, 'saturation'))
+  1468→    }
+  1469→
+  1470→    const wheelMax = Math.max(...Object.values(wheel.scores))
+  1471→    if (wheelMax > 0) {
+  1472→      cats.forEach(c => { scores[c] += wheel.scores[c] * getWeight('wheel') })
+  1473→      contributingModules.push(...trackContribution(scores, baseScores, cats, 'wheel'))
+  1474→    }
+  1475→
+  1476→    const confs = toConfidence(scores, cats, 48.6)
+  1477→    const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
+  1478→    return {
+  1479→      type: 'parity',
+  1480→      options: sorted.map(c => ({ value: c, label: c === 'odd' ? 'Impar' : 'Par', confidence: Math.round(confs[c]) })),
+  1481→      bestValue: sorted[0],
+  1482→      bestConfidence: Math.round(confs[sorted[0]]),
+  1483→      dealerSignal: wheel.signal || undefined
+  1484→    }
+  1485→  }
+  1486→
+  1487→  // ═══════════════════════════════════════════
+  1488→  // DOZEN PREDICTION
+  1489→  // ═══════════════════════════════════════════
+  1490→  if (betType === 'dozen') {
+  1491→    const cats = ['d1', 'd2', 'd3']
+  1492→    const getCat = (n: number) => n === 0 ? null : (n <= 12 ? 'd1' : n <= 24 ? 'd2' : 'd3')
+  1493→    const freq = multiWindowFreq(getCat, cats)
+  1494→    const markov = markovOrder2(getCat, cats)
+  1495→    const markov3 = markovOrder3(getCat, cats)
+  1496→    const gap = gapAnalysis(getCat, cats)
+  1497→    const sector = sectorAnalysis(getCat, cats)
+  1498→    const hotcold = hotColdAnalysis(getCat, cats)
+  1499→    const triplet = tripletAnalysis(getCat, cats)
+  1500→    const wheel = wheelDisplacement(getCat, cats)
+  1501→
+  1502→    const streaks: Record<string, number> = {}
+  1503→    let maxD1 = 0, maxD2 = 0, maxD3 = 0
+  1504→    nonZero.forEach(n => {
+  1505→      if (n === 0) { maxD1 = 0; maxD2 = 0; maxD3 = 0; return }
+  1506→      if (n <= 12) { maxD1++; maxD2 = 0; maxD3 = 0 }
+  1507→      else if (n <= 24) { maxD2++; maxD1 = 0; maxD3 = 0 }
+  1508→      else { maxD3++; maxD1 = 0; maxD2 = 0 }
+  1509→    })
+  1510→    streaks.d1 = maxD1; streaks.d2 = maxD2; streaks.d3 = maxD3
+  1511→    const streak = streakAnalysis(getCat, cats, streaks)
+  1512→
+  1513→    // Chi-square
+  1514→    const d1Count = nonZero.filter(n => n <= 12).length
+  1515→    const d2Count = nonZero.filter(n => n > 12 && n <= 24).length
+  1516→    const d3Count = nonZero.filter(n => n > 24).length
+  1517→    const expected = nzTotal / 3
+  1518→    const chi = chiSquareTest([d1Count, d2Count, d3Count], expected)
+  1519→    const chiScores: Record<string, number> = {}
+  1520→    if (chi > 4.6) { // More sensitive threshold (was 5.99)
+  1521→      const counts = [d1Count, d2Count, d3Count]
+  1522→      cats.forEach((c, i) => {
+  1523→        if (counts[i] < expected) chiScores[c] = ((expected - counts[i]) / expected) * 18 // Increased from 15
+  1524→        else chiScores[c] = -((counts[i] - expected) / expected) * 12 // Increased from 10
+  1525→      })
+  1526→    } else { cats.forEach(c => chiScores[c] = 0) }
+  1527→
+  1528→    // Z-score for each dozen
+  1529→    const zScores: Record<string, number> = {}
+  1530→    const zProb = 12 / 37
+  1531→    const zStdDev = Math.sqrt(nzTotal * zProb * (1 - zProb))
+  1532→    const dCounts = [d1Count, d2Count, d3Count]
+  1533→    cats.forEach((c, i) => {
+  1534→      zScores[c] = zStdDev > 0 ? (dCounts[i] - nzTotal * zProb) / zStdDev : 0
+  1535→    })
+  1536→    // Boost underrepresented dozens with strong z-score signal
+  1537→    const zBonusScores: Record<string, number> = {}
+  1538→    cats.forEach(c => {
+  1539→      if (zScores[c] < -1.8) zBonusScores[c] = Math.min(20, Math.abs(zScores[c]) * 8) // New: -1.8 threshold
+  1540→      else zBonusScores[c] = 0
+  1541→    })
+  1542→
+  1543→    const scores: Record<string, number> = {}
+  1544→    const baseScores: Record<string, number> = {}
+  1545→    cats.forEach(c => { baseScores[c] = 0; scores[c] = 0 })
+  1546→    contributingModules = []
+  1547→
+  1548→    const momentum = momentumAnalysis(getCat, cats)
+  1549→
+  1550→    cats.forEach(c => { scores[c] += freq[c] * getWeight('freq'); baseScores[c] += freq[c] * getWeight('freq') })
+  1551→    contributingModules.push(...trackContribution(scores, baseScores, cats, 'freq'))
+  1552→
+  1553→    cats.forEach(c => { scores[c] += markov[c] * getWeight('markov'); baseScores[c] += markov[c] * getWeight('markov') })
+  1554→    contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov'))
+  1555→
+  1556→    const m3max = Math.max(...Object.values(markov3))
+  1557→    if (m3max > 0) {
+  1558→      cats.forEach(c => { scores[c] += markov3[c] * getWeight('markov3') })
+  1559→      contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov3'))
+  1560→    }
+  1561→
+  1562→    cats.forEach(c => { scores[c] += streak[c] * getWeight('streak') })
+  1563→    contributingModules.push(...trackContribution(scores, baseScores, cats, 'streak'))
+  1564→
+  1565→    cats.forEach(c => { scores[c] += gap[c] * getWeight('gap') })
+  1566→    contributingModules.push(...trackContribution(scores, baseScores, cats, 'gap'))
+  1567→
+  1568→    cats.forEach(c => { scores[c] += sector[c] * getWeight('sector') })
+  1569→    contributingModules.push(...trackContribution(scores, baseScores, cats, 'sector'))
+  1570→
+  1571→    cats.forEach(c => { scores[c] += chiScores[c] * getWeight('chisq') })
+  1572→    contributingModules.push(...trackContribution(scores, baseScores, cats, 'chisq'))
+  1573→
+  1574→    cats.forEach(c => { scores[c] += hotcold[c] * getWeight('hotcold') })
+  1575→    contributingModules.push(...trackContribution(scores, baseScores, cats, 'hotcold'))
+  1576→
+  1577→    cats.forEach(c => { scores[c] += zBonusScores[c] * getWeight('chisq') }) // Use chi-sq weight for z-score
+  1578→
+  1579→    const triMax = Math.max(...Object.values(triplet))
+  1580→    if (triMax > 0) {
+  1581→      cats.forEach(c => { scores[c] += triplet[c] * getWeight('triplet') })
+  1582→      contributingModules.push(...trackContribution(scores, baseScores, cats, 'triplet'))
+  1583→    }
+  1584→
+  1585→    const wheelMax = Math.max(...Object.values(wheel.scores))
+  1586→    if (wheelMax > 0) {
+  1587→      cats.forEach(c => { scores[c] += wheel.scores[c] * getWeight('wheel') })
+  1588→      contributingModules.push(...trackContribution(scores, baseScores, cats, 'wheel'))
+  1589→    }
+  1590→
+  1591→    if (momentum) { scores[momentum] += 10 * getWeight('momentum'); contributingModules.push('momentum') }
+  1592→
+  1593→    const confs = toConfidence(scores, cats, 32.4) // 12/37 = 32.4%
+  1594→    const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
+  1595→    const labels: Record<string, string> = { d1: '1ra Docena (1-12)', d2: '2da Docena (13-24)', d3: '3ra Docena (25-36)' }
+  1596→    const values: Record<string, string> = { d1: '1-12', d2: '13-24', d3: '25-36' }
+  1597→    return {
+  1598→      type: 'dozen',
+  1599→      options: sorted.map(c => ({ value: values[c], label: labels[c], confidence: Math.round(confs[c]) })),
+  1600→      bestValue: values[sorted[0]],
+  1601→      bestConfidence: Math.round(confs[sorted[0]]),
+  1602→      dealerSignal: wheel.signal || undefined
+  1603→    }
+  1604→  }
+  1605→
+  1606→  // ═══════════════════════════════════════════
+  1607→  // COLUMN PREDICTION
+  1608→  // ═══════════════════════════════════════════
+  1609→  if (betType === 'column') {
+  1610→    const cats = ['c1', 'c2', 'c3']
+  1611→    const getCat = (n: number) => {
+  1612→      if (n === 0) return null
+  1613→      const col = n % 3 === 0 ? 3 : n % 3
+  1614→      return `c${col}`
+  1615→    }
+  1616→    const freq = multiWindowFreq(getCat, cats)
+  1617→    const markov = markovOrder2(getCat, cats)
+  1618→    const markov3 = markovOrder3(getCat, cats)
+  1619→    const gap = gapAnalysis(getCat, cats)
+  1620→    const sector = sectorAnalysis(getCat, cats)
+  1621→    const hotcold = hotColdAnalysis(getCat, cats)
+  1622→    const triplet = tripletAnalysis(getCat, cats)
+  1623→    const wheel = wheelDisplacement(getCat, cats)
+  1624→
+  1625→    const streaks: Record<string, number> = {}
+  1626→    let maxC1 = 0, maxC2 = 0, maxC3 = 0
+  1627→    nonZero.forEach(n => {
+  1628→      if (n === 0) { maxC1 = 0; maxC2 = 0; maxC3 = 0; return }
+  1629→      const col = n % 3 === 0 ? 3 : n % 3
+  1630→      if (col === 1) { maxC1++; maxC2 = 0; maxC3 = 0 }
+  1631→      else if (col === 2) { maxC2++; maxC1 = 0; maxC3 = 0 }
+  1632→      else { maxC3++; maxC1 = 0; maxC2 = 0 }
+  1633→    })
+  1634→    streaks.c1 = maxC1; streaks.c2 = maxC2; streaks.c3 = maxC3
+  1635→    const streak = streakAnalysis(getCat, cats, streaks)
+  1636→
+  1637→    const c1Count = nonZero.filter(n => n !== 0 && n % 3 === 1).length
+  1638→    const c2Count = nonZero.filter(n => n !== 0 && n % 3 === 2).length
+  1639→    const c3Count = nonZero.filter(n => n !== 0 && n % 3 === 0).length
+  1640→    const expected = nzTotal / 3
+  1641→    const chi = chiSquareTest([c1Count, c2Count, c3Count], expected)
+  1642→    const chiScores: Record<string, number> = {}
+  1643→    if (chi > 4.6) {
+  1644→      const counts = [c1Count, c2Count, c3Count]
+  1645→      cats.forEach((c, i) => {
+  1646→        if (counts[i] < expected) chiScores[c] = ((expected - counts[i]) / expected) * 18
+  1647→        else chiScores[c] = -((counts[i] - expected) / expected) * 12
+  1648→      })
+  1649→    } else { cats.forEach(c => chiScores[c] = 0) }
+  1650→
+  1651→    const zScores: Record<string, number> = {}
+  1652→    const zProb = 12 / 37
+  1653→    const zStdDev = Math.sqrt(nzTotal * zProb * (1 - zProb))
+  1654→    const colCounts = [c1Count, c2Count, c3Count]
+  1655→    cats.forEach((c, i) => {
+  1656→      zScores[c] = zStdDev > 0 ? (colCounts[i] - nzTotal * zProb) / zStdDev : 0
+  1657→    })
+  1658→    const zBonusScores: Record<string, number> = {}
+  1659→    cats.forEach(c => {
+  1660→      if (zScores[c] < -1.8) zBonusScores[c] = Math.min(20, Math.abs(zScores[c]) * 8)
+  1661→      else zBonusScores[c] = 0
+  1662→    })
+  1663→
+  1664→    const scores: Record<string, number> = {}
+  1665→    const baseScores: Record<string, number> = {}
+  1666→    cats.forEach(c => { baseScores[c] = 0; scores[c] = 0 })
+  1667→    contributingModules = []
+  1668→
+  1669→    const momentum = momentumAnalysis(getCat, cats)
+  1670→
+  1671→    cats.forEach(c => { scores[c] += freq[c] * getWeight('freq'); baseScores[c] += freq[c] * getWeight('freq') })
+  1672→    contributingModules.push(...trackContribution(scores, baseScores, cats, 'freq'))
+  1673→
+  1674→    cats.forEach(c => { scores[c] += markov[c] * getWeight('markov'); baseScores[c] += markov[c] * getWeight('markov') })
+  1675→    contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov'))
+  1676→
+  1677→    const m3max = Math.max(...Object.values(markov3))
+  1678→    if (m3max > 0) {
+  1679→      cats.forEach(c => { scores[c] += markov3[c] * getWeight('markov3') })
+  1680→      contributingModules.push(...trackContribution(scores, baseScores, cats, 'markov3'))
+  1681→    }
+  1682→
+  1683→    cats.forEach(c => { scores[c] += streak[c] * getWeight('streak') })
+  1684→    contributingModules.push(...trackContribution(scores, baseScores, cats, 'streak'))
+  1685→
+  1686→    cats.forEach(c => { scores[c] += gap[c] * getWeight('gap') })
+  1687→    contributingModules.push(...trackContribution(scores, baseScores, cats, 'gap'))
+  1688→
+  1689→    cats.forEach(c => { scores[c] += sector[c] * getWeight('sector') })
+  1690→    contributingModules.push(...trackContribution(scores, baseScores, cats, 'sector'))
+  1691→
+  1692→    cats.forEach(c => { scores[c] += chiScores[c] * getWeight('chisq') })
+  1693→    contributingModules.push(...trackContribution(scores, baseScores, cats, 'chisq'))
+  1694→
+  1695→    cats.forEach(c => { scores[c] += hotcold[c] * getWeight('hotcold') })
+  1696→    contributingModules.push(...trackContribution(scores, baseScores, cats, 'hotcold'))
+  1697→
+  1698→    cats.forEach(c => { scores[c] += zBonusScores[c] * getWeight('chisq') })
+  1699→
+  1700→    const triMax = Math.max(...Object.values(triplet))
+  1701→    if (triMax > 0) {
+  1702→      cats.forEach(c => { scores[c] += triplet[c] * getWeight('triplet') })
+  1703→      contributingModules.push(...trackContribution(scores, baseScores, cats, 'triplet'))
+  1704→    }
+  1705→
+  1706→    const wheelMax = Math.max(...Object.values(wheel.scores))
+  1707→    if (wheelMax > 0) {
+  1708→      cats.forEach(c => { scores[c] += wheel.scores[c] * getWeight('wheel') })
+  1709→      contributingModules.push(...trackContribution(scores, baseScores, cats, 'wheel'))
+  1710→    }
+  1711→
+  1712→    if (momentum) { scores[momentum] += 10 * getWeight('momentum'); contributingModules.push('momentum') }
+  1713→
+  1714→    const confs = toConfidence(scores, cats, 32.4)
+  1715→    const sorted = [...cats].sort((a, b) => confs[b] - confs[a])
+  1716→    const labels: Record<string, string> = { c1: 'Col 1', c2: 'Col 2', c3: 'Col 3' }
+  1717→    const values: Record<string, string> = { c1: '1', c2: '2', c3: '3' }
+  1718→    return {
+  1719→      type: 'column',
+  1720→      options: sorted.map(c => ({ value: values[c], label: labels[c], confidence: Math.round(confs[c]) })),
+  1721→      bestValue: values[sorted[0]],
+  1722→      bestConfidence: Math.round(confs[sorted[0]]),
+  1723→      dealerSignal: wheel.signal || undefined
+  1724→    }
+  1725→  }
+  1726→
+  1727→  return { type: betType, options: [], bestValue: '', bestConfidence: 50 }
+  1728→}
+  1729→
