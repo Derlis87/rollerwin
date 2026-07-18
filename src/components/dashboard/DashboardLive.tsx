@@ -982,6 +982,7 @@ export function DashboardLive() {
 
         // Reset peak to 1
         setCurrentPeak(1)
+        currentPeakRef.current = 1
         
         // Generate new prediction for next round (without counting — signal was already counted above)
         if (newNumbers.length >= 5) {
@@ -1004,6 +1005,7 @@ export function DashboardLive() {
         
         const newPeak = currentPeakValue + 1
         setCurrentPeak(newPeak)
+        currentPeakRef.current = newPeak
 
         // === SIGNAL-ONLY PEAK TRACKING (V6.0) ===
         const newSignalPeak = signalPeakRef.current + 1
@@ -1724,6 +1726,10 @@ export function DashboardLive() {
         setSignalPeakHistory(signalPeakRecords)
         setSignalPeak(signalPeakRecords.length > 0 ? signalPeakRecords[signalPeakRecords.length - 1].height : 1)
         signalPeakRef.current = signalPeakRecords.length > 0 ? signalPeakRecords[signalPeakRecords.length - 1].height : 1
+        // Also sync currentPeak to keep Pico Actual and Pico Señal Actual coordinated
+        const lastBtPeakHeight = signalPeakRecords.length > 0 ? signalPeakRecords[signalPeakRecords.length - 1].height : 1
+        setCurrentPeak(lastBtPeakHeight)
+        currentPeakRef.current = lastBtPeakHeight
         setTotalSignals(signals)
         setTotalSkips(totalSkips)
         totalSignalsRef.current = signals
