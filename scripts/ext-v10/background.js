@@ -1,5 +1,6 @@
-// RollerWin Capture v10.0 — Background Service Worker
+// RollerWin Capture v10.0.1 — Background Service Worker
 // Inyecta el script de deteccion en MUNDO PRINCIPAL en TODOS los frames
+// v10.0.1 FIX: webNavigation inyecta en iframes cross-origin (Evolution *.click)
 // v10.0: Basado en motor v7.6 probado, limitado a 4 mesas especificas
 var lastNumber = null;
 var totalCaptured = 0;
@@ -51,10 +52,27 @@ chrome.tabs.onUpdated.addListener(function(tabId, changeInfo, tab) {
   injectMainScript(tabId);
 });
 
+// v10.0.1 FIX: Inyectar en TODOS los iframes de tabs de casino
+// El iframe de Evolution tiene dominio *.click, NO betfury.com
+// Por eso isCasino(details.url) fallaba — nunca se inyectaba en el iframe
 chrome.webNavigation.onCompleted.addListener(function(details) {
   if (details.frameId === 0) return;
-  if (!isCasino(details.url)) return;
-  injectMainScript(details.tabId, [details.frameId]);
+  // Verificar la URL del TAB padre, no del iframe
+  chrome.tabs.get(details.tabId, function(tab) {
+    if (tab && isCasino(tab.url)) {
+      injectMainScript(details.tabId, [details.frameId]);
+    }
+  });
+});
+
+// Tambien inyectar en DOMContentLoaded (mas temprano que onCompleted)
+chrome.webNavigation.onDOMContentLoaded.addListener(function(details) {
+  if (details.frameId === 0) return;
+  chrome.tabs.get(details.tabId, function(tab) {
+    if (tab && isCasino(tab.url)) {
+      injectMainScript(details.tabId, [details.frameId]);
+    }
+  });
 });
 
 chrome.tabs.onActivated.addListener(function(activeInfo) {
