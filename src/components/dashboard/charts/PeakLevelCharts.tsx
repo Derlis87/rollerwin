@@ -281,7 +281,7 @@ export function PeakLevelCharts({ inputNumbers, peakHistory: peakHistoryFromPare
                 <BarChart 
                   width={Math.max(800, peakHistory.length * 12)}
                   height={310}
-                  data={peakHistory.map((p, i) => ({
+                  data={[...peakHistory].reverse().map((p, i) => ({
                     index: i + 1,
                     height: p.height,
                     resultNumber: p.resultNumber,
