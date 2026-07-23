@@ -23,7 +23,7 @@
     'casino.pinnacle.com/es/live-casino/games/european-roulette/'
   ];
 
-  // Verificar si la TAB actual (parent) esta en una mesa autorizada
+  // Verificar si la TAB actual (parent) es una pagina de ruleta autorizada
   function isAllowedTable() {
     try {
       var tabUrl = (window.top !== window.self)
@@ -32,9 +32,12 @@
       // Para iframes, no podemos acceder a la URL del parent directamente
       // El filtro se aplica en el parent. En iframes, siempre activamos deteccion.
       if (window.top !== window.self) return true;
-      for (var i = 0; i < ALLOWED_TABLES.length; i++) {
-        if (tabUrl.indexOf(ALLOWED_TABLES[i]) >= 0) return true;
-      }
+      // Permitir cualquier pagina de ruleta en los dominios autorizados
+      if (tabUrl.indexOf('roulette') >= 0 && (
+          tabUrl.indexOf('betfury.com') >= 0 ||
+          tabUrl.indexOf('betfury.io') >= 0 ||
+          tabUrl.indexOf('pinnacle.com') >= 0
+      )) return true;
       return false;
     } catch(e) {
       // Cross-origin: estamos en iframe, activar deteccion
