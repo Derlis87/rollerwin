@@ -1206,7 +1206,8 @@ export function DashboardLive() {
     }
   }, [isAutoCapture, capturerConnect, capturerDisconnect, capturerStop, selectedCasino, captureTableUrl])
 
-  // Handle join table - marca la sesion como activa y arranca auto-captura
+  // Handle join table - marca la sesion como activa sin abrir ventana
+  // El capturador se encarga de abrir el navegador
   const handleJoinTable = useCallback(() => {
     setIsJoined(true)
     
@@ -1216,18 +1217,7 @@ export function DashboardLive() {
       tableUrl: getTableUrl(selectedCasino, selectedTable),
       startedAt: new Date().toISOString()
     }))
-
-    // Auto-start capture polling when joining a table
-    if (!isAutoCapture) {
-      capturerConnect()
-      setIsAutoCapture(true)
-      fetch('/api/capture/pipeline-status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ active: true, table: captureTableUrl, casino: selectedCasino }),
-      }).catch(() => {})
-    }
-  }, [selectedCasino, selectedTable, isAutoCapture, capturerConnect, captureTableUrl])
+  }, [selectedCasino, selectedTable])
 
   // Clear all data
   const handleClear = useCallback(() => {
@@ -1281,16 +1271,10 @@ export function DashboardLive() {
   // Leave table
   const handleLeaveTable = useCallback(() => {
     setIsJoined(false)
-    // Also stop auto-capture when leaving
-    if (isAutoCapture) {
-      capturerStop()
-      capturerDisconnect()
-      setIsAutoCapture(false)
-    }
     stopDemoMode()
     handleClear()
     localStorage.removeItem('currentSession')
-  }, [stopDemoMode, handleClear, isAutoCapture, capturerStop, capturerDisconnect])
+  }, [stopDemoMode, handleClear])
 
   // Logout
   const handleLogout = useCallback(async () => {
