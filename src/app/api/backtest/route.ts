@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { generateSmartPrediction, recordPredictionFeedback, resetRecoveryHistory } from '@/lib/smart-prediction-v4'
+import { generateSmartPrediction, recordPredictionFeedback, resetFullEngine } from '@/lib/smart-prediction-v4'
 
 const RED_SET = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36])
 
@@ -62,6 +62,8 @@ export interface SimResult {
   cooldownStats: { lossCooldowns: number; bustCooldowns: number; greenCooldowns: number; spinsSkippedByCooldown: number; winsAfterCooldown: number; lossesAfterCooldown: number }
   balanceCurve: number[]
   steps: SimStep[]
+  flatBetProfit: number
+  peakProfitBreakdown: { low: number; medium: number; high: number; unresolved: number }
 }
 
 function getStreakAtEnd(nums: number[]): { length: number; color: string } {
@@ -138,7 +140,7 @@ function simulate(numbers: number[], options?: { cooldownAfterLoss?: number; coo
   const steps: SimStep[] = []
   const balanceCurve: number[] = [0]
 
-  resetRecoveryHistory()
+  resetFullEngine()  // Full reset (accuracyTracker + recovery) for deterministic results
 
   for (let i = MIN_HISTORY; i < numbers.length; i++) {
     const history = numbers.slice(0, i)
@@ -294,7 +296,7 @@ function simulate(numbers: number[], options?: { cooldownAfterLoss?: number; coo
         isCorrect: false,
         martingaleStep: martingaleStep,
         martingaleBet: currentBet,
-        runningNet: -currentBet,
+        runningNet: runningNet - currentBet,
         balance: runningNet - currentBet,
         peakHeight: currentPeakHeight,
         cooldownRemaining: cooldownRemaining,
@@ -439,6 +441,28 @@ function simulate(numbers: number[], options?: { cooldownAfterLoss?: number; coo
 
   const accuracy = totalBetted > 0 ? (correct / totalBetted) * 100 : 0
 
+  // Flat-bet profit: every signal win = +1 unit, every signal loss/green = -1 unit (no martingale)
+  // This directly answers "X wins × $5 = $?" without martingale/cooldown complexity
+  const flatBetProfit = correct - incorrect - greenCount
+
+  // Peak-based profit breakdown: profit contribution by peak category
+  // Low peaks (1-3) are the ones users typically see and count in the calculator
+  let peakIdx = 0
+  const resolvedPeaks = peaks.filter((_, idx) => idx < correct) // Only resolved peaks (wins)
+  let lowProfit = 0
+  let mediumProfit = 0
+  let highProfit = 0
+  for (const peakH of resolvedPeaks) {
+    const peakLosses = peakH - 1 // losses before the win
+    // With martingale, losses cost more than flat, but for transparency we show flat-equivalent
+    const flatCycleProfit = 1 - peakLosses // +1 for win, -1 for each loss in the peak
+    if (peakH <= 3) lowProfit += flatCycleProfit
+    else if (peakH <= 6) mediumProfit += flatCycleProfit
+    else highProfit += flatCycleProfit
+  }
+  // Unresolved peak (if any) represents pure losses
+  const unresolvedLosses = currentPeakHeight > 0 ? currentPeakHeight : 0
+
   return {
     totalNumbers: numbers.length,
     totalPredictions,
@@ -465,6 +489,8 @@ function simulate(numbers: number[], options?: { cooldownAfterLoss?: number; coo
     cooldownStats,
     balanceCurve,
     steps,
+    flatBetProfit,
+    peakProfitBreakdown: { low: lowProfit, medium: mediumProfit, high: highProfit, unresolved: -unresolvedLosses },
   }
 }
 

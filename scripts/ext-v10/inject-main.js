@@ -15,15 +15,7 @@
 
   var SERVER = 'https://rollerwin3.onrender.com';
 
-  // v10.0: 4 mesas autorizadas
-  var ALLOWED_TABLES = [
-    'betfury.com/es/casino/games/roulette-azure-by-pragmatic-play',
-    'betfury.com/es/casino/games/roulette-live-by-evolution',
-    'casino.pinnacle.com/es/live-casino/games/roulette-azure/',
-    'casino.pinnacle.com/es/live-casino/games/european-roulette/'
-  ];
-
-  // Verificar si la TAB actual (parent) es una pagina de ruleta autorizada
+  // v10.1: Filtro de dominio autorizado (cualquier mesa de ruleta)
   function isAllowedTable() {
     try {
       var tabUrl = (window.top !== window.self)
@@ -47,7 +39,7 @@
 
   // Si NO es una mesa autorizada y NO es iframe, no hacer nada
   if (!isAllowedTable() && window.top === window.self) {
-    console.log('[RollerWin] v10.0: Tab no es mesa autorizada, omitiendo');
+    console.log('[RollerWin] v10.1: Tab no es mesa autorizada, omitiendo');
     return;
   }
 
@@ -214,24 +206,8 @@
     var _lastCaptureTime = Date.now();
     var _lastKeepAliveResponse = 'pending';
 
-    // v10.0: URL de la mesa actual para recovery
-    var ROULETTE_URL = 'https://betfury.com/es/casino/games/roulette-live-by-evolution';
-    var _isPinnacle = (location.hostname || '').indexOf('pinnacle') >= 0;
-    if (_isPinnacle) {
-      ROULETTE_URL = 'https://casino.pinnacle.com/es/live-casino/games/european-roulette/';
-    }
-
-    // Determinar mesa actual segun la URL
-    var _currentUrl = location.href;
-    for (var _t = 0; _t < ALLOWED_TABLES.length; _t++) {
-      if (_currentUrl.indexOf(ALLOWED_TABLES[_t]) >= 0) {
-        ROULETTE_URL = 'https://' + ALLOWED_TABLES[_t];
-        if (ROULETTE_URL.charAt(ROULETTE_URL.length - 1) !== '/' && ALLOWED_TABLES[_t].charAt(ALLOWED_TABLES[_t].length - 1) === '/') {
-          ROULETTE_URL += '/';
-        }
-        break;
-      }
-    }
+    // v10.1: URL de la mesa actual (dinamica, no hardcodeada)
+    var ROULETTE_URL = location.href;
 
     function isGamePage(url) {
       if (!url) url = location.href;
@@ -481,16 +457,8 @@
 
       setTimeout(function() {
         var targetUrl = ROULETTE_URL;
-        if (_gameUrl) {
-          // Verificar que _gameUrl es una mesa autorizada
-          var gameUrlAllowed = false;
-          for (var i = 0; i < ALLOWED_TABLES.length; i++) {
-            if (_gameUrl.indexOf(ALLOWED_TABLES[i]) >= 0) {
-              gameUrlAllowed = true;
-              break;
-            }
-          }
-          if (gameUrlAllowed) targetUrl = _gameUrl;
+        if (_gameUrl && isAllowedTable()) {
+          targetUrl = _gameUrl;
         }
         console.log('[RollerWin] Navegando a mesa (same tab): ' + targetUrl);
         location.replace(targetUrl);
@@ -645,7 +613,7 @@
       } catch(e) {}
     }, 10000);
 
-    console.log('[RollerWin] v10.0 PARENT activo | Mesa:', ROULETTE_URL, '| Recovers:', _recoverCount);
+    console.log('[RollerWin] v10.1 PARENT activo | Mesa:', ROULETTE_URL, '| Recovers:', _recoverCount);
 
   // ══════════════════════════════════════
   // ============ IFRAME (donde se detectan los numeros) ======

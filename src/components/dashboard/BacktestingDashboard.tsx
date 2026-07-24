@@ -42,6 +42,8 @@ interface SimResult {
   steps: any[]
   totalSteps: number
   parsedNumbers: number
+  flatBetProfit: number
+  peakProfitBreakdown: { low: number; medium: number; high: number; unresolved: number }
 }
 
 const SAMPLE_SEQUENCES = [
@@ -426,6 +428,75 @@ export function BacktestingDashboard() {
                           {result.martingale.bustCount}
                         </p>
                         <p className="text-xs text-zinc-600">Pico max: {result.maxPeak}</p>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  {/* Coherencia: Flat vs Martingala + Peak Profit Breakdown */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <Card className="bg-zinc-900 border-zinc-800">
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-sm font-medium flex items-center gap-2">
+                          <svg className="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                          Flat vs Martingala
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-zinc-400">Ganancia Flat (1u/apuesta)</span>
+                          <span className={`font-bold font-mono ${(result.flatBetProfit ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            {(result.flatBetProfit ?? 0) >= 0 ? '+' : ''}{result.flatBetProfit ?? 0}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-zinc-400">Neto Martingala</span>
+                          <span className={`font-bold font-mono ${result.martingale.netResult >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            {result.martingale.netResult >= 0 ? '+' : ''}{result.martingale.netResult}
+                          </span>
+                        </div>
+                        <div className="border-t border-zinc-800 pt-2 text-xs text-zinc-500 space-y-1">
+                          <p>Flat = {result.correct}W - {result.incorrect}L - {result.greenCount}G = {result.correct} - {result.incorrect + result.greenCount}</p>
+                          <p>Martingala incluye perdidas progresivas y busts ({result.martingale.bustCount})</p>
+                          <p className="text-amber-400/70">A $5/unidad: Flat = ${(result.flatBetProfit ?? 0) * 5} USD</p>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <Card className="bg-zinc-900 border-zinc-800">
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-sm font-medium flex items-center gap-2">
+                          <svg className="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+                          Ganancia por Nivel de Pico
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-green-400">Picos Bajos (1-3): {result.peakStats.low}</span>
+                          <span className={`font-bold font-mono ${(result.peakProfitBreakdown?.low ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            {(result.peakProfitBreakdown?.low ?? 0) >= 0 ? '+' : ''}{result.peakProfitBreakdown?.low ?? 0}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-yellow-400">Picos Medios (4-6): {result.peakStats.medium}</span>
+                          <span className={`font-bold font-mono ${(result.peakProfitBreakdown?.medium ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            {(result.peakProfitBreakdown?.medium ?? 0) >= 0 ? '+' : ''}{result.peakProfitBreakdown?.medium ?? 0}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-red-400">Picos Altos (7+): {result.peakStats.high}</span>
+                          <span className={`font-bold font-mono ${(result.peakProfitBreakdown?.high ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            {(result.peakProfitBreakdown?.high ?? 0) >= 0 ? '+' : ''}{result.peakProfitBreakdown?.high ?? 0}
+                          </span>
+                        </div>
+                        {(result.peakProfitBreakdown?.unresolved ?? 0) !== 0 && (
+                          <div className="flex justify-between items-center text-sm">
+                            <span className="text-zinc-500">Sin resolver:</span>
+                            <span className="font-bold font-mono text-zinc-400">{result.peakProfitBreakdown?.unresolved ?? 0}</span>
+                          </div>
+                        )}
+                        <div className="border-t border-zinc-800 pt-2 text-xs text-zinc-500">
+                          <p>Cada pico de altura H tiene H-1 perdidas + 1 ganancia (flat)</p>
+                        </div>
                       </CardContent>
                     </Card>
                   </div>

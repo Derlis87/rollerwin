@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "RollerWin Capture",
-  "version": "10.0",
-  "description": "Captura numeros de ruleta en Betfury y Pinnacle — 4 mesas autorizadas",
+  "version": "10.1",
+  "description": "Captura numeros de ruleta en Betfury y Pinnacle — cualquier mesa de ruleta",
   "permissions": ["scripting", "activeTab", "storage", "webNavigation", "tabs"],
   "host_permissions": ["<all_urls>"],
   "background": {
