@@ -287,6 +287,7 @@ export function DashboardLive() {
   const [advBtAnalyzed, setAdvBtAnalyzed] = useState<{ total: number; red: number; black: number; green: number } | null>(null)
   const [advBtRunning, setAdvBtRunning] = useState(false)
   const [advBtResults, setAdvBtResults] = useState<AdvBacktestResults | null>(null)
+  const [advBtIgnoreSkips, setAdvBtIgnoreSkips] = useState(false)
 
   // Live smart prediction
   const [smartPrediction, setSmartPrediction] = useState<SmartPrediction | null>(null)
@@ -1525,8 +1526,8 @@ export function DashboardLive() {
           const pred = generateSmartPrediction(history, 'color' as BetTypeV4)
           if (!pred.bestValue) continue
 
-          // 3. Check engine SKIP ZONE
-          if (pred.shouldSkip === true) {
+          // 3. Check engine SKIP ZONE (unless user chose to ignore skips)
+          if (pred.shouldSkip === true && !advBtIgnoreSkips) {
             totalSkips++
             // Engine SKIP: resets martingala, does NOT advance peak, does NOT count as signal
             martingalaStep = 0
@@ -1741,7 +1742,7 @@ export function DashboardLive() {
         setAdvBtRunning(false)
       }
     }, 50)
-  }, [advBtSequence, parseAdvBtSequence])
+  }, [advBtSequence, advBtIgnoreSkips, parseAdvBtSequence])
 
   // Get number button style
   const getNumberButtonStyle = (num: number) => {
@@ -2759,6 +2760,22 @@ export function DashboardLive() {
                     <Copy className="w-3.5 h-3.5 mr-1.5" />
                     Usar números importados ({numbers.length} números)
                   </Button>
+                )}
+
+                {/* Toggle: Ignorar Skips */}
+                <div className="flex items-center justify-between bg-zinc-800/50 rounded-lg px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <Zap className="w-3.5 h-3.5 text-zinc-400" />
+                    <span className="text-xs text-zinc-300">Ignorar Skips del motor</span>
+                  </div>
+                  <Switch
+                    checked={advBtIgnoreSkips}
+                    onCheckedChange={setAdvBtIgnoreSkips}
+                    className="data-[state=checked]:bg-amber-500"
+                  />
+                </div>
+                {advBtIgnoreSkips && (
+                  <p className="text-[10px] text-amber-400/70 -mt-2">Cuando activo, el motor apuesta en TODAS las señales sin saltar. Útil para verificar coherencia con datos en vivo.</p>
                 )}
 
                 {/* Action buttons */}
