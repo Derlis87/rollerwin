@@ -1,0 +1,1002 @@
+     1→     1→'use client'
+     2→     2→
+     3→     3→import { useState, useCallback, useRef } from 'react'
+     4→     4→import { useAppStore } from '@/store/app-store'
+     5→     5→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+     6→     6→import { Button } from '@/components/ui/button'
+     7→     7→import { Badge } from '@/components/ui/badge'
+     8→     8→import { Textarea } from '@/components/ui/textarea'
+     9→     9→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    10→    10→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    11→    11→import { Progress } from '@/components/ui/progress'
+    12→    12→import {
+    13→    13→  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
+    14→    14→  ResponsiveContainer, Cell, PieChart, Pie, Legend, AreaChart, Area
+    15→    15→} from 'recharts'
+    16→    16→
+    17→    17→interface SimResult {
+    18→    18→  totalNumbers: number
+    19→    19→  totalPredictions: number
+    20→    20→  skipped: number
+    21→    21→  skippedByEngine: number
+    22→    22→  skippedByCooldown: number
+    23→    23→  betted: number
+    24→    24→  correct: number
+    25→    25→  incorrect: number
+    26→    26→  accuracy: number
+    27→    27→  peaks: number[]
+    28→    28→  peakStats: { low: number; medium: number; high: number }
+    29→    29→  maxPeak: number
+    30→    30→  normalMode: { predictions: number; correct: number; incorrect: number; accuracy: number; skipped: number }
+    31→    31→  softMode: { predictions: number; correct: number; incorrect: number; accuracy: number; skipped: number }
+    32→    32→  ultraMode: { predictions: number; correct: number; incorrect: number; accuracy: number; skipped: number }
+    33→    33→  skipZone: { streak3: number; streak4: number; streak5: number; streak6: number }
+    34→    34→  streakBreakdown: Record<string, { total: number; correct: number; accuracy: number; skipped: number }>
+    35→    35→  martingale: { totalBet: number; totalWin: number; netResult: number; roi: number; maxConsecutiveLoss: number; lossStreaks: Record<string, number>; bustCount: number }
+    36→    36→  greenCount: number
+    37→    37→  recoveryFlips: number
+    38→    38→  recoveryCorrectAfterFlip: number
+    39→    39→  recoveryIncorrectAfterFlip: number
+    40→    40→  cooldownStats: { lossCooldowns: number; bustCooldowns: number; greenCooldowns: number; spinsSkippedByCooldown: number; winsAfterCooldown: number; lossesAfterCooldown: number }
+    41→    41→  balanceCurve: number[]
+    42→    42→  steps: any[]
+    43→    43→  totalSteps: number
+    44→    44→  parsedNumbers: number
+    45→    45→}
+    46→    46→
+    47→    47→const SAMPLE_SEQUENCES = [
+    48→    48→  { name: 'Secuencia Demo (200 nums)', data: '' },
+    49→    49→]
+    50→    50→
+    51→    51→function generateDemoSequence(): string {
+    52→    52→  const reds = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]
+    53→    53→  const blacks = [2, 4, 6, 8, 10, 11, 13, 15, 17, 20, 22, 24, 26, 28, 29, 31, 33, 35]
+    54→    54→  const all = [...reds, ...blacks]
+    55→    55→  const nums: number[] = []
+    56→    56→  for (let i = 0; i < 200; i++) {
+    57→    57→    const r = Math.random()
+    58→    58→    if (r < 0.027) nums.push(0)
+    59→    59→    else nums.push(all[Math.floor(Math.random() * all.length)])
+    60→    60→  }
+    61→    61→  return nums.join(', ')
+    62→    62→}
+    63→    63→
+    64→    64→function getPeakColor(height: number): string {
+    65→    65→  if (height <= 3) return '#22c55e'
+    66→    66→  if (height <= 6) return '#eab308'
+    67→    67→  return '#ef4444'
+    68→    68→}
+    69→    69→
+    70→    70→function getModeLabel(mode: string): string {
+    71→    71→  switch (mode) {
+    72→    72→    case 'normal': return 'NORMAL'
+    73→    73→    case 'soft': return 'SOFT'
+    74→    74→    case 'skipzone': return 'SKIP ZONE'
+    75→    75→    case 'ultra': return 'ULTRA'
+    76→    76→    default: return mode
+    77→    77→  }
+    78→    78→}
+    79→    79→
+    80→    80→function getModeColor(mode: string): string {
+    81→    81→  switch (mode) {
+    82→    82→    case 'normal': return 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+    83→    83→    case 'soft': return 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+    84→    84→    case 'skipzone': return 'bg-zinc-500/20 text-zinc-400 border-zinc-500/30'
+    85→    85→    case 'ultra': return 'bg-red-500/20 text-red-400 border-red-500/30'
+    86→    86→    default: return 'bg-zinc-500/20 text-zinc-400 border-zinc-500/30'
+    87→    87→  }
+    88→    88→}
+    89→    89→
+    90→    90→export function BacktestingDashboard() {
+    91→    91→  const { setCurrentView, isAuthenticated } = useAppStore()
+    92→    92→  const [sequence, setSequence] = useState('')
+    93→    93→  const [isRunning, setIsRunning] = useState(false)
+    94→    94→  const [result, setResult] = useState<SimResult | null>(null)
+    95→    95→  const [error, setError] = useState<string | null>(null)
+    96→    96→  const [activeTab, setActiveTab] = useState('resumen')
+    97→    97→  const [cooldownLoss, setCooldownLoss] = useState('1')
+    98→    98→  const [cooldownBust, setCooldownBust] = useState('3')
+    99→    99→  const [cooldownGreen, setCooldownGreen] = useState('1')
+   100→   100→  const [strategy, setStrategy] = useState('1-2-4')
+   101→   101→  const fileInputRef = useRef<HTMLInputElement>(null)
+   102→   102→
+   103→   103→  const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+   104→   104→    const file = e.target.files?.[0]
+   105→   105→    if (!file) return
+   106→   106→    const reader = new FileReader()
+   107→   107→    reader.onload = (ev) => {
+   108→   108→      const text = ev.target?.result as string
+   109→   109→      setSequence(text)
+   110→   110→    }
+   111→   111→    reader.readAsText(file)
+   112→   112→  }, [])
+   113→   113→
+   114→   114→  const handlePaste = useCallback(async () => {
+   115→   115→    try {
+   116→   116→      const text = await navigator.clipboard.readText()
+   117→   117→      setSequence(text)
+   118→   118→    } catch {
+   119→   119→      setError('No se pudo acceder al portapapeles. Pega los numeros manualmente.')
+   120→   120→    }
+   121→   121→  }, [])
+   122→   122→
+   123→   123→  const runBacktest = useCallback(async () => {
+   124→   124→    if (!sequence.trim()) {
+   125→   125→      setError('Pega o ingresa una secuencia de numeros de ruleta primero.')
+   126→   126→      return
+   127→   127→    }
+   128→   128→
+   129→   129→    setIsRunning(true)
+   130→   130→    setError(null)
+   131→   131→    setResult(null)
+   132→   132→
+   133→   133→    try {
+   134→   134→      const bets = strategy === '1-2-4' ? [1, 2, 4] : strategy === '1-3-9' ? [1, 3, 9] : strategy === '1-2' ? [1, 2] : [1, 2, 4, 8]
+   135→   135→
+   136→   136→      const response = await fetch('/api/backtest', {
+   137→   137→        method: 'POST',
+   138→   138→        headers: { 'Content-Type': 'application/json' },
+   139→   139→        body: JSON.stringify({
+   140→   140→          sequence,
+   141→   141→          options: {
+   142→   142→            cooldownAfterLoss: parseInt(cooldownLoss),
+   143→   143→            cooldownAfterBust: parseInt(cooldownBust),
+   144→   144→            cooldownAfterGreen: parseInt(cooldownGreen),
+   145→   145→            martingaleBets: bets,
+   146→   146→          },
+   147→   147→        }),
+   148→   148→      })
+   149→   149→
+   150→   150→      const data = await response.json()
+   151→   151→
+   152→   152→      if (!response.ok) {
+   153→   153→        setError(data.error || 'Error en la simulacion')
+   154→   154→        return
+   155→   155→      }
+   156→   156→
+   157→   157→      setResult(data)
+   158→   158→      setActiveTab('resumen')
+   159→   159→    } catch (err: any) {
+   160→   160→      setError(err.message || 'Error de conexion con el servidor')
+   161→   161→    } finally {
+   162→   162→      setIsRunning(false)
+   163→   163→    }
+   164→   164→  }, [sequence, cooldownLoss, cooldownBust, cooldownGreen, strategy])
+   165→   165→
+   166→   166→  const loadDemo = useCallback(() => {
+   167→   167→    setSequence(generateDemoSequence())
+   168→   168→  }, [])
+   169→   169→
+   170→   170→  if (!isAuthenticated) {
+   171→   171→    return (
+   172→   172→      <div className="min-h-screen bg-zinc-950 flex items-center justify-center">
+   173→   173→        <div className="text-center">
+   174→   174→          <h2 className="text-2xl font-bold text-white mb-4">Acceso Requerido</h2>
+   175→   175→          <p className="text-zinc-400 mb-6">Inicia sesion para acceder al backtesting avanzado</p>
+   176→   176→          <Button onClick={() => setCurrentView('landing')} className="bg-amber-600 hover:bg-amber-700">
+   177→   177→            Iniciar Sesion
+   178→   178→          </Button>
+   179→   179→        </div>
+   180→   180→      </div>
+   181→   181→    )
+   182→   182→  }
+   183→   183→
+   184→   184→  // Prepare chart data
+   185→   185→  const balanceData = result?.balanceCurve?.map((val, i) => ({ index: i, balance: val })) || []
+   186→   186→  const peakHistogram: { peak: number; count: number; color: string }[] = []
+   187→   187→  if (result?.peaks) {
+   188→   188→    const hist: Record<number, number> = {}
+   189→   189→    result.peaks.forEach(p => { hist[p] = (hist[p] || 0) + 1 })
+   190→   190→    for (let i = 1; i <= Math.max(result.maxPeak, 10); i++) {
+   191→   191→      if (hist[i]) {
+   192→   192→        peakHistogram.push({ peak: i, count: hist[i], color: getPeakColor(i) })
+   193→   193→      }
+   194→   194→    }
+   195→   195→  }
+   196→   196→
+   197→   197→  const modeData = result ? [
+   198→   198→    { name: 'NORMAL', predictions: result.normalMode.predictions, correct: result.normalMode.correct, incorrect: result.normalMode.incorrect, skipped: result.normalMode.skipped, accuracy: result.normalMode.accuracy, fill: '#3b82f6' },
+   199→   199→    { name: 'SOFT', predictions: result.softMode.predictions, correct: result.softMode.correct, incorrect: result.softMode.incorrect, skipped: result.softMode.skipped, accuracy: result.softMode.accuracy, fill: '#f59e0b' },
+   200→   200→    { name: 'ULTRA', predictions: result.ultraMode.predictions, correct: result.ultraMode.correct, incorrect: result.ultraMode.incorrect, skipped: result.ultraMode.skipped, accuracy: result.ultraMode.accuracy, fill: '#ef4444' },
+   201→   201→  ] : []
+   202→   202→
+   203→   203→  const peakPieData = result ? [
+   204→   204→    { name: 'Bajos (1-3)', value: result.peakStats.low, fill: '#22c55e' },
+   205→   205→    { name: 'Medios (4-6)', value: result.peakStats.medium, fill: '#eab308' },
+   206→   206→    { name: 'Altos (7+)', value: result.peakStats.high, fill: '#ef4444' },
+   207→   207→  ] : []
+   208→   208→
+   209→   209→  const skipData = result ? [
+   210→   210→    { name: 'Motor', value: result.skippedByEngine, fill: '#6366f1' },
+   211→   211→    { name: 'Cooldown', value: result.skippedByCooldown, fill: '#f59e0b' },
+   212→   212→  ] : []
+   213→   213→
+   214→   214→  const streakData = result ? Object.entries(result.streakBreakdown)
+   215→   215→    .map(([key, val]) => ({
+   216→   216→      streak: parseInt(key),
+   217→   217→      total: val.total,
+   218→   218→      correct: val.correct,
+   219→   219→      skipped: val.skipped,
+   220→   220→      accuracy: val.accuracy,
+   221→   221→    }))
+   222→   222→    .sort((a, b) => a.streak - b.streak) : []
+   223→   223→
+   224→   224→  const lossStreakData = result ? Object.entries(result.martingale.lossStreaks)
+   225→   225→    .map(([len, count]) => ({
+   226→   226→      length: parseInt(len),
+   227→   227→      count,
+   228→   228→      color: parseInt(len) <= 3 ? '#22c55e' : '#ef4444',
+   229→   229→    }))
+   230→   230→    .sort((a, b) => a.length - b.length) : []
+   231→   231→
+   232→   232→  return (
+   233→   233→    <div className="min-h-screen bg-zinc-950 text-white">
+   234→   234→      {/* Header */}
+   235→   235→      <div className="border-b border-zinc-800 bg-zinc-900/80 backdrop-blur-sm sticky top-0 z-50">
+   236→   236→        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+   237→   237→          <div className="flex items-center gap-4">
+   238→   238→            <button onClick={() => setCurrentView('dashboard-live')} className="text-zinc-400 hover:text-white transition">
+   239→   239→              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+   240→   240→            </button>
+   241→   241→            <div>
+   242→   242→              <h1 className="text-lg font-bold">Backtesting Avanzado V6.0</h1>
+   243→   243→              <p className="text-xs text-zinc-500">Motor Ultra-Selective + Cooldown System</p>
+   244→   244→            </div>
+   245→   245→          </div>
+   246→   246→          <div className="flex items-center gap-2">
+   247→   247→            <Badge variant="outline" className="border-amber-500/50 text-amber-400">V6.0</Badge>
+   248→   248→          </div>
+   249→   249→        </div>
+   250→   250→      </div>
+   251→   251→
+   252→   252→      <div className="max-w-7xl mx-auto px-4 py-6">
+   253→   253→        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+   254→   254→          {/* Left Column — Input */}
+   255→   255→          <div className="lg:col-span-1 space-y-4">
+   256→   256→            <Card className="bg-zinc-900 border-zinc-800">
+   257→   257→              <CardHeader className="pb-3">
+   258→   258→                <CardTitle className="text-sm font-medium">Secuencia de Numeros</CardTitle>
+   259→   259→              </CardHeader>
+   260→   260→              <CardContent className="space-y-3">
+   261→   261→                <Textarea
+   262→   262→                  value={sequence}
+   263→   263→                  onChange={(e) => setSequence(e.target.value)}
+   264→   264→                  placeholder="Pega aqui los numeros de ruleta separados por comas, espacios o saltos de linea...&#10;&#10;Ejemplo: 7, 14, 32, 0, 5, 19, 8, 23, 1, 36"
+   265→   265→                  className="min-h-[200px] bg-zinc-800 border-zinc-700 text-sm font-mono text-zinc-300 placeholder:text-zinc-600 resize-y"
+   266→   266→                />
+   267→   267→                <div className="flex gap-2">
+   268→   268→                  <Button variant="outline" size="sm" onClick={handlePaste} className="border-zinc-700 text-zinc-400 hover:text-white">
+   269→   269→                    Portapapeles
+   270→   270→                  </Button>
+   271→   271→                  <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} className="border-zinc-700 text-zinc-400 hover:text-white">
+   272→   272→                    Archivo
+   273→   273→                  </Button>
+   274→   274→                  <Button variant="outline" size="sm" onClick={loadDemo} className="border-zinc-700 text-zinc-400 hover:text-white">
+   275→   275→                    Demo
+   276→   276→                  </Button>
+   277→   277→                  <input ref={fileInputRef} type="file" accept=".txt,.csv,.text" onChange={handleFileUpload} className="hidden" />
+   278→   278→                </div>
+   279→   279→                {sequence && (
+   280→   280→                  <p className="text-xs text-zinc-500">
+   281→   281→                    {sequence.split(/[,\s;\n\r|]+/).filter(s => s.trim()).length} numeros detectados
+   282→   282→                  </p>
+   283→   283→                )}
+   284→   284→              </CardContent>
+   285→   285→            </Card>
+   286→   286→
+   287→   287→            <Card className="bg-zinc-900 border-zinc-800">
+   288→   288→              <CardHeader className="pb-3">
+   289→   289→                <CardTitle className="text-sm font-medium">Configuracion</CardTitle>
+   290→   290→              </CardHeader>
+   291→   291→              <CardContent className="space-y-3">
+   292→   292→                <div className="space-y-1.5">
+   293→   293→                  <label className="text-xs text-zinc-400">Estrategia Martingala</label>
+   294→   294→                  <Select value={strategy} onValueChange={setStrategy}>
+   295→   295→                    <SelectTrigger className="bg-zinc-800 border-zinc-700 text-sm"><SelectValue /></SelectTrigger>
+   296→   296→                    <SelectContent>
+   297→   297→                      <SelectItem value="1-2">1-2 (Conservadora)</SelectItem>
+   298→   298→                      <SelectItem value="1-2-4">1-2-4 (Estandar)</SelectItem>
+   299→   299→                      <SelectItem value="1-3-9">1-3-9 (Agresiva)</SelectItem>
+   300→   300→                      <SelectItem value="1-2-4-8">1-2-4-8 (Muy Agresiva)</SelectItem>
+   301→   301→                    </SelectContent>
+   302→   302→                  </Select>
+   303→   303→                </div>
+   304→   304→                <div className="grid grid-cols-3 gap-2">
+   305→   305→                  <div className="space-y-1.5">
+   306→   306→                    <label className="text-xs text-zinc-400">Cooldown Perdida</label>
+   307→   307→                    <Select value={cooldownLoss} onValueChange={setCooldownLoss}>
+   308→   308→                      <SelectTrigger className="bg-zinc-800 border-zinc-700 text-sm"><SelectValue /></SelectTrigger>
+   309→   309→                      <SelectContent>
+   310→   310→                        <SelectItem value="0">0</SelectItem>
+   311→   311→                        <SelectItem value="1">1</SelectItem>
+   312→   312→                        <SelectItem value="2">2</SelectItem>
+   313→   313→                      </SelectContent>
+   314→   314→                    </Select>
+   315→   315→                  </div>
+   316→   316→                  <div className="space-y-1.5">
+   317→   317→                    <label className="text-xs text-zinc-400">Cooldown Bust</label>
+   318→   318→                    <Select value={cooldownBust} onValueChange={setCooldownBust}>
+   319→   319→                      <SelectTrigger className="bg-zinc-800 border-zinc-700 text-sm"><SelectValue /></SelectTrigger>
+   320→   320→                      <SelectContent>
+   321→   321→                        <SelectItem value="0">0</SelectItem>
+   322→   322→                        <SelectItem value="2">2</SelectItem>
+   323→   323→                        <SelectItem value="3">3</SelectItem>
+   324→   324→                        <SelectItem value="5">5</SelectItem>
+   325→   325→                      </SelectContent>
+   326→   326→                    </Select>
+   327→   327→                  </div>
+   328→   328→                  <div className="space-y-1.5">
+   329→   329→                    <label className="text-xs text-zinc-400">Cooldown Verde</label>
+   330→   330→                    <Select value={cooldownGreen} onValueChange={setCooldownGreen}>
+   331→   331→                      <SelectTrigger className="bg-zinc-800 border-zinc-700 text-sm"><SelectValue /></SelectTrigger>
+   332→   332→                      <SelectContent>
+   333→   333→                        <SelectItem value="0">0</SelectItem>
+   334→   334→                        <SelectItem value="1">1</SelectItem>
+   335→   335→                        <SelectItem value="2">2</SelectItem>
+   336→   336→                      </SelectContent>
+   337→   337→                    </Select>
+   338→   338→                  </div>
+   339→   339→                </div>
+   340→   340→
+   341→   341→                <Button
+   342→   342→                  onClick={runBacktest}
+   343→   343→                  disabled={isRunning || !sequence.trim()}
+   344→   344→                  className="w-full bg-amber-600 hover:bg-amber-700 text-white font-medium"
+   345→   345→                >
+   346→   346→                  {isRunning ? (
+   347→   347→                    <span className="flex items-center gap-2">
+   348→   348→                      <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+   349→   349→                      Simulando...
+   350→   350→                    </span>
+   351→   351→                  ) : (
+   352→   352→                    'Ejecutar Backtesting'
+   353→   353→                  )}
+   354→   354→                </Button>
+   355→   355→              </CardContent>
+   356→   356→            </Card>
+   357→   357→
+   358→   358→            {error && (
+   359→   359→              <Card className="bg-red-950/50 border-red-800">
+   360→   360→                <CardContent className="py-3">
+   361→   361→                  <p className="text-sm text-red-400">{error}</p>
+   362→   362→                </CardContent>
+   363→   363→              </Card>
+   364→   364→            )}
+   365→   365→          </div>
+   366→   366→
+   367→   367→          {/* Right Column — Results */}
+   368→   368→          <div className="lg:col-span-2">
+   369→   369→            {!result ? (
+   370→   370→              <Card className="bg-zinc-900 border-zinc-800 h-full min-h-[400px] flex items-center justify-center">
+   371→   371→                <div className="text-center space-y-4 px-8">
+   372→   372→                  <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center mx-auto">
+   373→   373→                    <svg className="w-8 h-8 text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+   374→   374→                  </div>
+   375→   375→                  <h3 className="text-lg font-medium text-zinc-400">Sin Resultados</h3>
+   376→   376→                  <p className="text-sm text-zinc-600 max-w-sm">
+   377→   377→                    Ingresa una secuencia de numeros de ruleta y configura los parametros para ejecutar el backtesting del motor V6.0
+   378→   378→                  </p>
+   379→   379→                </div>
+   380→   380→              </Card>
+   381→   381→            ) : (
+   382→   382→              <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+   383→   383→                <TabsList className="bg-zinc-900 border border-zinc-800 p-1 w-full flex">
+   384→   384→                  <TabsTrigger value="resumen" className="flex-1 text-xs data-[state=active]:bg-amber-600 data-[state=active]:text-white">Resumen</TabsTrigger>
+   385→   385→                  <TabsTrigger value="graficos" className="flex-1 text-xs data-[state=active]:bg-amber-600 data-[state=active]:text-white">Graficos</TabsTrigger>
+   386→   386→                  <TabsTrigger value="modos" className="flex-1 text-xs data-[state=active]:bg-amber-600 data-[state=active]:text-white">Modos</TabsTrigger>
+   387→   387→                  <TabsTrigger value="martingala" className="flex-1 text-xs data-[state=active]:bg-amber-600 data-[state=active]:text-white">Martingala</TabsTrigger>
+   388→   388→                  <TabsTrigger value="detalle" className="flex-1 text-xs data-[state=active]:bg-amber-600 data-[state=active]:text-white">Detalle</TabsTrigger>
+   389→   389→                </TabsList>
+   390→   390→
+   391→   391→                {/* RESUMEN TAB */}
+   392→   392→                <TabsContent value="resumen" className="space-y-4">
+   393→   393→                  {/* KPI Cards */}
+   394→   394→                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+   395→   395→                    <Card className="bg-zinc-900 border-zinc-800">
+   396→   396→                      <CardContent className="py-3 px-4">
+   397→   397→                        <p className="text-xs text-zinc-500 mb-1">Accuracy</p>
+   398→   398→                        <p className={`text-2xl font-bold ${result.accuracy >= 55 ? 'text-green-400' : result.accuracy >= 50 ? 'text-amber-400' : 'text-red-400'}`}>
+   399→   399→                          {result.accuracy.toFixed(1)}%
+   400→   400→                        </p>
+   401→   401→                        <p className="text-xs text-zinc-600">{result.correct}W / {result.incorrect}L</p>
+   402→   402→                      </CardContent>
+   403→   403→                    </Card>
+   404→   404→                    <Card className="bg-zinc-900 border-zinc-800">
+   405→   405→                      <CardContent className="py-3 px-4">
+   406→   406→                        <p className="text-xs text-zinc-500 mb-1">Resultado Neto</p>
+   407→   407→                        <p className={`text-2xl font-bold ${result.martingale.netResult >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+   408→   408→                          {result.martingale.netResult >= 0 ? '+' : ''}{result.martingale.netResult}
+   409→   409→                        </p>
+   410→   410→                        <p className="text-xs text-zinc-600">{result.martingale.roi.toFixed(2)}% ROI</p>
+   411→   411→                      </CardContent>
+   412→   412→                    </Card>
+   413→   413→                    <Card className="bg-zinc-900 border-zinc-800">
+   414→   414→                      <CardContent className="py-3 px-4">
+   415→   415→                        <p className="text-xs text-zinc-500 mb-1">Selectividad</p>
+   416→   416→                        <p className="text-2xl font-bold text-blue-400">
+   417→   417→                          {(result.skipped / result.totalPredictions * 100).toFixed(1)}%
+   418→   418→                        </p>
+   419→   419→                        <p className="text-xs text-zinc-600">{result.betted} bet / {result.skipped} skip</p>
+   420→   420→                      </CardContent>
+   421→   421→                    </Card>
+   422→   422→                    <Card className="bg-zinc-900 border-zinc-800">
+   423→   423→                      <CardContent className="py-3 px-4">
+   424→   424→                        <p className="text-xs text-zinc-500 mb-1">Busts</p>
+   425→   425→                        <p className={`text-2xl font-bold ${result.martingale.bustCount === 0 ? 'text-green-400' : 'text-red-400'}`}>
+   426→   426→                          {result.martingale.bustCount}
+   427→   427→                        </p>
+   428→   428→                        <p className="text-xs text-zinc-600">Pico max: {result.maxPeak}</p>
+   429→   429→                      </CardContent>
+   430→   430→                    </Card>
+   431→   431→                  </div>
+   432→   432→
+   433→   433→                  {/* Balance Curve */}
+   434→   434→                  <Card className="bg-zinc-900 border-zinc-800">
+   435→   435→                    <CardHeader className="pb-2">
+   436→   436→                      <CardTitle className="text-sm font-medium">Curva de Balance</CardTitle>
+   437→   437→                    </CardHeader>
+   438→   438→                    <CardContent>
+   439→   439→                      <div className="h-[250px]">
+   440→   440→                        <ResponsiveContainer width="100%" height="100%">
+   441→   441→                          <AreaChart data={balanceData}>
+   442→   442→                            <defs>
+   443→   443→                              <linearGradient id="balanceGradient" x1="0" y1="0" x2="0" y2="1">
+   444→   444→                                <stop offset="5%" stopColor={result.martingale.netResult >= 0 ? '#22c55e' : '#ef4444'} stopOpacity={0.3} />
+   445→   445→                                <stop offset="95%" stopColor={result.martingale.netResult >= 0 ? '#22c55e' : '#ef4444'} stopOpacity={0} />
+   446→   446→                              </linearGradient>
+   447→   447→                            </defs>
+   448→   448→                            <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+   449→   449→                            <XAxis dataKey="index" tick={{ fontSize: 10, fill: '#71717a' }} />
+   450→   450→                            <YAxis tick={{ fontSize: 10, fill: '#71717a' }} />
+   451→   451→                            <Tooltip
+   452→   452→                              contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: '8px' }}
+   453→   453→                              labelStyle={{ color: '#a1a1aa' }}
+   454→   454→                            />
+   455→   455→                            <Area
+   456→   456→                              type="monotone"
+   457→   457→                              dataKey="balance"
+   458→   458→                              stroke={result.martingale.netResult >= 0 ? '#22c55e' : '#ef4444'}
+   459→   459→                              fill="url(#balanceGradient)"
+   460→   460→                              strokeWidth={2}
+   461→   461→                            />
+   462→   462→                          </AreaChart>
+   463→   463→                        </ResponsiveContainer>
+   464→   464→                      </div>
+   465→   465→                    </CardContent>
+   466→   466→                  </Card>
+   467→   467→
+   468→   468→                  {/* General Stats */}
+   469→   469→                  <Card className="bg-zinc-900 border-zinc-800">
+   470→   470→                    <CardHeader className="pb-2">
+   471→   471→                      <CardTitle className="text-sm font-medium">Estadisticas Generales</CardTitle>
+   472→   472→                    </CardHeader>
+   473→   473→                    <CardContent>
+   474→   474→                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+   475→   475→                        <div>
+   476→   476→                          <p className="text-zinc-500 text-xs">Numeros totales</p>
+   477→   477→                          <p className="font-semibold">{result.totalNumbers}</p>
+   478→   478→                        </div>
+   479→   479→                        <div>
+   480→   480→                          <p className="text-zinc-500 text-xs">Predicciones</p>
+   481→   481→                          <p className="font-semibold">{result.totalPredictions}</p>
+   482→   482→                        </div>
+   483→   483→                        <div>
+   484→   484→                          <p className="text-zinc-500 text-xs">Skip por motor</p>
+   485→   485→                          <p className="font-semibold text-indigo-400">{result.skippedByEngine}</p>
+   486→   486→                        </div>
+   487→   487→                        <div>
+   488→   488→                          <p className="text-zinc-500 text-xs">Skip por cooldown</p>
+   489→   489→                          <p className="font-semibold text-amber-400">{result.skippedByCooldown}</p>
+   490→   490→                        </div>
+   491→   491→                        <div>
+   492→   492→                          <p className="text-zinc-500 text-xs">Verdes (cero)</p>
+   493→   493→                          <p className="font-semibold text-green-500">{result.greenCount}</p>
+   494→   494→                        </div>
+   495→   495→                        <div>
+   496→   496→                          <p className="text-zinc-500 text-xs">Picos totales</p>
+   497→   497→                          <p className="font-semibold">{result.peaks.length}</p>
+   498→   498→                        </div>
+   499→   499→                        <div>
+   500→   500→                          <p className="text-zinc-500 text-xs">Ratio bajos/(med+alt)</p>
+   501→   501→                          <p className={`font-semibold ${result.peakStats.low / Math.max(1, result.peakStats.medium + result.peakStats.high) >= 7 ? 'text-green-400' : 'text-red-400'}`}>
+   502→   502→                            {(result.peakStats.low / Math.max(1, result.peakStats.medium + result.peakStats.high)).toFixed(2)}:1
+   503→   503→                          </p>
+   504→   504→                        </div>
+   505→   505→                        <div>
+   506→   506→                          <p className="text-zinc-500 text-xs">Recovery flips</p>
+   507→   507→                          <p className="font-semibold">{result.recoveryFlips}</p>
+   508→   508→                        </div>
+   509→   509→                      </div>
+   510→   510→                    </CardContent>
+   511→   511→                  </Card>
+   512→   512→
+   513→   513→                  {/* Skip Zone + Cooldown */}
+   514→   514→                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+   515→   515→                    <Card className="bg-zinc-900 border-zinc-800">
+   516→   516→                      <CardHeader className="pb-2">
+   517→   517→                        <CardTitle className="text-sm font-medium">Skip Zone (streaks 3-6)</CardTitle>
+   518→   518→                      </CardHeader>
+   519→   519→                      <CardContent className="space-y-2">
+   520→   520→                        {[
+   521→   521→                          { label: 'Streak 3', value: result.skipZone.streak3 },
+   522→   522→                          { label: 'Streak 4', value: result.skipZone.streak4 },
+   523→   523→                          { label: 'Streak 5', value: result.skipZone.streak5 },
+   524→   524→                          { label: 'Streak 6', value: result.skipZone.streak6 },
+   525→   525→                        ].map(s => (
+   526→   526→                          <div key={s.label} className="flex items-center justify-between text-sm">
+   527→   527→                            <span className="text-zinc-400">{s.label}</span>
+   528→   528→                            <div className="flex items-center gap-2">
+   529→   529→                              <div className="w-24 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+   530→   530→                                <div className="h-full bg-zinc-600 rounded-full" style={{ width: `${Math.min(100, (s.value / Math.max(1, result.totalPredictions)) * 300)}%` }} />
+   531→   531→                              </div>
+   532→   532→                              <span className="text-zinc-300 font-mono text-xs w-8 text-right">{s.value}</span>
+   533→   533→                            </div>
+   534→   534→                          </div>
+   535→   535→                        ))}
+   536→   536→                        <div className="pt-2 border-t border-zinc-800 flex justify-between text-sm">
+   537→   537→                          <span className="text-zinc-500">Total</span>
+   538→   538→                          <span className="font-semibold">{result.skipZone.streak3 + result.skipZone.streak4 + result.skipZone.streak5 + result.skipZone.streak6}</span>
+   539→   539→                        </div>
+   540→   540→                      </CardContent>
+   541→   541→                    </Card>
+   542→   542→
+   543→   543→                    <Card className="bg-zinc-900 border-zinc-800">
+   544→   544→                      <CardHeader className="pb-2">
+   545→   545→                        <CardTitle className="text-sm font-medium">Cooldown System</CardTitle>
+   546→   546→                      </CardHeader>
+   547→   547→                      <CardContent className="space-y-2 text-sm">
+   548→   548→                        <div className="flex justify-between">
+   549→   549→                          <span className="text-zinc-400">Cooldowns por perdida</span>
+   550→   550→                          <span>{result.cooldownStats.lossCooldowns}</span>
+   551→   551→                        </div>
+   552→   552→                        <div className="flex justify-between">
+   553→   553→                          <span className="text-zinc-400">Cooldowns por bust</span>
+   554→   554→                          <span>{result.cooldownStats.bustCooldowns}</span>
+   555→   555→                        </div>
+   556→   556→                        <div className="flex justify-between">
+   557→   557→                          <span className="text-zinc-400">Cooldowns por verde</span>
+   558→   558→                          <span>{result.cooldownStats.greenCooldowns}</span>
+   559→   559→                        </div>
+   560→   560→                        <div className="pt-2 border-t border-zinc-800">
+   561→   561→                          <div className="flex justify-between">
+   562→   562→                            <span className="text-zinc-400">Spins skipeados</span>
+   563→   563→                            <span className="font-semibold">{result.cooldownStats.spinsSkippedByCooldown}</span>
+   564→   564→                          </div>
+   565→   565→                          <div className="flex justify-between mt-1">
+   566→   566→                            <span className="text-zinc-400">Wins post-cooldown</span>
+   567→   567→                            <span className="text-green-400">{result.cooldownStats.winsAfterCooldown}</span>
+   568→   568→                          </div>
+   569→   569→                          <div className="flex justify-between mt-1">
+   570→   570→                            <span className="text-zinc-400">Losses post-cooldown</span>
+   571→   571→                            <span className="text-red-400">{result.cooldownStats.lossesAfterCooldown}</span>
+   572→   572→                          </div>
+   573→   573→                        </div>
+   574→   574→                      </CardContent>
+   575→   575→                    </Card>
+   576→   576→                  </div>
+   577→   577→                </TabsContent>
+   578→   578→
+   579→   579→                {/* GRAFICOS TAB */}
+   580→   580→                <TabsContent value="graficos" className="space-y-4">
+   581→   581→                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+   582→   582→                    {/* Peak Histogram */}
+   583→   583→                    <Card className="bg-zinc-900 border-zinc-800">
+   584→   584→                      <CardHeader className="pb-2">
+   585→   585→                        <CardTitle className="text-sm font-medium">Distribucion de Picos</CardTitle>
+   586→   586→                      </CardHeader>
+   587→   587→                      <CardContent>
+   588→   588→                        <div className="h-[250px]">
+   589→   589→                          <ResponsiveContainer width="100%" height="100%">
+   590→   590→                            <BarChart data={peakHistogram}>
+   591→   591→                              <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+   592→   592→                              <XAxis dataKey="peak" tick={{ fontSize: 10, fill: '#71717a' }} label={{ value: 'Pico', position: 'insideBottom', offset: -5, fontSize: 10, fill: '#71717a' }} />
+   593→   593→                              <YAxis tick={{ fontSize: 10, fill: '#71717a' }} />
+   594→   594→                              <Tooltip contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: '8px' }} />
+   595→   595→                              <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+   596→   596→                                {peakHistogram.map((entry, idx) => (
+   597→   597→                                  <Cell key={idx} fill={entry.color} />
+   598→   598→                                ))}
+   599→   599→                              </Bar>
+   600→   600→                            </BarChart>
+   601→   601→                          </ResponsiveContainer>
+   602→   602→                        </div>
+   603→   603→                      </CardContent>
+   604→   604→                    </Card>
+   605→   605→
+   606→   606→                    {/* Peak Pie */}
+   607→   607→                    <Card className="bg-zinc-900 border-zinc-800">
+   608→   608→                      <CardHeader className="pb-2">
+   609→   609→                        <CardTitle className="text-sm font-medium">Clasificacion de Picos</CardTitle>
+   610→   610→                      </CardHeader>
+   611→   611→                      <CardContent>
+   612→   612→                        <div className="h-[250px]">
+   613→   613→                          <ResponsiveContainer width="100%" height="100%">
+   614→   614→                            <PieChart>
+   615→   615→                              <Pie
+   616→   616→                                data={peakPieData.filter(d => d.value > 0)}
+   617→   617→                                cx="50%"
+   618→   618→                                cy="50%"
+   619→   619→                                innerRadius={50}
+   620→   620→                                outerRadius={90}
+   621→   621→                                paddingAngle={5}
+   622→   622→                                dataKey="value"
+   623→   623→                                label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+   624→   624→                              >
+   625→   625→                                {peakPieData.filter(d => d.value > 0).map((entry, idx) => (
+   626→   626→                                  <Cell key={idx} fill={entry.fill} />
+   627→   627→                                ))}
+   628→   628→                              </Pie>
+   629→   629→                              <Tooltip contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: '8px' }} />
+   630→   630→                            </PieChart>
+   631→   631→                          </ResponsiveContainer>
+   632→   632→                        </div>
+   633→   633→                      </CardContent>
+   634→   634→                    </Card>
+   635→   635→
+   636→   636→                    {/* Skip Distribution */}
+   637→   637→                    <Card className="bg-zinc-900 border-zinc-800">
+   638→   638→                      <CardHeader className="pb-2">
+   639→   639→                        <CardTitle className="text-sm font-medium">Distribucion de Skips</CardTitle>
+   640→   640→                      </CardHeader>
+   641→   641→                      <CardContent>
+   642→   642→                        <div className="h-[250px]">
+   643→   643→                          <ResponsiveContainer width="100%" height="100%">
+   644→   644→                            <PieChart>
+   645→   645→                              <Pie
+   646→   646→                                data={skipData.filter(d => d.value > 0)}
+   647→   647→                                cx="50%"
+   648→   648→                                cy="50%"
+   649→   649→                                innerRadius={50}
+   650→   650→                                outerRadius={90}
+   651→   651→                                paddingAngle={5}
+   652→   652→                                dataKey="value"
+   653→   653→                                label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+   654→   654→                              >
+   655→   655→                                {skipData.filter(d => d.value > 0).map((entry, idx) => (
+   656→   656→                                  <Cell key={idx} fill={entry.fill} />
+   657→   657→                                ))}
+   658→   658→                              </Pie>
+   659→   659→                              <Tooltip contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: '8px' }} />
+   660→   660→                            </PieChart>
+   661→   661→                          </ResponsiveContainer>
+   662→   662→                        </div>
+   663→   663→                      </CardContent>
+   664→   664→                    </Card>
+   665→   665→
+   666→   666→                    {/* Streak Accuracy */}
+   667→   667→                    <Card className="bg-zinc-900 border-zinc-800">
+   668→   668→                      <CardHeader className="pb-2">
+   669→   669→                        <CardTitle className="text-sm font-medium">Accuracy por Streak</CardTitle>
+   670→   670→                      </CardHeader>
+   671→   671→                      <CardContent>
+   672→   672→                        <div className="h-[250px]">
+   673→   673→                          <ResponsiveContainer width="100%" height="100%">
+   674→   674→                            <BarChart data={streakData.filter(d => d.streak >= 0)}>
+   675→   675→                              <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+   676→   676→                              <XAxis dataKey="streak" tick={{ fontSize: 10, fill: '#71717a' }} label={{ value: 'Streak', position: 'insideBottom', offset: -5, fontSize: 10, fill: '#71717a' }} />
+   677→   677→                              <YAxis tick={{ fontSize: 10, fill: '#71717a' }} domain={[0, 100]} />
+   678→   678→                              <Tooltip contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: '8px' }} formatter={(v: number) => `${v.toFixed(1)}%`} />
+   679→   679→                              <Bar dataKey="accuracy" fill="#6366f1" radius={[4, 4, 0, 0]} />
+   680→   680→                            </BarChart>
+   681→   681→                          </ResponsiveContainer>
+   682→   682→                        </div>
+   683→   683→                      </CardContent>
+   684→   684→                    </Card>
+   685→   685→                  </div>
+   686→   686→                </TabsContent>
+   687→   687→
+   688→   688→                {/* MODOS TAB */}
+   689→   689→                <TabsContent value="modos" className="space-y-4">
+   690→   690→                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+   691→   691→                    {modeData.map(mode => (
+   692→   692→                      <Card key={mode.name} className="bg-zinc-900 border-zinc-800">
+   693→   693→                        <CardHeader className="pb-2">
+   694→   694→                          <div className="flex items-center justify-between">
+   695→   695→                            <CardTitle className="text-sm font-medium">{mode.name}</CardTitle>
+   696→   696→                            <Badge variant="outline" className={mode.name === 'NORMAL' ? 'border-blue-500/50 text-blue-400' : mode.name === 'SOFT' ? 'border-amber-500/50 text-amber-400' : 'border-red-500/50 text-red-400'}>
+   697→   697→                              {mode.accuracy.toFixed(1)}%
+   698→   698→                            </Badge>
+   699→   699→                          </div>
+   700→   700→                        </CardHeader>
+   701→   701→                        <CardContent className="space-y-3">
+   702→   702→                          <div className="text-center">
+   703→   703→                            <div className="text-3xl font-bold" style={{ color: mode.fill }}>{mode.predictions}</div>
+   704→   704→                            <p className="text-xs text-zinc-500">apuestas realizadas</p>
+   705→   705→                          </div>
+   706→   706→                          <div className="grid grid-cols-2 gap-2 text-sm">
+   707→   707→                            <div className="bg-green-950/30 border border-green-800/30 rounded-lg p-2 text-center">
+   708→   708→                              <p className="text-green-400 font-bold">{mode.correct}</p>
+   709→   709→                              <p className="text-xs text-zinc-500">Correctas</p>
+   710→   710→                            </div>
+   711→   711→                            <div className="bg-red-950/30 border border-red-800/30 rounded-lg p-2 text-center">
+   712→   712→                              <p className="text-red-400 font-bold">{mode.incorrect}</p>
+   713→   713→                              <p className="text-xs text-zinc-500">Incorrectas</p>
+   714→   714→                            </div>
+   715→   715→                          </div>
+   716→   716→                          <div className="text-sm">
+   717→   717→                            <div className="flex justify-between text-zinc-400">
+   718→   718→                              <span>Skipeados</span>
+   719→   719→                              <span>{mode.skipped}</span>
+   720→   720→                            </div>
+   721→   721→                            {mode.predictions > 0 && (
+   722→   722→                              <>
+   723→   723→                                <div className="flex justify-between text-zinc-400 mt-1">
+   724→   724→                                  <span>Skip rate</span>
+   725→   725→                                  <span>{(mode.skipped / (mode.predictions + mode.skipped) * 100).toFixed(1)}%</span>
+   726→   726→                                </div>
+   727→   727→                                <Progress value={mode.accuracy} className="mt-2 h-1.5" />
+   728→   728→                              </>
+   729→   729→                            )}
+   730→   730→                          </div>
+   731→   731→                        </CardContent>
+   732→   732→                      </Card>
+   733→   733→                    ))}
+   734→   734→                  </div>
+   735→   735→
+   736→   736→                  {/* Skip Zone Detail */}
+   737→   737→                  <Card className="bg-zinc-900 border-zinc-800">
+   738→   738→                    <CardHeader className="pb-2">
+   739→   739→                      <CardTitle className="text-sm font-medium">Skip Zone — Razon: Sin Edge Demostrado</CardTitle>
+   740→   740→                    </CardHeader>
+   741→   741→                    <CardContent>
+   742→   742→                      <div className="grid grid-cols-4 gap-4">
+   743→   743→                        {[
+   744→   744→                          { streak: 3, count: result.skipZone.streak3 },
+   745→   745→                          { streak: 4, count: result.skipZone.streak4 },
+   746→   746→                          { streak: 5, count: result.skipZone.streak5 },
+   747→   747→                          { streak: 6, count: result.skipZone.streak6 },
+   748→   748→                        ].map(s => (
+   749→   749→                          <div key={s.streak} className="bg-zinc-800/50 rounded-lg p-3 text-center">
+   750→   750→                            <p className="text-2xl font-bold text-zinc-300">{s.count}</p>
+   751→   751→                            <p className="text-xs text-zinc-500">Streak {s.streak}</p>
+   752→   752→                          </div>
+   753→   753→                        ))}
+   754→   754→                      </div>
+   755→   755→                      <p className="text-xs text-zinc-600 mt-3 text-center">
+   756→   756→                        Los streaks 3-6 tienen accuracy demostrada &lt;50% (peor que random). El motor los skipea completamente.
+   757→   757→                      </p>
+   758→   758→                    </CardContent>
+   759→   759→                  </Card>
+   760→   760→
+   761→   761→                  {/* Streak Breakdown Table */}
+   762→   762→                  <Card className="bg-zinc-900 border-zinc-800">
+   763→   763→                    <CardHeader className="pb-2">
+   764→   764→                      <CardTitle className="text-sm font-medium">Breakdown por Streak</CardTitle>
+   765→   765→                    </CardHeader>
+   766→   766→                    <CardContent>
+   767→   767→                      <div className="overflow-x-auto">
+   768→   768→                        <table className="w-full text-sm">
+   769→   769→                          <thead>
+   770→   770→                            <tr className="border-b border-zinc-800 text-zinc-500">
+   771→   771→                              <th className="text-left py-2 px-2">Streak</th>
+   772→   772→                              <th className="text-right py-2 px-2">Total</th>
+   773→   773→                              <th className="text-right py-2 px-2">Correct</th>
+   774→   774→                              <th className="text-right py-2 px-2">Skipped</th>
+   775→   775→                              <th className="text-right py-2 px-2">Accuracy</th>
+   776→   776→                              <th className="text-right py-2 px-2">Modo</th>
+   777→   777→                            </tr>
+   778→   778→                          </thead>
+   779→   779→                          <tbody>
+   780→   780→                            {streakData.map(s => (
+   781→   781→                              <tr key={s.streak} className="border-b border-zinc-800/50">
+   782→   782→                                <td className="py-1.5 px-2 font-mono">{s.streak}</td>
+   783→   783→                                <td className="py-1.5 px-2 text-right">{s.total}</td>
+   784→   784→                                <td className="py-1.5 px-2 text-right text-green-400">{s.correct}</td>
+   785→   785→                                <td className="py-1.5 px-2 text-right text-zinc-500">{s.skipped}</td>
+   786→   786→                                <td className="py-1.5 px-2 text-right">
+   787→   787→                                  <span className={s.accuracy >= 55 ? 'text-green-400' : s.accuracy >= 48 ? 'text-amber-400' : 'text-red-400'}>
+   788→   788→                                    {s.accuracy.toFixed(1)}%
+   789→   789→                                  </span>
+   790→   790→                                </td>
+   791→   791→                                <td className="py-1.5 px-2 text-right">
+   792→   792→                                  <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${getModeColor(s.streak >= 7 ? 'ultra' : s.streak >= 3 ? 'skipzone' : s.streak >= 2 ? 'soft' : 'normal')}`}>
+   793→   793→                                    {getModeLabel(s.streak >= 7 ? 'ultra' : s.streak >= 3 ? 'skipzone' : s.streak >= 2 ? 'soft' : 'normal')}
+   794→   794→                                  </Badge>
+   795→   795→                                </td>
+   796→   796→                              </tr>
+   797→   797→                            ))}
+   798→   798→                          </tbody>
+   799→   799→                        </table>
+   800→   800→                      </div>
+   801→   801→                    </CardContent>
+   802→   802→                  </Card>
+   803→   803→                </TabsContent>
+   804→   804→
+   805→   805→                {/* MARTINGALA TAB */}
+   806→   806→                <TabsContent value="martingala" className="space-y-4">
+   807→   807→                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+   808→   808→                    <Card className="bg-zinc-900 border-zinc-800">
+   809→   809→                      <CardContent className="py-3 px-4">
+   810→   810→                        <p className="text-xs text-zinc-500 mb-1">Total Apostado</p>
+   811→   811→                        <p className="text-xl font-bold">{result.martingale.totalBet}u</p>
+   812→   812→                      </CardContent>
+   813→   813→                    </Card>
+   814→   814→                    <Card className="bg-zinc-900 border-zinc-800">
+   815→   815→                      <CardContent className="py-3 px-4">
+   816→   816→                        <p className="text-xs text-zinc-500 mb-1">Total Ganado</p>
+   817→   817→                        <p className="text-xl font-bold text-green-400">{result.martingale.totalWin}u</p>
+   818→   818→                      </CardContent>
+   819→   819→                    </Card>
+   820→   820→                    <Card className="bg-zinc-900 border-zinc-800">
+   821→   821→                      <CardContent className="py-3 px-4">
+   822→   822→                        <p className="text-xs text-zinc-500 mb-1">Neto</p>
+   823→   823→                        <p className={`text-xl font-bold ${result.martingale.netResult >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+   824→   824→                          {result.martingale.netResult >= 0 ? '+' : ''}{result.martingale.netResult}u
+   825→   825→                        </p>
+   826→   826→                      </CardContent>
+   827→   827→                    </Card>
+   828→   828→                    <Card className="bg-zinc-900 border-zinc-800">
+   829→   829→                      <CardContent className="py-3 px-4">
+   830→   830→                        <p className="text-xs text-zinc-500 mb-1">ROI</p>
+   831→   831→                        <p className={`text-xl font-bold ${result.martingale.roi >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+   832→   832→                          {result.martingale.roi.toFixed(2)}%
+   833→   833→                        </p>
+   834→   834→                      </CardContent>
+   835→   835→                    </Card>
+   836→   836→                  </div>
+   837→   837→
+   838→   838→                  {/* Loss Streak Distribution */}
+   839→   839→                  <Card className="bg-zinc-900 border-zinc-800">
+   840→   840→                    <CardHeader className="pb-2">
+   841→   841→                      <CardTitle className="text-sm font-medium">Distribucion de Rachas de Perdida</CardTitle>
+   842→   842→                    </CardHeader>
+   843→   843→                    <CardContent>
+   844→   844→                      <div className="h-[200px]">
+   845→   845→                        <ResponsiveContainer width="100%" height="100%">
+   846→   846→                          <BarChart data={lossStreakData}>
+   847→   847→                            <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+   848→   848→                            <XAxis dataKey="length" tick={{ fontSize: 10, fill: '#71717a' }} label={{ value: 'Racha', position: 'insideBottom', offset: -5, fontSize: 10, fill: '#71717a' }} />
+   849→   849→                            <YAxis tick={{ fontSize: 10, fill: '#71717a' }} />
+   850→   850→                            <Tooltip contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', borderRadius: '8px' }} />
+   851→   851→                            <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+   852→   852→                              {lossStreakData.map((entry, idx) => (
+   853→   853→                                <Cell key={idx} fill={entry.color} />
+   854→   854→                              ))}
+   855→   855→                            </Bar>
+   856→   856→                          </BarChart>
+   857→   857→                        </ResponsiveContainer>
+   858→   858→                      </div>
+   859→   859→                      <div className="mt-3 grid grid-cols-2 gap-4 text-sm">
+   860→   860→                        <div className="bg-green-950/30 border border-green-800/30 rounded-lg p-3">
+   861→   861→                          <p className="text-green-400 font-bold">{Object.entries(result.martingale.lossStreaks).filter(([k]) => parseInt(k) <= 3).reduce((s, [, v]) => s + v, 0)}</p>
+   862→   862→                          <p className="text-xs text-zinc-500">Rachas seguras (1-3)</p>
+   863→   863→                        </div>
+   864→   864→                        <div className="bg-red-950/30 border border-red-800/30 rounded-lg p-3">
+   865→   865→                          <p className="text-red-400 font-bold">{Object.entries(result.martingale.lossStreaks).filter(([k]) => parseInt(k) >= 4).reduce((s, [, v]) => s + v, 0)}</p>
+   866→   866→                          <p className="text-xs text-zinc-500">Rachas fatales (4+)</p>
+   867→   867→                        </div>
+   868→   868→                      </div>
+   869→   869→                    </CardContent>
+   870→   870→                  </Card>
+   871→   871→
+   872→   872→                  {/* Bust Analysis */}
+   873→   873→                  <Card className="bg-zinc-900 border-zinc-800">
+   874→   874→                    <CardHeader className="pb-2">
+   875→   875→                      <CardTitle className="text-sm font-medium">Analisis de Busts</CardTitle>
+   876→   876→                    </CardHeader>
+   877→   877→                    <CardContent className="space-y-2 text-sm">
+   878→   878→                      <div className="flex justify-between">
+   879→   879→                        <span className="text-zinc-400">Total busts (martingala completa)</span>
+   880→   880→                        <span className={result.martingale.bustCount === 0 ? 'text-green-400' : 'text-red-400'}>{result.martingale.bustCount}</span>
+   881→   881→                      </div>
+   882→   882→                      <div className="flex justify-between">
+   883→   883→                        <span className="text-zinc-400">Costo por bust</span>
+   884→   884→                        <span className="font-mono">-7u</span>
+   885→   885→                      </div>
+   886→   886→                      <div className="flex justify-between">
+   887→   887→                        <span className="text-zinc-400">Costo total de busts</span>
+   888→   888→                        <span className="text-red-400 font-mono">{result.martingale.bustCount * -7}u</span>
+   889→   889→                      </div>
+   890→   890→                      <div className="flex justify-between">
+   891→   891→                        <span className="text-zinc-400">Max racha de perdidas consecutivas</span>
+   892→   892→                        <span className={result.martingale.maxConsecutiveLoss <= 3 ? 'text-green-400' : 'text-red-400'}>{result.martingale.maxConsecutiveLoss}</span>
+   893→   893→                      </div>
+   894→   894→                    </CardContent>
+   895→   895→                  </Card>
+   896→   896→
+   897→   897→                  {/* Recovery System */}
+   898→   898→                  <Card className="bg-zinc-900 border-zinc-800">
+   899→   899→                    <CardHeader className="pb-2">
+   900→   900→                      <CardTitle className="text-sm font-medium">Recovery System</CardTitle>
+   901→   901→                    </CardHeader>
+   902→   902→                    <CardContent className="space-y-2 text-sm">
+   903→   903→                      <div className="flex justify-between">
+   904→   904→                        <span className="text-zinc-400">Total recovery flips</span>
+   905→   905→                        <span>{result.recoveryFlips}</span>
+   906→   906→                      </div>
+   907→   907→                      <div className="flex justify-between">
+   908→   908→                        <span className="text-zinc-400">Correctos post-flip</span>
+   909→   909→                        <span className="text-green-400">{result.recoveryCorrectAfterFlip} ({result.recoveryFlips > 0 ? (result.recoveryCorrectAfterFlip / result.recoveryFlips * 100).toFixed(1) : 0}%)</span>
+   910→   910→                      </div>
+   911→   911→                      <div className="flex justify-between">
+   912→   912→                        <span className="text-zinc-400">Incorrectos post-flip</span>
+   913→   913→                        <span className="text-red-400">{result.recoveryIncorrectAfterFlip} ({result.recoveryFlips > 0 ? (result.recoveryIncorrectAfterFlip / result.recoveryFlips * 100).toFixed(1) : 0}%)</span>
+   914→   914→                      </div>
+   915→   915→                    </CardContent>
+   916→   916→                  </Card>
+   917→   917→                </TabsContent>
+   918→   918→
+   919→   919→                {/* DETALLE TAB */}
+   920→   920→                <TabsContent value="detalle" className="space-y-4">
+   921→   921→                  <Card className="bg-zinc-900 border-zinc-800">
+   922→   922→                    <CardHeader className="pb-2">
+   923→   923→                      <div className="flex items-center justify-between">
+   924→   924→                        <CardTitle className="text-sm font-medium">Detalle por Spin</CardTitle>
+   925→   925→                        <span className="text-xs text-zinc-500">
+   926→   926→                          Mostrando {result.steps.length} de {result.totalSteps} spins
+   927→   927→                        </span>
+   928→   928→                      </div>
+   929→   929→                    </CardHeader>
+   930→   930→                    <CardContent>
+   931→   931→                      <div className="overflow-x-auto max-h-[600px] overflow-y-auto custom-scrollbar-y">
+   932→   932→                        <table className="w-full text-xs font-mono">
+   933→   933→                          <thead className="sticky top-0 bg-zinc-900 z-10">
+   934→   934→                            <tr className="border-b border-zinc-800 text-zinc-500">
+   935→   935→                              <th className="text-left py-2 px-1.5">#</th>
+   936→   936→                              <th className="text-center py-2 px-1.5">Num</th>
+   937→   937→                              <th className="text-left py-2 px-1.5">Prediccion</th>
+   938→   938→                              <th className="text-left py-2 px-1.5">Modo</th>
+   939→   939→                              <th className="text-center py-2 px-1.5">Streak</th>
+   940→   940→                              <th className="text-left py-2 px-1.5">Estado</th>
+   941→   941→                              <th className="text-right py-2 px-1.5">Bet</th>
+   942→   942→                              <th className="text-right py-2 px-1.5">Balance</th>
+   943→   943→                              <th className="text-center py-2 px-1.5">Pico</th>
+   944→   944→                            </tr>
+   945→   945→                          </thead>
+   946→   946→                          <tbody>
+   947→   947→                            {result.steps.map((step, idx) => (
+   948→   948→                              <tr key={idx} className={`border-b border-zinc-800/30 ${step.shouldSkip ? 'opacity-40' : ''}`}>
+   949→   949→                                <td className="py-1 px-1.5 text-zinc-600">{step.index}</td>
+   950→   950→                                <td className="py-1 px-1.5 text-center">
+   951→   951→                                  <span className={`inline-block w-5 h-5 rounded-full text-[10px] leading-5 text-white font-bold ${step.color === 'red' ? 'bg-red-600' : step.color === 'black' ? 'bg-zinc-700' : 'bg-green-600'}`}>
+   952→   952→                                    {step.number}
+   953→   953→                                  </span>
+   954→   954→                                </td>
+   955→   955→                                <td className="py-1 px-1.5">
+   956→   956→                                  <span className={step.predictedColor === 'red' ? 'text-red-400' : 'text-zinc-400'}>
+   957→   957→                                    {step.predictedColor === 'red' ? 'ROJO' : 'NEGRO'}
+   958→   958→                                  </span>
+   959→   959→                                </td>
+   960→   960→                                <td className="py-1 px-1.5">
+   961→   961→                                  <Badge variant="outline" className={`text-[9px] px-1 py-0 ${getModeColor(step.mode)}`}>
+   962→   962→                                    {getModeLabel(step.mode)}
+   963→   963→                                  </Badge>
+   964→   964→                                </td>
+   965→   965→                                <td className="py-1 px-1.5 text-center">{step.streakLength}</td>
+   966→   966→                                <td className="py-1 px-1.5">
+   967→   967→                                  {step.shouldSkip ? (
+   968→   968→                                    <span className="text-zinc-600">{step.skipReason}</span>
+   969→   969→                                  ) : step.isCorrect ? (
+   970→   970→                                    <span className="text-green-400">WIN</span>
+   971→   971→                                  ) : (
+   972→   972→                                    <span className="text-red-400">LOSS</span>
+   973→   973→                                  )}
+   974→   974→                                </td>
+   975→   975→                                <td className="py-1 px-1.5 text-right">{step.shouldSkip ? '-' : `${step.martingaleBet}u`}</td>
+   976→   976→                                <td className={`py-1 px-1.5 text-right ${step.balance > 0 ? 'text-green-400' : step.balance < 0 ? 'text-red-400' : 'text-zinc-400'}`}>
+   977→   977→                                  {step.shouldSkip ? '-' : (step.balance >= 0 ? '+' : '') + step.balance}
+   978→   978→                                </td>
+   979→   979→                                <td className="py-1 px-1.5 text-center">
+   980→   980→                                  {!step.shouldSkip && step.peakHeight > 0 && (
+   981→   981→                                    <span style={{ color: getPeakColor(step.peakHeight) }} className="font-bold">
+   982→   982→                                      {step.peakHeight}
+   983→   983→                                    </span>
+   984→   984→                                  )}
+   985→   985→                                </td>
+   986→   986→                              </tr>
+   987→   987→                            ))}
+   988→   988→                          </tbody>
+   989→   989→                        </table>
+   990→   990→                      </div>
+   991→   991→                    </CardContent>
+   992→   992→                  </Card>
+   993→   993→                </TabsContent>
+   994→   994→              </Tabs>
+   995→   995→            )}
+   996→   996→          </div>
+   997→   997→        </div>
+   998→   998→      </div>
+   999→   999→    </div>
+  1000→  1000→  )
+  1001→  1001→}
+  1002→  1002→
