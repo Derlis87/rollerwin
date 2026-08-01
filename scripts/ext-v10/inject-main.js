@@ -291,7 +291,13 @@
       window.fetch = function(input, init) {
         var url = '';
         try { url = typeof input === 'string' ? input : (input && input.url ? input.url : ''); } catch(e) {}
-        var promise = _origFetch.apply(this, arguments);
+        var promise;
+        try {
+          promise = _origFetch.apply(this, arguments);
+        } catch(e) {
+          // Si _origFetch lanza sincronamente, devolver promise rechazada
+          promise = Promise.reject(e);
+        }
         if (promise && url) {
           promise.then(function(r) {
             if (r.redirected) {
@@ -310,7 +316,10 @@
               _saveState();
               handleSessionExpired('fetch-intercept-' + r.status);
             }
-          }).catch(function() {});
+          }).catch(function() {
+            // Silenciar errores de red del juego (CORS, network error, etc.)
+            // No interferir con el manejo de errores de la pagina
+          });
         }
         return promise;
       };
