@@ -1,6 +1,6 @@
-// RollerWin Capture v10.0 - MAIN WORLD DETECTION ENGINE
+// RollerWin Capture v10.1 - MAIN WORLD DETECTION ENGINE
 // Motor basado en v7.6 PROBADO Y FUNCIONAL
-// v10.0: Agregado filtro de 4 mesas autorizadas
+// v10.1: Deteccion universal (Evolution + Pragmatic + cualquier proveedor)
 //
 // ARQUITECTURA CLAVE (porque v7.6 funcionaba y v9.x no):
 // - Los numeros se detectan DENTRO del IFRAME (donde corre Evolution/Pragmatic)
@@ -822,7 +822,9 @@
       'winningpocket', 'pocketid', 'resultid', 'displaynumber',
       'roundresult', 'gameoutcome', 'finalnumber', 'outcome',
       'winningnumberdisplay', 'resultnumber', 'final_number', 'game_result',
-      'round_result', 'game_outcome', 'numberstr', 'numberstring'
+      'round_result', 'game_outcome', 'numberstr', 'numberstring',
+      // v10.1: Campos especificos de Pragmatic Play
+      'displayvalue', 'resultvalue', 'winningvalue'
     ];
 
     function isResultField(key) {
@@ -891,7 +893,10 @@
         /"finalNumber"\s*:\s*(\d{1,2})\b/gi,
         /"game_number"\s*:\s*(\d{1,2})\b/gi,
         /"displayNumber"\s*:\s*(\d{1,2})\b/gi,
-        /"winningPocket"\s*:\s*(\d{1,2})\b/gi
+        /"winningPocket"\s*:\s*(\d{1,2})\b/gi,
+        // v10.1: Patrones adicionales para Pragmatic Play
+        /"displayValue"\s*:\s*(\d{1,2})\b/gi,
+        /"resultValue"\s*:\s*(\d{1,2})\b/gi
       ];
       var lastMatch = null;
       for (var i = 0; i < patterns.length; i++) {
@@ -995,9 +1000,16 @@
         var promise = origFetch.apply(this, arguments);
 
         var urlLow = url.toLowerCase();
-        if (urlLow.indexOf('result') >= 0 ||
+        // v10.1: Ampliar cobertura — incluir pragmatic play y otros proveedores
+        // Evolution: result/roulette/evolution/round/wheel
+        // Pragmatic: game/spin/bet/play/round/pragmatic
+        var isGameApi = urlLow.indexOf('result') >= 0 ||
             urlLow.indexOf('roulette') >= 0 || urlLow.indexOf('evolution') >= 0 ||
-            urlLow.indexOf('round') >= 0 || urlLow.indexOf('wheel') >= 0) {
+            urlLow.indexOf('round') >= 0 || urlLow.indexOf('wheel') >= 0 ||
+            urlLow.indexOf('game') >= 0 || urlLow.indexOf('spin') >= 0 ||
+            urlLow.indexOf('pragmatic') >= 0;
+        if (isGameApi) {
+          // Excluir endpoints de historial/estados que no tienen resultado actual
           if (urlLow.indexOf('history') >= 0 || urlLow.indexOf('state') >= 0 || urlLow.indexOf('stats') >= 0) {
             return promise;
           }
@@ -1027,9 +1039,13 @@
         var self = this;
         this.addEventListener('load', function() {
           var u = (self._rwUrl || '').toLowerCase();
-          if (u.indexOf('result') >= 0 ||
+          // v10.1: Ampliar cobertura — incluir pragmatic play y otros proveedores
+          var isGameApi = u.indexOf('result') >= 0 ||
               u.indexOf('roulette') >= 0 || u.indexOf('evolution') >= 0 ||
-              u.indexOf('round') >= 0 || u.indexOf('wheel') >= 0) {
+              u.indexOf('round') >= 0 || u.indexOf('wheel') >= 0 ||
+              u.indexOf('game') >= 0 || u.indexOf('spin') >= 0 ||
+              u.indexOf('pragmatic') >= 0;
+          if (isGameApi) {
             if (u.indexOf('history') >= 0 || u.indexOf('state') >= 0 || u.indexOf('stats') >= 0) return;
             try {
               var t = self.responseText;
@@ -1050,7 +1066,9 @@
       var CURRENT_KEYWORDS = ['winning-number','winningnumber','winning-pocket','winningpocket',
         'result-display','resultdisplay','result-value','resultvalue','current-result',
         'game-number-display','number-display','overlay-result','announced','lastnumber',
-        'round-result','roulette-result','live-result','detailed-result'];
+        'round-result','roulette-result','live-result','detailed-result',
+        // v10.1: Keywords adicionales
+        'result-number','spin-result','game-result','bet-result'];
 
       function isHistoryElement(el) {
         if (!el) return false;
@@ -1097,7 +1115,12 @@
         '[class*="announced"]',
         '[class*="round-result"]',
         '[class*="roulette-result"]',
-        '[class*="live-result"]'
+        '[class*="live-result"]',
+        // v10.1: Selectores adicionales para Pragmatic Play y otros
+        '[class*="result-number"]',
+        '[class*="game-result"]',
+        '[class*="spin-result"]',
+        '[class*="bet-result"]'
       ];
 
       var _lastDomNumber = -1;
